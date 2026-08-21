@@ -363,7 +363,7 @@ def list_reaction_orders(context_id: int = Depends(require_context)):
             # be the whole card, leaving them to open each order to find the one meant.
             "SELECT id, type_id, name, target_qty, top_level_runs, assigned_runs, client_name, notes, "
             "status, created_at, client_price, recurring_interval_days, recurring_next_at, recurring_error, "
-            "priority, source_kind, source_order_id, source_ref "
+            "priority, source_kind, source_order_id, source_ref, source_state, source_message "
             "FROM pp_reaction_orders WHERE context_id=? "
             "ORDER BY CASE WHEN status='open' THEN 0 ELSE 1 END, priority DESC, created_at DESC",
             (context_id,),
@@ -400,6 +400,13 @@ def reorder_reaction_orders(req: OrderReorderRequest,
     return {"ok": True}
 
 
+def _linked_quantity_decision(desired: int, committed: int, current: int) -> str:
+    """keep, resize, or conflict — committed work is the hard lower bound."""
+    if desired == current:
+        return "keep"
+    return "resize" if desired >= committed else "conflict"
+
+
 def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> dict:
     """Publish ready Manufacturing demand once, then let Reactions own its execution."""
     ensure_reaction_orders_table()
@@ -417,6 +424,7 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
         name, top_runs = _resolve_order_target(context_id, request)
         resolved.append((demand, request, name, top_runs))
     created: list[int] = []
+    conflicts: list[dict] = []
     con = get_connection()
     try:
         for demand, request, name, top_runs in resolved:
@@ -424,10 +432,25 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
             source_ref = str(demand.get("source_ref") or f"order:{source_order_id}")
             type_id = int(demand["type_id"])
             existing = con.execute(
-                "SELECT id FROM pp_reaction_orders WHERE context_id=? AND source_kind='manufacturing' "
+                "SELECT * FROM pp_reaction_orders WHERE context_id=? AND source_kind='manufacturing' "
                 "AND source_ref=? AND type_id=? AND status='open' LIMIT 1",
                 (context_id, source_ref, type_id)).fetchone()
             if existing:
+                existing = dict(existing)
+                desired = int(top_runs)
+                committed = int(existing.get("assigned_runs") or 0)
+                current = int(existing.get("top_level_runs") or 0)
+                decision = _linked_quantity_decision(desired, committed, current)
+                if decision == "resize":
+                    con.execute("UPDATE pp_reaction_orders SET target_qty=?, top_level_runs=?, "
+                                "source_state=NULL, source_message=NULL WHERE id=?",
+                                (request.target_qty, desired, existing["id"]))
+                elif decision == "conflict":
+                    msg = (f"Manufacturing now needs {desired} runs, but {committed} are already "
+                           "committed. Keep the surplus or clear/replan this reaction order.")
+                    con.execute("UPDATE pp_reaction_orders SET source_state='quantity_conflict', "
+                                "source_message=? WHERE id=?", (msg, existing["id"]))
+                    conflicts.append({"order_id": int(existing["id"]), "detail": msg})
                 continue
             now = _time.time()
             order_id = con.execute(
@@ -446,7 +469,8 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
     try:
         pending = [int(r["id"]) for r in con.execute(
             "SELECT id FROM pp_reaction_orders WHERE context_id=? AND source_kind='manufacturing' "
-            "AND status='open' AND assigned_runs<top_level_runs ORDER BY priority DESC,id",
+            "AND status='open' AND COALESCE(source_state,'')='' "
+            "AND assigned_runs<top_level_runs ORDER BY priority DESC,id",
             (context_id,)).fetchall()]
     finally:
         con.close()
@@ -457,7 +481,64 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
             assigned.append({"order_id": order_id, "runs": result["runs_assigned"]})
         except HTTPException as exc:
             shortfalls.append({"order_id": order_id, "detail": str(exc.detail)})
-    return {"created": created, "assigned": assigned, "shortfalls": shortfalls}
+    return {"created": created, "assigned": assigned,
+            "shortfalls": shortfalls, "conflicts": conflicts}
+
+
+def finish_manufacturing_reaction_orders(context_id: int, manufacturing_order_id: int,
+                                         status: str) -> dict:
+    """Finish exact per-order links without silently orphaning an ESI-running reaction.
+
+    Aggregated links (`queue:1,2`) are intentionally left alone: one removed build does not prove
+    that the shared reaction batch is no longer needed by the others.
+    """
+    ensure_reaction_orders_table()
+    ensure_reaction_assignments_table()
+    source_ref = f"order:{int(manufacturing_order_id)}"
+    con = get_connection()
+    try:
+        linked = [dict(r) for r in con.execute(
+            "SELECT * FROM pp_reaction_orders WHERE context_id=? AND source_kind='manufacturing' "
+            "AND source_ref=? AND status='open'", (context_id, source_ref)).fetchall()]
+    finally:
+        con.close()
+    finished, preserved = [], []
+    terminal = "completed" if status == "done" else "cancelled"
+    for order in linked:
+        con = get_connection()
+        try:
+            rows = [dict(r) for r in con.execute(
+                "SELECT character_id,type_id,runs,order_id,created_at,COALESCE(tier_order,0) AS tier_order "
+                "FROM pp_reaction_assignments WHERE order_id=? AND character_id IN "
+                "(SELECT character_id FROM pp_characters WHERE context_id=?)",
+                (order["id"], context_id)).fetchall()]
+        finally:
+            con.close()
+        running = _running_rows_among(context_id, rows)
+        if running:
+            msg = (f"Manufacturing is {status}, but {running} linked reaction job(s) are still "
+                   "running in EVE. The reaction order was preserved for you to finish or cancel.")
+            con = get_connection()
+            try:
+                con.execute("UPDATE pp_reaction_orders SET source_state='running_after_finish', "
+                            "source_message=? WHERE id=?", (msg, order["id"]))
+                con.commit()
+            finally:
+                con.close()
+            preserved.append({"order_id": int(order["id"]), "detail": msg})
+            continue
+        con = get_connection()
+        try:
+            freed = _release_order_slots(con, int(order["id"]), context_id)
+            con.execute("UPDATE pp_reaction_orders SET status=?, source_state=NULL, "
+                        "source_message=NULL WHERE id=?", (terminal, order["id"]))
+            con.commit()
+        finally:
+            con.close()
+        finished.append({"order_id": int(order["id"]), "freed_slots": int(freed or 0)})
+    if linked:
+        _invalidate_dashboard_cache(context_id)
+    return {"finished": finished, "preserved": preserved}
 
 
 def _get_order_or_404(con, order_id: int, context_id: int) -> dict:

@@ -19,6 +19,9 @@ share a conditional planner that conceals genuine differences between formulas a
 - Ready Manufacturing reaction work crosses the boundary as a linked reaction order. Reactions
   owns its priority, chain expansion, cadence, reservations and runtime matching; Manufacturing
   keeps later waves scheduled until their dependencies make them ready.
+- Linked demand follows safe lifecycle rules: quantity changes reconcile down only as far as work
+  already committed, terminal Manufacturing orders release pending reservations, and an ESI-running
+  reaction is preserved with a visible decision instead of being silently orphaned.
 
 ## Intentional differences
 

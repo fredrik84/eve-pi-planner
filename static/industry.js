@@ -437,12 +437,14 @@ function _indWritePlanCache(sig, plan) {
 function _indPaintStatus(d, opts) {
   if (!d) return;
   const local = !!(opts && opts.local);
-  if (!local && d.reaction_handoff && (d.reaction_handoff.shortfalls || []).length) {
-    const ids = d.reaction_handoff.shortfalls.map(x => x.order_id).sort((a, b) => a - b).join(',');
+  const rxIssues = d.reaction_handoff
+    ? [...(d.reaction_handoff.shortfalls || []), ...(d.reaction_handoff.conflicts || [])] : [];
+  if (!local && rxIssues.length) {
+    const ids = rxIssues.map(x => x.order_id).sort((a, b) => a - b).join(',');
     const key = 'ind-rx-shortfall:' + ids;
     if (sessionStorage.getItem('ind-rx-shortfall-shown') !== key) {
       sessionStorage.setItem('ind-rx-shortfall-shown', key);
-      toast('Not enough free reaction slots for all ready Manufacturing work. It is saved in Reactions; reprioritize it, free slots, or leave it queued for automatic retry.', 'warning');
+      toast(rxIssues[0].detail || 'Ready Manufacturing reactions need attention in the Reactions queue.', 'warning');
     }
   }
   // The order it was showing may have been delivered/cancelled since — fall back rather than

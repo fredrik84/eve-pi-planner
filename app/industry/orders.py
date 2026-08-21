@@ -407,9 +407,13 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
         if bound:
             from app.industry.sourcing import enable_bound_sources, remember_source_default
             (remember_source_default if owned else enable_bound_sources)(ctx, bound)
-        return _order_row(con, order_id, ctx)
+        result = _order_row(con, order_id, ctx)
     finally:
         con.close()
+    if req.status in ("done", "cancelled"):
+        from app.reactions.orders import finish_manufacturing_reaction_orders
+        result["reaction_lifecycle"] = finish_manufacturing_reaction_orders(ctx, order_id, req.status)
+    return result
 
 
 @router.delete("/api/industry/orders/{order_id}")
@@ -418,6 +422,12 @@ def delete_order(order_id: int, ctx: int = Depends(require_context)):
     con = get_connection()
     try:
         _order_row(con, order_id, ctx)
+    finally:
+        con.close()
+    from app.reactions.orders import finish_manufacturing_reaction_orders
+    reaction_lifecycle = finish_manufacturing_reaction_orders(ctx, order_id, "cancelled")
+    con = get_connection()
+    try:
         con.execute("DELETE FROM pp_industry_orders WHERE id=? AND context_id=?", (order_id, ctx))
         con.commit()
         # The sourcing notes are about THIS order's materials and mean nothing without it; ids are
@@ -425,7 +435,7 @@ def delete_order(order_id: int, ctx: int = Depends(require_context)):
         # another's.
         from app.industry.sourcing import clear_order_sourcing
         clear_order_sourcing(ctx, order_id)
-        return {"deleted": order_id}
+        return {"deleted": order_id, "reaction_lifecycle": reaction_lifecycle}
     finally:
         con.close()
 
@@ -734,11 +744,13 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
                       (sk or {}).get("eligibility"))
     priorities = {int(o["id"]): int(o.get("priority") or 0) for o in order_rows}
     queue_ref = "queue:" + ",".join(str(int(o["id"])) for o in order_rows)
+    sole_order_id = int(order_rows[0]["id"]) if len(order_rows) == 1 else 0
     for wave in res["schedule"]["waves"]:
         for task in wave.get("tasks") or []:
             task["order_priority"] = priorities.get(int(task.get("order_id") or 0), 0)
             task["handoff_ref"] = (f"order:{int(task['order_id'])}" if task.get("order_id")
-                                   else queue_ref)
+                                   else (f"order:{sole_order_id}" if sole_order_id else queue_ref))
+            task["handoff_order_id"] = int(task.get("order_id") or sole_order_id)
     if sk is not None:
         res["skill_gaps"] = sk["gaps"]
         # Kept for `install_block`, which has to rank the same way this did. Private: it is a set
@@ -947,17 +959,29 @@ def _handoff_ready_reactions(ctx: int, install: dict) -> dict | None:
     if not feature_enabled_for("industry_reaction_handoff", ctx):
         return None
     grouped: dict[tuple[int, int], dict] = {}
+    ambiguous = []
     for task in install.get("ready") or []:
         if task.get("activity") != "reaction" or not task.get("fits_now"):
+            continue
+        if str(task.get("handoff_ref") or "").startswith("queue:"):
+            ambiguous.append(task)
             continue
         key = (str(task.get("handoff_ref") or f"order:{int(task.get('order_id') or 0)}"),
                int(task["type_id"]))
         row = grouped.setdefault(key, {"source_ref": key[0],
-                                       "order_id": int(task.get("order_id") or 0),
+                                       "order_id": int(task.get("handoff_order_id")
+                                                       or task.get("order_id") or 0),
                                        "type_id": key[1], "runs": 0,
                                        "priority": int(task.get("order_priority") or 0)})
         row["runs"] += int(task.get("runs") or 0)
     if not grouped:
+        if ambiguous:
+            return {"created": [], "assigned": [], "shortfalls": [], "conflicts": [{
+                "order_id": 0,
+                "detail": "Ready reactions are shared by several aggregated Manufacturing orders. "
+                          "Switch Build setup to per-order plans before reserving them, so completed "
+                          "work can be returned to the correct build.",
+            }]}
         return None
     from app.reactions.orders import sync_manufacturing_reaction_orders
     return sync_manufacturing_reaction_orders(ctx, list(grouped.values()))

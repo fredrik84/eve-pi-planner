@@ -323,7 +323,11 @@ async function indSaveOrder(id) {
 }
 
 async function indRemoveOrder(id) {
-  try { await apiSend('DELETE', '/api/industry/orders/' + id); } catch (e) {}
+  try {
+    const result = await apiSend('DELETE', '/api/industry/orders/' + id);
+    const kept = (((result || {}).reaction_lifecycle || {}).preserved || []);
+    if (kept.length) toast(kept[0].detail, 'warning');
+  } catch (e) { toastError(e, 'Could not remove build'); return; }
   await indLoadQueue();
   await indRefreshStatus();
 }

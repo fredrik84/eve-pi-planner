@@ -466,7 +466,9 @@ def ensure_reaction_orders_table():
                     "priority INTEGER NOT NULL DEFAULT 0",
                     "source_kind TEXT",
                     "source_order_id INTEGER",
-                    "source_ref TEXT")
+                    "source_ref TEXT",
+                    "source_state TEXT",
+                    "source_message TEXT")
         con.execute("CREATE INDEX IF NOT EXISTS idx_rx_orders_source "
                     "ON pp_reaction_orders (context_id, source_kind, source_ref, type_id)")
         con.commit()

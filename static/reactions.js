@@ -3019,6 +3019,7 @@ function _renderRxOrdersList(orders) {
       <div class="rx-order-info">
         <div class="rx-order-name">${_esc(o.name)} <span class="pp-card-hint">× ${Math.round(o.target_qty).toLocaleString()} units</span>${o.source_kind === 'manufacturing' ? ' <span class="rx-order-noprice" style="color:#8fc7a5;border-color:#2f6b48">Manufacturing</span>' : ''}${o.recurring_interval_days ? ` <span class="rx-order-noprice" style="color:#8fc7a5;border-color:#2f6b48">every ${o.recurring_interval_days}d</span>` : ''}${_rxIsUnpriced(o) && o.source_kind !== 'manufacturing' ? ' <span class="rx-order-noprice">no price set</span>' : ''}</div>
         <div class="pp-card-hint">${o.client_name ? _esc(o.client_name) + ' · ' : ''}${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned${o.recurring_interval_days && o.recurring_next_at ? ` · next ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}${o.status !== 'open' ? ' · ' + _esc(o.status) : ''}</div>
+        ${o.source_message ? `<div class="rx-order-noprice" title="Linked Manufacturing work needs a decision">${_esc(o.source_message)}</div>` : ''}
       </div>
       ${o.status === 'open' ? `<div class="rx-order-priority" onclick="event.stopPropagation()"><button class="pp-add-btn" ${i === 0 ? 'disabled' : ''} onclick="_rxMoveOrder(${o.id},-1)" title="Higher priority">▲</button><button class="pp-add-btn" ${i === list.length - 1 ? 'disabled' : ''} onclick="_rxMoveOrder(${o.id},1)" title="Lower priority">▼</button></div>` : ''}
       ${_rxOrderBarHtml(o)}

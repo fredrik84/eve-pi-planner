@@ -3157,6 +3157,29 @@ def test_ready_reactions_cross_as_one_durable_order():
     with patch("app.features.feature_enabled_for", return_value=False):
         check("the new behavior stays behind its rollout gate",
               _handoff_ready_reactions(42, install) is None)
+    shared = {"ready": [{"activity": "reaction", "fits_now": True, "type_id": 9,
+                          "runs": 10, "handoff_ref": "queue:7,8"}]}
+    with patch("app.features.feature_enabled_for", return_value=True):
+        blocked = _handoff_ready_reactions(42, shared)
+    check("an aggregated multi-order batch is not given false ownership",
+          blocked["conflicts"] and "per-order plans" in blocked["conflicts"][0]["detail"])
+
+
+def test_linked_reaction_lifecycle_keeps_committed_work_safe():
+    print("test_linked_reaction_lifecycle_keeps_committed_work_safe")
+    import inspect
+    from app.reactions.orders import _linked_quantity_decision, finish_manufacturing_reaction_orders
+    check("unchanged demand is idempotent", _linked_quantity_decision(10, 6, 10) == "keep")
+    check("demand may grow after assignment", _linked_quantity_decision(14, 6, 10) == "resize")
+    check("demand may shrink to the committed boundary",
+          _linked_quantity_decision(6, 6, 10) == "resize")
+    check("demand never silently discards committed runs",
+          _linked_quantity_decision(5, 6, 10) == "conflict")
+    src = inspect.getsource(finish_manufacturing_reaction_orders)
+    check("terminal Manufacturing work preserves ESI-running reactions for a decision",
+          "_running_rows_among" in src and "running_after_finish" in src and "preserved.append" in src)
+    check("but pending linked reservations are released and closed",
+          "_release_order_slots" in src and 'terminal = "completed"' in src)
 
 
 def main():
@@ -3171,6 +3194,7 @@ def main():
     test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field()
     test_manufacturing_phase1_is_task_first()
     test_ready_reactions_cross_as_one_durable_order()
+    test_linked_reaction_lifecycle_keeps_committed_work_safe()
     test_reaction_policy_is_gated_by_its_own_feature()
     test_build_everything_also_reacts()
     test_quantity_scales_and_excess()
