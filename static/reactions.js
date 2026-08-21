@@ -1265,6 +1265,7 @@ function _renderReactionsDashboard(data) {
       }
       pendGroups.push({ a, tier, ready, queued: queuedJob, n: 1 });
     }
+    const queuedSquares = [];
     for (const grp of pendGroups) {
       const a = grp.a;
       const tier = grp.tier;
@@ -1316,7 +1317,7 @@ function _renderReactionsDashboard(data) {
       const pendTitle = isMarked
         ? `You marked this installed — ${_esc(a.name)} ×${a.runs}, waiting for ESI to confirm it${_esc(orderTip)}. Click to edit.`
         : `Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(moreTip)}${_esc(orderTip)}${_esc(stageTip)}${_esc(overTip)}. Click to edit.`;
-      squares.push(`
+      const slotHtml = `
         <div class="rx-slot rx-slot-pending${isMarked ? ' rx-slot-marked' : ''}${overH > 0 ? ' rx-slot-over' : ''}${tier > 0 && !ready && !isMarked ? ' rx-slot-later' : ''}" title="${pendTitle}" onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
           ${durCorner}
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
@@ -1328,33 +1329,37 @@ function _renderReactionsDashboard(data) {
           <span class="rx-slot-runs">×${a.runs}</span>
           <div class="rx-slot-pending-label">${_esc(a.name)}</div>
           ${orderTag}
-        </div>`);
+        </div>`;
+      // A queued (later-stage, not-yet-ready) group does NOT get a square in the character's main
+      // row. It used to: the row is meant to be exactly `c.slots` squares wide (one per physical
+      // reactor), but a queued group still reused the one the stage below frees, and the row drew
+      // it as an ADDITIONAL square on top of that already-full count — a 10-slot character with 6
+      // running/ready jobs and one queued group showed 6 + 1(queued, folded) + 4(free, computed
+      // against the peak of 6) = 11 squares, one more than the character owns, and the free count
+      // in the header (4) didn't match what was left in the row either. Drawing it in its own
+      // strip below instead keeps the main row an honest `c.slots`-wide picture of the reactors
+      // themselves, with the queued work shown as what it is: not yet holding one of them.
+      (grp.queued ? queuedSquares : squares).push(slotHtml);
     }
-    // A later stage is drawn as its own square — the grid is the PLAN — but it isn't holding a
-    // reactor while the stage below it runs, so it doesn't count against free slots either. Say
-    // that where the two numbers would otherwise look like they disagree.
-    // What the plan holds at once is its busiest stage, so anything beyond that peak is queued
-    // rather than occupying — exactly the number the server subtracted (`_concurrent_load`).
-    const byTier = new Map();
-    pending.forEach(a => byTier.set(a.tier_order || 0, (byTier.get(a.tier_order || 0) || 0) + 1));
-    const queued = pending.length - Math.max(0, ...byTier.values(), 0);
-    // Free squares are what this character can START now, so they are counted against the PEAK
-    // stage rather than every planned row: a queued later stage is reusing a reactor the stage
-    // below frees, not holding one of its own. Counting rows hid free reactors the server was
-    // reporting as free — the same disagreement the note below exists to explain.
-    const occupying = jobs.length + (_featureActive('reactions_parallel_stages')
-      ? Math.max(0, ...byTier.values(), 0) : pending.length);
-    for (let i = occupying; i < c.slots; i++) {
+    // Free squares fill out the rest of the character's ACTUAL row — capped at what's really left
+    // after everything drawn above (running jobs + ready/startable pending groups), never at an
+    // abstract peak count that can drift from what was actually pushed onto the row. Captured
+    // before the fill so the header below can report the SAME number the row shows, rather than
+    // the server's `free_slots` (a valid but different question — "how many could I start right
+    // now" — that used to disagree with what the row had visible room for).
+    const rowFree = Math.max(0, c.slots - squares.length);
+    for (let i = squares.length; i < c.slots; i++) {
       squares.push(`<div class="rx-slot rx-slot-empty" title="Free reaction slot — click to assign your own product" onclick="_rxOpenManualAssign('${c.character_id}')"><span class="rx-slot-empty-mark">+</span></div>`);
     }
-    const reuseNote = (queued > 0 && _featureActive('reactions_parallel_stages'))
-      ? `<div class="pp-card-hint" style="font-size:11px;flex-basis:100%">${queued} queued job${queued === 1 ? '' : 's'} reuse a reactor an earlier stage frees up — not counted against free slots.</div>`
+    const queuedHtml = queuedSquares.length
+      ? `<div class="pp-card-hint" style="font-size:11px;flex-basis:100%;margin-top:4px">Queued — reuses a reactor once an earlier stage frees it up, not one of the ${c.slots} above:</div>
+         <div class="rx-slot-row rx-slot-row-queued">${queuedSquares.join('')}</div>`
       : '';
     return `
       <div class="rx-char-row">
-        <div class="rx-char-label">${_esc(c.character_name)}<br><span class="pp-card-hint">${c.free_slots} / ${c.slots} free</span></div>
+        <div class="rx-char-label">${_esc(c.character_name)}<br><span class="pp-card-hint">${rowFree} / ${c.slots} free</span></div>
         <div class="rx-slot-row">${squares.join('')}</div>
-        ${reuseNote}
+        ${queuedHtml}
       </div>`;
   }).join('');
 
