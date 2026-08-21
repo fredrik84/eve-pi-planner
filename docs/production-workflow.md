@@ -16,6 +16,9 @@ share a conditional planner that conceals genuine differences between formulas a
 - Reaction-job cadence has one effective value across both tools. An unset/cleared value is the
   seven-day default; the advisor and every post-assignment/background planning pass use that same
   value, so a weekly preview cannot turn into longer jobs when Overview refreshes.
+- Ready Manufacturing reaction work crosses the boundary as a linked reaction order. Reactions
+  owns its priority, chain expansion, cadence, reservations and runtime matching; Manufacturing
+  keeps later waves scheduled until their dependencies make them ready.
 
 ## Intentional differences
 

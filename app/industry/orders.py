@@ -732,6 +732,13 @@ def _run_queue_plan(ctx: int, req: QueuePlanRequest, want_full: bool = False) ->
     sk = analyze_plan_skills(ctx, res.get("requirements") or [], inp.mfg, inp.rx)
     assign_characters(res["schedule"]["waves"], _slot_pool(ctx).get("characters") or [],
                       (sk or {}).get("eligibility"))
+    priorities = {int(o["id"]): int(o.get("priority") or 0) for o in order_rows}
+    queue_ref = "queue:" + ",".join(str(int(o["id"])) for o in order_rows)
+    for wave in res["schedule"]["waves"]:
+        for task in wave.get("tasks") or []:
+            task["order_priority"] = priorities.get(int(task.get("order_id") or 0), 0)
+            task["handoff_ref"] = (f"order:{int(task['order_id'])}" if task.get("order_id")
+                                   else queue_ref)
     if sk is not None:
         res["skill_gaps"] = sk["gaps"]
         # Kept for `install_block`, which has to rank the same way this did. Private: it is a set
@@ -761,6 +768,7 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
     full = res.pop("_full", None)
     if not res.get("empty"):
         res["install"] = install_block(ctx, res)
+        res["reaction_handoff"] = _handoff_ready_reactions(ctx, res["install"])
         # Progress rides along for the same reason the checklist does: it is a view OF THIS PLAN.
         # The page fetching it separately meant planning the whole queue a second time.
         try:
@@ -931,6 +939,28 @@ def install_block(ctx: int, res: dict) -> dict:
             manufacturing=(mfg_total, pool["manufacturing_free"]),
             reaction=(reaction_total, pool["reaction_free"])),
     }
+
+
+def _handoff_ready_reactions(ctx: int, install: dict) -> dict | None:
+    """Give ready reaction batches to Reactions; later Manufacturing waves stay unreserved."""
+    from app.features import feature_enabled_for
+    if not feature_enabled_for("industry_reaction_handoff", ctx):
+        return None
+    grouped: dict[tuple[int, int], dict] = {}
+    for task in install.get("ready") or []:
+        if task.get("activity") != "reaction" or not task.get("fits_now"):
+            continue
+        key = (str(task.get("handoff_ref") or f"order:{int(task.get('order_id') or 0)}"),
+               int(task["type_id"]))
+        row = grouped.setdefault(key, {"source_ref": key[0],
+                                       "order_id": int(task.get("order_id") or 0),
+                                       "type_id": key[1], "runs": 0,
+                                       "priority": int(task.get("order_priority") or 0)})
+        row["runs"] += int(task.get("runs") or 0)
+    if not grouped:
+        return None
+    from app.reactions.orders import sync_manufacturing_reaction_orders
+    return sync_manufacturing_reaction_orders(ctx, list(grouped.values()))
 
 
 class ForceAboveRequest(QueuePlanRequest):

@@ -3131,6 +3131,34 @@ def test_manufacturing_phase1_is_task_first():
               os.path.join(here, "app", "industry", "orders.py"), encoding="utf-8").read())
 
 
+def test_ready_reactions_cross_as_one_durable_order():
+    """Only ready, installable reactions cross the boundary, grouped above provisional jobs."""
+    print("test_ready_reactions_cross_as_one_durable_order")
+    from unittest.mock import patch
+    from app.industry.orders import _handoff_ready_reactions
+
+    captured = []
+    install = {"ready": [
+        {"activity": "reaction", "fits_now": True, "order_id": 7, "type_id": 9, "runs": 4,
+         "order_priority": 3, "handoff_ref": "order:7"},
+        {"activity": "reaction", "fits_now": True, "order_id": 7, "type_id": 9, "runs": 6,
+         "order_priority": 3, "handoff_ref": "order:7"},
+        {"activity": "reaction", "fits_now": False, "order_id": 7, "type_id": 10, "runs": 8},
+        {"activity": "manufacturing", "fits_now": True, "order_id": 7, "type_id": 11, "runs": 2},
+    ]}
+    with patch("app.features.feature_enabled_for", return_value=True), patch(
+            "app.reactions.orders.sync_manufacturing_reaction_orders",
+            side_effect=lambda _ctx, demands: captured.extend(demands) or {"created": [1]}):
+        result = _handoff_ready_reactions(42, install)
+    check("split jobs become one reaction-engine demand",
+          captured == [{"source_ref": "order:7", "order_id": 7, "type_id": 9,
+                        "runs": 10, "priority": 3}])
+    check("the handoff result is returned for shortage feedback", result == {"created": [1]})
+    with patch("app.features.feature_enabled_for", return_value=False):
+        check("the new behavior stays behind its rollout gate",
+              _handoff_ready_reactions(42, install) is None)
+
+
 def main():
     test_material_formula()
     test_graph_loaders()
@@ -3142,6 +3170,7 @@ def main():
     test_build_rules_has_one_home_and_the_strip_stops_being_a_control()
     test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field()
     test_manufacturing_phase1_is_task_first()
+    test_ready_reactions_cross_as_one_durable_order()
     test_reaction_policy_is_gated_by_its_own_feature()
     test_build_everything_also_reacts()
     test_quantity_scales_and_excess()

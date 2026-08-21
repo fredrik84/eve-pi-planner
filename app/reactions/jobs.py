@@ -462,7 +462,14 @@ def ensure_reaction_orders_table():
         add_columns(con, "pp_reaction_orders",
                     "recurring_interval_days DOUBLE PRECISION",
                     "recurring_next_at DOUBLE PRECISION",
-                    "recurring_error TEXT")
+                    "recurring_error TEXT",
+                    "priority INTEGER NOT NULL DEFAULT 0",
+                    "source_kind TEXT",
+                    "source_order_id INTEGER",
+                    "source_ref TEXT")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_rx_orders_source "
+                    "ON pp_reaction_orders (context_id, source_kind, source_ref, type_id)")
+        con.commit()
     finally:
         con.close()
 
@@ -3030,7 +3037,7 @@ def _plan_totals(context_id: int, rows: list[dict], order_meta: dict[int, dict],
             # the market. For an order that is a STAND-IN, not the invoice — but it is the honest
             # floor ("if the client fell through you could sell these"), and it beats reporting a
             # plan full of real work as producing nothing, which is what a hard 0 did.
-            if oid and not price:
+            if oid and not price and (meta or {}).get("source_kind") != "manufacturing":
                 order_revenue.setdefault(int(oid), 0.0)
             if v is not None:
                 # Buy orders, not sell: this feeds a profit figure (CLAUDE.md's pricing invariant).
@@ -3241,14 +3248,15 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         if order_ids:
             placeholders_o = ",".join("?" * len(order_ids))
             for r in con.execute(
-                f"SELECT id, client_name, client_price, top_level_runs FROM pp_reaction_orders "
+                f"SELECT id, client_name, client_price, top_level_runs, source_kind FROM pp_reaction_orders "
                 f"WHERE id IN ({placeholders_o})", order_ids,
             ):
                 order_labels[r["id"]] = r["client_name"] or f"Order #{r['id']}"
                 # ...and what the client pays, so an order's rows can be valued at the agreed price
                 # rather than at a market rate nobody is selling them at. See `_plan_totals`.
                 order_meta[r["id"]] = {"client_price": r["client_price"],
-                                       "top_level_runs": r["top_level_runs"]}
+                                       "top_level_runs": r["top_level_runs"],
+                                       "source_kind": r["source_kind"]}
         # output_type_id -> cycle hours, so a stored assignment (which only keeps `runs`, not its
         # own formula) can be turned into a real duration for the profit/day normalization below —
         # PI's headline number is already a rate (value_per_day), so Reactions' should be too.

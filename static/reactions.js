@@ -2976,7 +2976,7 @@ function _rxLoadOrders() {
 // An order with no agreed price. Only OPEN orders count: a delivered order that was never priced
 // is history, and nagging about it is asking for an edit to a closed record.
 function _rxIsUnpriced(o) {
-  return o.status === 'open' && !(o.client_price > 0);
+  return o.status === 'open' && o.source_kind !== 'manufacturing' && !(o.client_price > 0);
 }
 
 // Where "set a price on it" actually goes. One unpriced order is the common case and deserves the
@@ -3014,19 +3014,32 @@ function _renderRxOrdersList(orders) {
   // "no price" is called out on the row itself, not just counted on the overview. Someone sent
   // here by that footnote arrives looking for WHICH order it meant, and an unmarked list makes
   // them open each one to find out — which is the same dead end as not linking at all.
-  const row = o => `
+  const row = (o, i, list) => `
     <div class="rx-order-row${_rxIsUnpriced(o) ? ' rx-order-unpriced' : ''}" onclick="_rxOpenOrderDetail(${o.id})">
       <div class="rx-order-info">
-        <div class="rx-order-name">${_esc(o.name)} <span class="pp-card-hint">× ${Math.round(o.target_qty).toLocaleString()} units</span>${o.recurring_interval_days ? ` <span class="rx-order-noprice" style="color:#8fc7a5;border-color:#2f6b48">every ${o.recurring_interval_days}d</span>` : ''}${_rxIsUnpriced(o) ? ' <span class="rx-order-noprice">no price set</span>' : ''}</div>
+        <div class="rx-order-name">${_esc(o.name)} <span class="pp-card-hint">× ${Math.round(o.target_qty).toLocaleString()} units</span>${o.source_kind === 'manufacturing' ? ' <span class="rx-order-noprice" style="color:#8fc7a5;border-color:#2f6b48">Manufacturing</span>' : ''}${o.recurring_interval_days ? ` <span class="rx-order-noprice" style="color:#8fc7a5;border-color:#2f6b48">every ${o.recurring_interval_days}d</span>` : ''}${_rxIsUnpriced(o) && o.source_kind !== 'manufacturing' ? ' <span class="rx-order-noprice">no price set</span>' : ''}</div>
         <div class="pp-card-hint">${o.client_name ? _esc(o.client_name) + ' · ' : ''}${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned${o.recurring_interval_days && o.recurring_next_at ? ` · next ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}${o.status !== 'open' ? ' · ' + _esc(o.status) : ''}</div>
       </div>
+      ${o.status === 'open' ? `<div class="rx-order-priority" onclick="event.stopPropagation()"><button class="pp-add-btn" ${i === 0 ? 'disabled' : ''} onclick="_rxMoveOrder(${o.id},-1)" title="Higher priority">▲</button><button class="pp-add-btn" ${i === list.length - 1 ? 'disabled' : ''} onclick="_rxMoveOrder(${o.id},1)" title="Lower priority">▼</button></div>` : ''}
       ${_rxOrderBarHtml(o)}
     </div>`;
-  const openHtml = open.length ? open.map(row).join('') : '<div class="pp-empty">No open orders.</div>';
+  const openHtml = open.length ? open.map((o, i) => row(o, i, open)).join('') : '<div class="pp-empty">No open orders.</div>';
   const historyHtml = history.length
-    ? `<details style="margin-top:10px"><summary class="pp-card-hint" style="cursor:pointer">History (${history.length})</summary>${history.map(row).join('')}</details>`
+    ? `<details style="margin-top:10px"><summary class="pp-card-hint" style="cursor:pointer">History (${history.length})</summary>${history.map((o, i) => row(o, i, history)).join('')}</details>`
     : '';
   el.innerHTML = openHtml + historyHtml;
+}
+
+function _rxMoveOrder(orderId, delta) {
+  const open = (_rxOrders || []).filter(o => o.status === 'open');
+  const i = open.findIndex(o => o.id === orderId);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= open.length) return;
+  [open[i], open[j]] = [open[j], open[i]];
+  _renderRxOrdersList(open.concat((_rxOrders || []).filter(o => o.status !== 'open')));
+  apiSend('POST', '/api/reactions/orders/reorder', { order: open.map(o => o.id) })
+    .then(_rxLoadOrders)
+    .catch(err => { toast(err.message, 'error'); _rxLoadOrders(); });
 }
 
 // ── New order modal — a separate small product-search combobox from the manual-assign one

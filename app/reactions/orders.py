@@ -211,6 +211,12 @@ class OrderCreateRequest(BaseModel):
     recurring_interval_days: float | None = None
 
 
+def _next_order_priority(con, context_id: int) -> int:
+    row = con.execute("SELECT COALESCE(MAX(priority),0)+1 AS priority FROM pp_reaction_orders "
+                      "WHERE context_id=? AND status='open'", (context_id,)).fetchone()
+    return int(row["priority"] if row else 1)
+
+
 def _resolve_order_target(context_id: int, req: OrderCreateRequest) -> tuple[str, int]:
     """Validate a target product + quantity and return (product name, top_level_runs). Shared by the
     preview and create endpoints so they can't drift on reachability or the runs rounding."""
@@ -255,12 +261,12 @@ def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(req
         order_id = con.execute(
             "INSERT INTO pp_reaction_orders (context_id, type_id, name, target_qty, top_level_runs, "
             "assigned_runs, client_name, notes, status, created_at, client_price, "
-            "recurring_interval_days, recurring_next_at) "
-            "VALUES (?,?,?,?,?,0,?,?,'open',?,?,?,?) RETURNING id",
+            "recurring_interval_days, recurring_next_at, priority) "
+            "VALUES (?,?,?,?,?,0,?,?,'open',?,?,?,?,?) RETURNING id",
             (context_id, req.type_id, name, req.target_qty, top_level_runs,
              (req.client_name or "").strip() or None, (req.notes or "").strip() or None, now,
              req.client_price if (req.client_price or 0) > 0 else None,
-             recurring_days, now if recurring_days else None),
+             recurring_days, now if recurring_days else None, _next_order_priority(con, context_id)),
         ).fetchone()[0]
         con.commit()
         order = _order_row(con, order_id)
@@ -356,14 +362,102 @@ def list_reaction_orders(context_id: int = Depends(require_context)):
             # send the reader somewhere; without the price on the row, "somewhere" could only ever
             # be the whole card, leaving them to open each order to find the one meant.
             "SELECT id, type_id, name, target_qty, top_level_runs, assigned_runs, client_name, notes, "
-            "status, created_at, client_price, recurring_interval_days, recurring_next_at, recurring_error "
+            "status, created_at, client_price, recurring_interval_days, recurring_next_at, recurring_error, "
+            "priority, source_kind, source_order_id, source_ref "
             "FROM pp_reaction_orders WHERE context_id=? "
-            "ORDER BY CASE WHEN status='open' THEN 0 ELSE 1 END, created_at DESC",
+            "ORDER BY CASE WHEN status='open' THEN 0 ELSE 1 END, priority DESC, created_at DESC",
             (context_id,),
         ).fetchall()
     finally:
         con.close()
     return {"orders": [dict(r) for r in rows]}
+
+
+class OrderReorderRequest(BaseModel):
+    order: list[int]
+
+
+@router.post("/api/reactions/orders/reorder")
+def reorder_reaction_orders(req: OrderReorderRequest,
+                            context_id: int = Depends(require_context)):
+    """Persist the queue order used by automatic reaction allocation."""
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        open_ids = {int(r["id"]) for r in con.execute(
+            "SELECT id FROM pp_reaction_orders WHERE context_id=? AND status='open'",
+            (context_id,)).fetchall()}
+        sent = [int(i) for i in req.order]
+        if len(sent) != len(set(sent)) or set(sent) != open_ids:
+            raise HTTPException(status_code=400, detail="Order list must contain every open reaction order once")
+        n = len(sent)
+        for i, order_id in enumerate(sent):
+            con.execute("UPDATE pp_reaction_orders SET priority=? WHERE id=? AND context_id=?",
+                        (n - i, order_id, context_id))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True}
+
+
+def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> dict:
+    """Publish ready Manufacturing demand once, then let Reactions own its execution."""
+    ensure_reaction_orders_table()
+    resolved = []
+    for demand in demands:
+        type_id = int(demand["type_id"])
+        con = get_connection()
+        try:
+            recipe = con.execute("SELECT output_qty FROM reactions WHERE output_type_id=?",
+                                 (type_id,)).fetchone()
+        finally:
+            con.close()
+        target_qty = float(demand["runs"]) * float(recipe["output_qty"] if recipe else 1)
+        request = OrderCreateRequest(type_id=type_id, target_qty=target_qty)
+        name, top_runs = _resolve_order_target(context_id, request)
+        resolved.append((demand, request, name, top_runs))
+    created: list[int] = []
+    con = get_connection()
+    try:
+        for demand, request, name, top_runs in resolved:
+            source_order_id = int(demand.get("order_id") or 0)
+            source_ref = str(demand.get("source_ref") or f"order:{source_order_id}")
+            type_id = int(demand["type_id"])
+            existing = con.execute(
+                "SELECT id FROM pp_reaction_orders WHERE context_id=? AND source_kind='manufacturing' "
+                "AND source_ref=? AND type_id=? AND status='open' LIMIT 1",
+                (context_id, source_ref, type_id)).fetchone()
+            if existing:
+                continue
+            now = _time.time()
+            order_id = con.execute(
+                "INSERT INTO pp_reaction_orders (context_id,type_id,name,target_qty,top_level_runs,"
+                "assigned_runs,client_name,notes,status,created_at,priority,source_kind,source_order_id,source_ref) "
+                "VALUES (?,?,?,?,?,0,NULL,?,'open',?,?, 'manufacturing',?,?) RETURNING id",
+                (context_id, type_id, name, request.target_qty, top_runs,
+                 "Ready work from Manufacturing", now, int(demand.get("priority") or 0),
+                 source_order_id or None, source_ref)).fetchone()[0]
+            created.append(int(order_id))
+        con.commit()
+    finally:
+        con.close()
+
+    con = get_connection()
+    try:
+        pending = [int(r["id"]) for r in con.execute(
+            "SELECT id FROM pp_reaction_orders WHERE context_id=? AND source_kind='manufacturing' "
+            "AND status='open' AND assigned_runs<top_level_runs ORDER BY priority DESC,id",
+            (context_id,)).fetchall()]
+    finally:
+        con.close()
+    assigned, shortfalls = [], []
+    for order_id in pending:
+        try:
+            result = assign_reaction_order(order_id, OrderAssignRequest(), context_id)
+            assigned.append({"order_id": order_id, "runs": result["runs_assigned"]})
+        except HTTPException as exc:
+            shortfalls.append({"order_id": order_id, "detail": str(exc.detail)})
+    return {"created": created, "assigned": assigned, "shortfalls": shortfalls}
 
 
 def _get_order_or_404(con, order_id: int, context_id: int) -> dict:

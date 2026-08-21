@@ -224,6 +224,12 @@ FEATURE_REGISTRY = [
                     "cost. A single order can still be set to make its own.",
      # Testers, like every other Industry feature — this came from the builders using the tab.
      "default": False, "state": "testers"},
+    {"key": "industry_reaction_handoff", "label": "Industry: reserve ready reaction work",
+     "group": "Industry",
+     "description": "When a Manufacturing stage reaches reaction work, create one linked reaction "
+                    "order and let Reactions allocate formulas, cadence and character slots. Later "
+                    "waves stay scheduled until ready; slot shortages remain visible and retry.",
+     "default": False, "state": "testers"},
     {"key": "industry_build_setup", "label": "Industry: one place for build settings",
      "group": "Industry",
      "description": "Collects every rule that shapes a build — facility, build threshold, reactions, "
