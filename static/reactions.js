@@ -108,14 +108,10 @@ function _rxLoadOpportunities(force) {
   return _rxOppsLoading;
 }
 
-function _rxCloseActionMenu() {
-  document.querySelectorAll('.rx-action-menu[open]').forEach(menu => menu.removeAttribute('open'));
-}
-
 async function onReactionsTabOpen() {
   // Browsers may restore a native <details> element's open state across reloads. This menu is an
   // ephemeral action picker, not page state, so every fresh tab paint starts closed.
-  _rxCloseActionMenu();
+  ppCloseTransientMenus('.rx-action-menu');
   // First-run gate (local_market flag): block the whole tab until the user has added a character
   // and saved. Returns true when the gate is showing, in which case we skip loading the dashboard.
   if (await _rxApplyGate()) return;
@@ -1469,7 +1465,12 @@ function _renderReactionsDashboard(data) {
     ? `Time left · ${_esc(_medName)}${_runTimed.length > 1 ? ` (median of ${_runTimed.length})` : ''}`
     : 'Time left';
 
-  const usedSlots = data.total_slots - data.free_slots;
+  // Phase 2 shared production contract. Flat fields remain a deployment-compatibility fallback
+  // while old cached payloads drain; the explicit pool is the source once present.
+  const reactionPool = data.capacity && data.capacity.pools && data.capacity.pools.reaction;
+  const totalSlots = reactionPool ? reactionPool.total : data.total_slots;
+  const freeSlots = reactionPool ? reactionPool.available : data.free_slots;
+  const usedSlots = totalSlots - freeSlots;
   // An order with no agreed price costs real ISK but brings in a revenue the tool was never told,
   // so both value tiles understate. Say so under them rather than let a confident-looking number
   // stand for a figure nobody has supplied.
@@ -1500,7 +1501,7 @@ function _renderReactionsDashboard(data) {
       ${_dashTile(_fmtIsk(data.pending_output_value), 'Expected output value (instant sell)')}
       ${_dashTile(_fmtIsk(data.pending_net_profit_per_day), 'Expected profit / day',
                   (data.pending_net_profit_per_day || 0) >= 0 ? 'an-ok' : 'an-bad')}
-      ${_dashTile(`${usedSlots}<span class="an-of"> / ${data.total_slots}</span>`, 'Slots used')}
+      ${_dashTile(`${usedSlots}<span class="an-of"> / ${totalSlots}</span>`, 'Slots used')}
       ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
       ${_dashTile(timeLeftVal, timeLeftLbl)}
     </div>${_rxFootnote([
@@ -1568,7 +1569,7 @@ function _renderReactionsDashboard(data) {
   // Tasks remain first, but the character board is operational context rather than an occasional
   // manual escape hatch: it shows who owns each current job and where the remaining capacity is.
   const capacityHtml = `<div class="rx-capacity-section">
-    <div class="rx-capacity-title">Characters &amp; capacity <span class="pp-card-hint">${usedSlots} of ${data.total_slots} slots in use</span></div>
+    <div class="rx-capacity-title">Characters &amp; capacity <span class="pp-card-hint">${usedSlots} of ${totalSlots} slots in use</span></div>
     <div class="rx-capacity-body">${rows}</div>
   </div>`;
 
@@ -3183,14 +3184,12 @@ function _rxCreateOrder() {
             recurring_interval_days: recurring ? recurringDays : null })
     .then(data => {
       _rxCloseNewOrderModal();
-      ppSelectTab('rx', 'overview');
+      ppReturnToOverview('rx', 'overview', 'rxOverviewPanel');
       _rxLoadOrders();
       // A recurring order claims slots inside the create request. The Orders list was refreshed,
       // but the Overview task cards were left on their pre-create snapshot, making a successful
       // assignment look like it had done nothing until the next page refresh.
       _rxReloadPlan();
-      const overview = document.getElementById('rxOverviewPanel');
-      if (overview) overview.scrollIntoView({ behavior: 'smooth', block: 'start' });
       if (data.auto_assign_error) {
         toast(data.auto_assign_error + ' The order is saved and waiting on the Overview.', 'warning');
       } else if (data.auto_assigned && data.auto_assigned.runs_assigned > 0) {

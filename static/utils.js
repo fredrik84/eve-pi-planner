@@ -277,6 +277,19 @@ function ppSelectTab(group, key) {
   try { localStorage.setItem(`ppTab:${group}`, key); } catch (e) {}
 }
 
+// Shared production-page mechanics. These deliberately know nothing about reaction chains or
+// manufacturing waves; they only align UI behavior that is identical in both tools.
+function ppCloseTransientMenus(selector) {
+  document.querySelectorAll(`${selector}[open]`).forEach(menu => menu.removeAttribute('open'));
+}
+
+function ppReturnToOverview(group, key, panelId, message, kind = 'success') {
+  ppSelectTab(group, key);
+  const panel = document.getElementById(panelId);
+  if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (message) toast(message, kind);
+}
+
 // Called once when a page/tab opens, to land on whichever tab was last read (or `fallback` on a
 // first visit). Safe to call every time the page opens, cheap either way. Returns the resolved
 // key so a caller whose tabs lazy-load (Reactions' Shopping list / Advanced) can trigger that

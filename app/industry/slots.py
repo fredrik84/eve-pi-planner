@@ -21,6 +21,7 @@ from fastapi import Depends
 
 from app.sde import get_connection
 from app.esi import require_context
+from app.production import skill_slot_count
 
 from app.industry._router import router
 
@@ -28,12 +29,12 @@ from app.industry._router import router
 def manufacturing_slots(row) -> int:
     """1 base + 1/level of Mass Production + 1/level of Advanced Mass Production, capped at the
     game's real max of 11 (5+5+1)."""
-    return min(11, 1 + (row["mass_production"] or 0) + (row["advanced_mass_production"] or 0))
+    return skill_slot_count(row["mass_production"], row["advanced_mass_production"])
 
 
 def reaction_slots(row) -> int:
     """1 base + 1/level of Mass Reactions + 1/level of Advanced Mass Reactions, capped at 11."""
-    return min(11, 1 + (row["mass_reactions"] or 0) + (row["advanced_mass_reactions"] or 0))
+    return skill_slot_count(row["mass_reactions"], row["advanced_mass_reactions"])
 
 
 SKILLS_SCOPE = "esi-skills.read_skills.v1"

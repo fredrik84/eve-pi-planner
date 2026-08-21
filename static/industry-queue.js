@@ -39,12 +39,10 @@ async function indAddToQueue() {
     const pt = document.getElementById('indPlanPasteText');
     if (pt) pt.value = '';          // and don't carry one build's materials onto the next
     indClosePlanner();
-    ppSelectTab('ind', 'status');
     await indLoadQueue();
     await indRefreshStatus();     // adding re-plans the whole queue together — the reason to queue
-    const overview = document.querySelector('[data-tabpanel="ind"][data-tabkey="status"]');
-    if (overview) overview.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    toast('Build added. The Overview shows what to start now.', 'success');
+    ppReturnToOverview('ind', 'status', 'indStatusCard',
+                       'Build added. The Overview shows what to start now.');
   } catch (e) { toastError(e, 'Could not queue'); }
 }
 

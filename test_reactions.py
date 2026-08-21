@@ -348,7 +348,8 @@ def test_reactions_phase1_is_task_first() -> bool:
                 "Shopping is an output, not a second planning launcher")
     ok &= check('class="rx-action-menu"' in page and 'Clear planned work' in page,
                 "rare and destructive queue actions are grouped behind More")
-    ok &= check('_rxCloseActionMenu();' in page and '_rxCloseActionMenu();\n  // First-run gate' in js,
+    ok &= check("ppCloseTransientMenus('.rx-action-menu');" in page
+                and "ppCloseTransientMenus('.rx-action-menu');\n  // First-run gate" in js,
                 "the More menu closes after an action and whenever Reactions reloads")
     ok &= check('class="rx-capacity-section"' in js and 'rx-capacity-fold' not in js,
                 "character and slot capacity stays visible under the task list")
@@ -357,9 +358,14 @@ def test_reactions_phase1_is_task_first() -> bool:
     create_start = js.index('function _rxCreateOrder()')
     create_end = js.index('// What the order EARNS', create_start)
     create_flow = js[create_start:create_end]
-    ok &= check("ppSelectTab('rx', 'overview')" in create_flow
+    ok &= check("ppReturnToOverview('rx', 'overview', 'rxOverviewPanel')" in create_flow
                 and "rxOrderDetailModal').style.display = ''" not in create_flow,
                 "creating an order closes the modal and returns directly to Overview")
+    ok &= check("ppCloseTransientMenus('.rx-action-menu')" in js,
+                "Reactions uses the shared transient-menu behavior")
+    ok &= check('capacity_contract(reservation_model="reserved"' in open(
+                    "app/reactions/jobs.py", encoding="utf-8").read(),
+                "Reactions publishes the shared capacity contract as reserved capacity")
     return ok
 
 

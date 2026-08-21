@@ -22,6 +22,7 @@ from app.markets import resolve_market_data
 from app.cache import cache_invalidate, charlist_key, cache_get_json, cache_set_json
 from app.esi import require_context, _get_valid_token
 from app import completions
+from app.production import capacity_contract, skill_slot_count
 
 from app.reactions._router import router
 from app.reactions._flags import flag_on
@@ -328,7 +329,8 @@ def refresh_character_jobs(character_id: int) -> bool:
 def reaction_slots(character_row: dict) -> int:
     """1 base slot + 1/level of Mass Reactions + 1/level of Advanced Mass Reactions, capped at
     the game's real max of 11 (5+5+1)."""
-    return min(11, 1 + (character_row.get("mass_reactions") or 0) + (character_row.get("advanced_mass_reactions") or 0))
+    return skill_slot_count(character_row.get("mass_reactions"),
+                            character_row.get("advanced_mass_reactions"))
 
 
 def reaction_capable(character_row: dict) -> tuple[bool, str]:
@@ -3595,6 +3597,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         if _want[tid] - _cover.get(tid, 0) > 0
     ]
 
+    free_slots = max(0, total_slots - used_slots)
     return {
         "tracked": tracked_any,
         "characters": characters,
@@ -3602,7 +3605,11 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         "running": sorted(running, key=lambda r: r["hours_left"] if r["hours_left"] is not None else 1e9),
         "running_progress_pct": round(running_elapsed_sec / running_total_sec, 4) if running_total_sec > 0 else None,
         "total_slots": total_slots,
-        "free_slots": max(0, total_slots - used_slots),
+        "free_slots": free_slots,
+        # Unlike Manufacturing, a saved reaction assignment claims capacity before installation.
+        # Keep the legacy flat fields during migration; new shared UI reads this explicit contract.
+        "capacity": capacity_contract(reservation_model="reserved",
+                                      reaction=(total_slots, free_slots)),
         # MATERIALS only — the priced shopping list. Rendered as "Materials committed"; it is not
         # what profit is netted against (that is pending_total_cost). See `_plan_totals`.
         "pending_isk_committed": round(pending_isk_committed, 2),

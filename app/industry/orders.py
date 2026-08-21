@@ -911,6 +911,11 @@ def install_block(ctx: int, res: dict) -> dict:
         })
     chars.sort(key=lambda c: (-c["assigned"], c["character_name"] or ""))
 
+    from app.production import capacity_contract
+    mfg_total = pool.get("manufacturing_slots", sum(
+        c.get("manufacturing_slots", 0) for c in pool.get("characters", [])))
+    reaction_total = pool.get("reaction_slots", sum(
+        c.get("reaction_slots", 0) for c in pool.get("characters", [])))
     return {
         "ready": ready,
         "free": free,
@@ -919,6 +924,12 @@ def install_block(ctx: int, res: dict) -> dict:
         "fit_count": sum(1 for t in ready if t.get("fits_now")),
         "makespan_hours": res["metrics"]["makespan_hours"],
         "later_waves": max(0, len(waves) - 1),
+        # Manufacturing schedules future waves but does not claim today's EVE slots merely because
+        # a build is queued. The shared shape matches Reactions; the model names the real difference.
+        "capacity": capacity_contract(
+            reservation_model="scheduled",
+            manufacturing=(mfg_total, pool["manufacturing_free"]),
+            reaction=(reaction_total, pool["reaction_free"])),
     }
 
 

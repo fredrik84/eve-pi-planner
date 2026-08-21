@@ -31,6 +31,7 @@ scripts/symbols.sh app static                # a whole tree
 | [docs/industry-running.md](docs/industry-running.md) | Industry after it starts: progress, sourcing, corp hangars, customer status links |
 | [docs/industry-workflow.md](docs/industry-workflow.md) | the whole Industry flow end to end: the nine steps a builder walks, and the module/endpoint/table map behind each |
 | [docs/industry-workflow-user.md](docs/industry-workflow-user.md) | the same flow written for the user — what the tab does and the order to use it in |
+| [docs/production-workflow.md](docs/production-workflow.md) | shared Reactions/Manufacturing behavior contracts and their intentional differences |
 | [docs/industry-audit-2026-08.md](docs/industry-audit-2026-08.md) | the Industry feature set scored against the manifesto — verdicts, removal candidates, live flag states |
 | [docs/config-shape-2026-08.md](docs/config-shape-2026-08.md) | **is the config stored the hard way?** — the 2026-08-14 measurements behind closing §18: 13 settings rows across 10 tables, and the one read that was repeated six times a request |
 | [docs/test-protocol-2026-08.md](docs/test-protocol-2026-08.md) | what to test and where, for the 2026-08-05/06 round |

@@ -708,6 +708,15 @@ def test_manufacturing_slots():
     check("MP5+AMP5 capped 11", manufacturing_slots(row(5, 5)) == 11)
     check("over-cap still 11", manufacturing_slots(row(5, 8)) == 11)
     check("reaction slots independent", reaction_slots(row(5, 5, 4, 3)) == 8)
+    from app.production import capacity_contract, skill_slot_count
+    check("both tools share the capped EVE slot arithmetic",
+          skill_slot_count(5, 8) == 11 and skill_slot_count(-2, 3) == 4)
+    cap = capacity_contract(reservation_model="scheduled",
+                            manufacturing=(11, 7), reaction=(6, 9))
+    check("the shared capacity response clamps stale availability and names its model",
+          cap == {"reservation_model": "scheduled", "pools": {
+              "manufacturing": {"total": 11, "available": 7, "committed": 4},
+              "reaction": {"total": 6, "available": 6, "committed": 0}}})
 
 
 def test_per_product_me_from_blueprints():
@@ -3105,14 +3114,21 @@ def test_manufacturing_phase1_is_task_first():
           'id="indSetupSummary"' in page and 'class="ind-action-menu"' in headline
           and 'Job slots &amp; setup' in headline and 'Refresh ESI jobs' in headline)
     check("both More menus close after actions and whenever Manufacturing refreshes",
-          'indCloseActionMenus();indOpenSetup()' in page
-          and 'indCloseActionMenus();indOpenSetup()' in headline
-          and 'indCloseActionMenus();indOpenOrder()' in headline
-          and 'indCloseActionMenus();indRefreshJobs()' in headline
-          and 'async function indRefreshStatus() {\n  indCloseActionMenus();' in js)
+          "ppCloseTransientMenus('.ind-action-menu');indOpenSetup()" in page
+          and "ppCloseTransientMenus('.ind-action-menu');indOpenSetup()" in headline
+          and "ppCloseTransientMenus('.ind-action-menu');indOpenOrder()" in headline
+          and "ppCloseTransientMenus('.ind-action-menu');indRefreshJobs()" in headline
+          and "async function indRefreshStatus() {\n  ppCloseTransientMenus('.ind-action-menu');" in js)
     check("adding a build closes the planner and returns directly to Overview",
-          'indClosePlanner();' in add_flow and "ppSelectTab('ind', 'status')" in add_flow
-          and "toast('Build added." in add_flow)
+          'indClosePlanner();' in add_flow
+          and "ppReturnToOverview('ind', 'status', 'indStatusCard'" in add_flow
+          and "'Build added. The Overview shows what to start now.'" in add_flow)
+    check("Manufacturing uses the shared workflow mechanics and scheduled capacity contract",
+          "ppCloseTransientMenus('.ind-action-menu')" in js
+          and 'capacity_contract(' in open(os.path.join(here, "app", "industry", "orders.py"),
+                                          encoding="utf-8").read()
+          and 'reservation_model="scheduled"' in open(
+              os.path.join(here, "app", "industry", "orders.py"), encoding="utf-8").read())
 
 
 def main():
