@@ -237,9 +237,7 @@ async function indLoadAssets() {
   try {
     const d = await api('/api/industry/assets');
     if (!d.connected) {
-      el.innerHTML = `<span class="ind-bp-hint">Tell the planners what you already own — materials `
-        + `<b>and reaction formulas</b> — so they stop asking you to buy it, progress can tell `
-        + `what's finished, and the reaction concurrency cap knows how many formulas you have.</span>`
+      el.innerHTML = `<span class="ind-bp-hint">No asset inventory has been scanned yet.</span>`
         + _indReauthHtml(d.needs_reauth)
         + `<div class="ind-src-actions">`
         + (d.scannable ? `<button class="ind-bp-btn ind-bp-connect" onclick="indRefreshAssets()">Scan assets</button>` : '')
@@ -278,8 +276,8 @@ async function indLoadAssets() {
       + `source${(d.sources || []).length === 1 ? '' : 's'} in use · ${d.distinct_types} item type${d.distinct_types === 1 ? '' : 's'} counted`
       + `${when ? ' · scanned ' + _esc(when) : ''}</span>`
       + `<button class="ind-bp-btn" onclick="indRefreshAssets()">Rescan</button></div>`
-      + `<p class="ind-src-help">Tick the hangars and containers the planners may take materials from. Nothing is used until you pick it.`
-      + ` Any <b>reaction formula</b> in a ticked source counts as one you own, and caps how many reaction jobs can run at once.`
+      + `<p class="ind-src-help">Select only stock the planners may use.`
+      + ` Reaction formulas in selected sources count toward concurrent jobs.`
       + (_featureActive('industry_plan_sources')
           ? ` A build with its own containers picked counts <b>those</b> and ignores this list — this is what everything else falls back on.` : '')
       + `</p>`

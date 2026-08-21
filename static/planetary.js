@@ -2992,15 +2992,13 @@ function _loadMarketsSettings() {
   // The connect action used to be an inline text link buried mid-sentence in a hint paragraph,
   // which read as prose rather than the required first step it actually is for structure markets.
   // Promoted to a real button on its own row.
-  const marketMgr = `<div class="settings-subsec-title">Markets to price against <span class="pp-card-hint">— priced top-first; Jita is always the last fallback</span></div>`
-    + `<div class="pp-card-hint" style="margin:6px 0 8px">Follow a public region market and/or a player structure market.</div>`
+  const marketMgr = `<div class="settings-task-grid"><section class="settings-panel settings-panel-wide">`
+    + `<div class="settings-panel-head"><div><div class="settings-panel-kicker">Market prices</div><h4>Pricing sources</h4></div>`
     + `<div class="settings-connect-row">`
     +   `<button class="pp-connect-btn" onclick="connectReactionsMarket()">Connect a character</button>`
-    +   `<span class="pp-card-hint">Needed to search structures and read their markets. Public`
-    +   ` regions work without one.</span>`
-    + `</div>`
-    + `<div id="settingsMarketsMgr" class="pp-target-form" style="margin:8px 0 16px;display:block"><div class="pp-empty">Loading…</div></div>`
-    + `<div style="border-top:1px solid var(--clr-border);margin-bottom:12px"></div>`;
+    + `</div></div><div class="settings-source-copy">Sources are tried top-first; Jita remains the fallback. Connecting is only required for player structures.</div>`
+    + `<div id="settingsMarketsMgr" class="settings-market-manager"><div class="pp-empty">Loading…</div></div>`
+    + `</section>`;
   const freight = (typeof _rxAccountSettingsFormHtml === 'function') ? _rxAccountSettingsFormHtml() : '';
   // ...and the GROUP default beneath it, for a manager. It used to live in a Reactions-only modal
   // that, for everyone who is not a manager, contained nothing but two links to this page — so the
@@ -3008,9 +3006,9 @@ function _loadMarketsSettings() {
   // is the only place the distinction between "mine" and "my group's" is legible.
   const groupDefaults = (typeof _rxCanEditSettings === 'function' && _rxCanEditSettings()
                           && typeof _rxSettingsFormHtml === 'function')
-    ? `<div style="border-top:1px solid var(--clr-border);margin:16px 0 0"></div>` + _rxSettingsFormHtml()
+    ? `<section class="settings-panel settings-panel-wide"><div class="settings-panel-kicker">Group defaults</div>` + _rxSettingsFormHtml() + `</section>`
     : '';
-  body.innerHTML = marketMgr + freight + groupDefaults;
+  body.innerHTML = marketMgr + `<section class="settings-panel settings-panel-wide">${freight}</section>` + groupDefaults + `</div>`;
   if (typeof _loadRxAccountSettings === 'function') _loadRxAccountSettings();
   if (groupDefaults && typeof _loadRxSettings === 'function') _loadRxSettings();
   // _rxMountMarkets fetches the list itself when nothing has loaded it yet, so this no longer

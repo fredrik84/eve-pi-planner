@@ -1279,7 +1279,7 @@ PVF-N9    3         95                 60             80                  100   
           </button>
           <button class="settings-nav-item" id="settingsNavMarkets" onclick="settingsSection('markets')" style="display:none">
             <span class="settings-nav-ico">SM</span>
-            <span class="settings-nav-lbl">Structures &amp; Markets</span>
+            <span class="settings-nav-lbl">Facilities &amp; pricing</span>
           </button>
           <button class="settings-nav-item" id="settingsNavBlueprints" onclick="settingsSection('blueprints')" style="display:none">
             <span class="settings-nav-ico">BP</span>
@@ -1307,8 +1307,8 @@ PVF-N9    3         95                 60             80                  100   
                old "Markets & Logistics" title hid the second half, so nobody found where build
                structures are added. -->
           <div id="settingsSecMarkets" class="settings-section" style="display:none">
-            <div class="settings-sec-hdr"><h3 class="settings-sec-title">Structures &amp; Markets</h3></div>
-            <div class="settings-subsec-hint">Where you build and react, which markets to price against, and what freight costs you. Used by Reactions and Manufacturing alike.</div>
+            <div class="settings-sec-hdr"><h3 class="settings-sec-title">Facilities &amp; pricing</h3></div>
+            <div class="settings-subsec-hint">Configure the three inputs separately: prices, production facilities, and your operating costs.</div>
             <div id="settingsSecMarketsBody"><div class="pp-empty">Loading…</div></div>
           </div>
 
@@ -1336,37 +1336,33 @@ PVF-N9    3         95                 60             80                  100   
           </div>
           <div id="settingsSecBlueprints" class="settings-section" style="display:none">
             <div class="settings-sec-hdr"><h3 class="settings-sec-title">Blueprints &amp; formulas</h3></div>
-            <div class="settings-subsec-hint">What prints and formulas you own, and which hangars the planners may take materials from. Used by Reactions and Manufacturing alike.</div>
-            <div class="settings-subsec">
-              <div class="settings-subsec-title">Read from ESI</div>
-              <div class="settings-subsec-hint">A connected character's own blueprints and formulas, with their real ME &amp; TE.</div>
-              <div class="settings-note"><span><b>Personal items only.</b> Anything in a corp or shared hangar is invisible to ESI — declare it by hand or paste the hangar as stock below.</span></div>
-              <div id="indBlueprints" class="ind-bp-row"></div>
-            </div>
-            <!-- Declared by hand. Sits beside the ESI panel rather than in a surface of its own, so
-                 "what prints do I own" is one question with one answer. ESI reads PERSONAL items
-                 only, so a corp-hangar print can be stated here and nowhere else. -->
-            <div id="indManualBpSubsec" class="settings-subsec" style="display:none">
-              <div class="settings-subsec-title">Declared by hand</div>
-              <div class="settings-subsec-hint">Prints ESI cannot see. Give the product, its ME &amp; TE and how many you hold — leave <b>runs</b> blank for an original — or paste a whole industry window.</div>
-              <div class="settings-note"><span>What you declare here <b>replaces</b> what ESI read for that product, so list every print of it you will use.</span></div>
-              <div id="indManualBps"></div>
-            </div>
-            <!-- Reaction formulas, pasted from the Reactions side. The SAME store and the same
-                 batches the panel above uses — this is a second door to it, not a second list,
-                 because the panel above is behind a Manufacturing flag and pasting the window is
-                 the only thing that makes "formulas you need to acquire" able to report anything.
-                 Ungated: it is a route to an existing feature, not a new one. -->
-            <div id="rxFormulaSubsec" class="settings-subsec">
-              <div class="settings-subsec-title">Reaction formulas — paste your industry window</div>
-              <div class="settings-subsec-hint">Until you paste, a formula we have never seen is <b>unknown</b>, and unknown never refuses work. Once you have pasted, absence means you don't own it — which is what lets the plan tell you which formulas to go and buy before it sends you to a structure.</div>
-              <div id="rxFormulaLibrary"></div>
-            </div>
-            <div class="settings-subsec">
-              <div class="settings-subsec-title">Stock on hand — materials <b>and reaction formulas</b></div>
-              <div class="settings-subsec-hint">The hangars, containers and pasted stacks the planners may draw from. Materials found here come off what a plan asks you to buy.</div>
-              <div class="settings-note"><span>Formulas found here <b>cap how many reaction jobs run at once</b> — one formula, one job. For corp-hangar formulas, pasting that hangar here is the only way to tell us about them.</span></div>
-              <div id="indAssets" class="ind-bp-row"></div>
+            <div class="settings-subsec-hint">Add personal inventory with ESI. Paste an Industry window or hangar for anything ESI cannot see.</div>
+            <div class="settings-task-grid">
+              <section class="settings-panel settings-panel-wide">
+                <div class="settings-panel-head"><div><div class="settings-panel-kicker">Print library</div><h4>Blueprints and reaction formulas</h4></div></div>
+                <div class="settings-source-grid">
+                  <div class="settings-source-card">
+                    <div class="settings-source-title"><span class="settings-step">1</span> Personal prints via ESI</div>
+                    <div class="settings-source-copy">Reads owned prints and their real ME/TE.</div>
+                    <div id="indBlueprints" class="ind-bp-row"></div>
+                  </div>
+                  <div class="settings-source-card">
+                    <div class="settings-source-title"><span class="settings-step">2</span> Corp, shared, or offline prints</div>
+                    <div class="settings-source-copy">Paste the Industry → Blueprints window. Each named paste replaces that batch.</div>
+                    <div id="rxFormulaLibrary"></div>
+                  </div>
+                </div>
+                <details id="indManualBpSubsec" class="settings-advanced" style="display:none">
+                  <summary>Advanced: add or override one print</summary>
+                  <div class="settings-source-copy">A manual declaration replaces ESI for that product, so include every copy you intend to use.</div>
+                  <div id="indManualBps"></div>
+                </details>
+              </section>
+              <section class="settings-panel settings-panel-wide">
+                <div class="settings-panel-head"><div><div class="settings-panel-kicker">Available stock</div><h4>Materials and formulas in hangars</h4></div></div>
+                <div class="settings-source-copy">Choose ESI hangars and containers, or paste shared stock. Selected materials reduce the shopping list; formulas limit simultaneous reaction jobs.</div>
+                <div id="indAssets" class="ind-bp-row"></div>
+              </section>
             </div>
           </div>
 

@@ -474,31 +474,41 @@ let _rxMissSeq = 0;
 async function rxLoadFormulaLibrary() {
   const el = document.getElementById('rxFormulaLibrary');
   if (!el) return;
-  let d = null;
-  try { d = await api('/api/reactions/formulas/library'); } catch (e) { el.innerHTML = ''; return; }
+  let d = null, declared = null;
+  try {
+    [d, declared] = await Promise.all([
+      api('/api/reactions/formulas/library'),
+      api('/api/industry/manual-blueprints').catch(() => null),
+    ]);
+  } catch (e) { el.innerHTML = ''; return; }
+  // Keep the useful contents drill-down on the one remaining bulk-paste surface. The declarations
+  // read is ungated; the feature flag only controls whether individual manual edits are offered.
+  if (declared && typeof _indBpBatchEntries !== 'undefined') {
+    _indBpBatchEntries = {};
+    for (const e of declared.entries || []) {
+      if (e.batch) (_indBpBatchEntries[e.batch] = _indBpBatchEntries[e.batch] || []).push(e);
+    }
+  }
   const batches = (d.batches_list || []).map(b =>
     `<div class="ind-src-row"><span class="ind-src-name">${_esc(b.name)}</span>`
     + `<span class="ind-src-meta">pasted · ${b.prints} print${b.prints === 1 ? '' : 's'}`
     + ` · ${b.products} product${b.products === 1 ? '' : 's'}</span>`
+    + (declared ? `<button class="ind-src-peek" title="Show what this batch declares"`
+      + ` onclick="indToggleBatchItems('${_esc(b.batch)}')">contents</button>` : '')
     + `<button class="ind-src-del" title="Remove this pasted batch"`
-    + ` onclick="rxDeleteFormulaBatch('${_esc(b.batch)}')">✕</button></div>`).join('');
+    + ` onclick="rxDeleteFormulaBatch('${_esc(b.batch)}')">✕</button></div>`
+    + (declared ? `<div class="ind-src-items" id="indbpb-${_srcDomId(b.batch)}" style="display:none"></div>` : '')).join('');
   // Two different questions, and a user has to be able to tell them apart: `complete` is whether
   // the evidence is there, `enabled` is whether the report that reads it is switched on.
   const state = d.complete
-    ? `<div class="settings-note"><span><b>${d.formulas_declared} formula${d.formulas_declared === 1 ? '' : 's'} declared.</b>`
-      + ` Your library reads as complete, so a formula you have not pasted is one the plan will tell you to acquire.`
-      + (d.enabled ? '' : ' (The missing-formula report is not switched on for this account yet — the paste is still counted.)')
-      + `</span></div>`
-    : `<div class="settings-note"><span>Nothing pasted yet — every formula is <b>unknown</b>, and unknown never refuses work.`
-      + ` Paste the window and absence starts meaning "you don't own it".</span></div>`;
+    ? `<div class="settings-library-state is-ready"><b>${d.formulas_declared}</b> formula${d.formulas_declared === 1 ? '' : 's'} declared · library complete${d.enabled ? '' : ' · reporting unavailable'}</div>`
+    : `<div class="settings-library-state">No pasted library yet · missing formulas remain unknown</div>`;
   // The honest note about what a reactions-only account silently does not get. Both of these fail
   // SOFT to empty, which reads as "you own nothing" rather than as an error — the safe direction,
   // but silent, and a user who wonders why their formula cap never binds deserves the sentence.
-  const soft = `<div class="ind-src-help">Formula counts found in your <b>stock sources</b> (corp hangars,
-    pasted stacks) and the per-formula job cap read from them are shared with Manufacturing and are
-    only counted while that side is enabled for your account. Until then they read as "you own
-    none", which never blocks a plan — it just means the cap does not bind. A paste here is always
-    counted.</div>`;
+  const soft = `<details class="settings-inline-help"><summary>How formula ownership affects plans</summary>
+    <p>A pasted library makes absence meaningful, so plans can identify formulas to acquire. Formula
+    quantities in selected stock sources also limit how many matching reaction jobs can run at once.</p></details>`;
   const unres = (d.unresolved || []).length
     ? `<div class="ind-src-help">Not recognised in your paste: ${(d.unresolved || []).slice(0, 8)
         .map(u => _esc(u.name)).join(', ')}${(d.unresolved || []).length > 8 ? '…' : ''}
@@ -507,9 +517,7 @@ async function rxLoadFormulaLibrary() {
   el.innerHTML = state
     + `<div class="ind-src-list">${batches || '<span class="ind-bp-hint">No pasted batches.</span>'}</div>`
     + `<div class="ind-paste">
-        <p class="ind-src-help">In game open <b>Industry → Blueprints</b>, <b>Ctrl+A</b>,
-          <b>Ctrl+C</b>, paste here. One paste is one batch — re-pasting the same name replaces it,
-          so paste each character's window under its own name.</p>
+        <p class="ind-src-help">Open <b>Industry → Blueprints</b>, press <b>Ctrl+A</b>, <b>Ctrl+C</b>, then paste below.</p>
         <input type="text" id="rxBpPasteName" placeholder="Name this batch — e.g. Main's industry window">
         <textarea id="rxBpPasteText" rows="6" placeholder="Formulas:&#10;4 x Nanotransistors Reaction Formula&#9;0&#9;0&#9;-1&#9;Composite"></textarea>
         <div class="ind-src-actions">
@@ -2875,9 +2883,7 @@ function _saveRxSettings() {
 // within one alliance. No override saved = use the group's rate (or the global default).
 function _rxAccountSettingsFormHtml() {
   return `
-    <div class="pp-card-title" style="font-size:13px;margin-top:4px">Your rates
-      <span class="pp-card-hint">— yours only; overrides any group default</span>
-    </div>
+    <div class="settings-panel-head"><div><div class="settings-panel-kicker">Operating costs</div><h4>Freight, collateral, and job rates</h4></div></div>
     <div class="pp-card-hint" id="rxAcctSettingsHint" style="margin:6px 0 0"></div>
     ${_rxRateFieldsHtml('rxAcct', true)}
     ${_RX_RATE_NOTES}
@@ -4040,16 +4046,18 @@ function _rxBuildRowHtml(m, d) {
       <button class="pp-add-btn rx-build-rm" onclick="_rxMarketRemove(${m.id})" title="Remove">✕</button></div>
     ${_rigFitWarnings(m)}
     ${manual}
-    <label class="rx-build-chk"><input type="checkbox" id="bm-${m.id}" ${m.build_mfg ? 'checked' : ''}> Manufacture here</label>
-    <div class="rx-rig-row">ME rig <select id="bmme-${m.id}">${_rigOpts(m.me_rig)}</select> · TE rig <select id="bmte-${m.id}">${_rigOpts(m.te_rig)}</select></div>
-    ${_rigFamRow(m, 'bmmeg', 'manufacturing')}${_rigFamRow(m, 'bmteg', 'manufacturing')}
-    <label class="rx-build-chk"><input type="checkbox" id="br-${m.id}" ${m.build_rx ? 'checked' : ''}> React here</label>
-    <div class="rx-rig-row">ME rig <select id="brme-${m.id}">${_rigOpts(m.rx_me_rig)}</select> · TE rig <select id="brte-${m.id}">${_rigOpts(m.rx_te_rig)}</select></div>
-    ${_rigFamRow(m, 'brmeg', 'reaction')}${_rigFamRow(m, 'brteg', 'reaction')}
-    ${_rxPinRow(m)}
-    ${m.location_id < 0
-      ? `<div class="pp-card-hint">Added by hand — can't be priced from: reading a structure's market needs ESI and its real in-game id.</div>`
-      : `<label class="rx-build-chk"><input type="checkbox" id="bp-${m.id}" ${m.price_from ? 'checked' : ''}> Also price from here</label>`}
+    <div class="rx-build-activities">
+      <section class="rx-build-activity"><label class="rx-build-chk"><input type="checkbox" id="bm-${m.id}" ${m.build_mfg ? 'checked' : ''}> Manufacturing</label>
+      <div class="rx-rig-row">ME rig <select id="bmme-${m.id}">${_rigOpts(m.me_rig)}</select> TE rig <select id="bmte-${m.id}">${_rigOpts(m.te_rig)}</select></div>
+      ${_rigFamRow(m, 'bmmeg', 'manufacturing')}${_rigFamRow(m, 'bmteg', 'manufacturing')}</section>
+      <section class="rx-build-activity"><label class="rx-build-chk"><input type="checkbox" id="br-${m.id}" ${m.build_rx ? 'checked' : ''}> Reactions</label>
+      <div class="rx-rig-row">ME rig <select id="brme-${m.id}">${_rigOpts(m.rx_me_rig)}</select> TE rig <select id="brte-${m.id}">${_rigOpts(m.rx_te_rig)}</select></div>
+      ${_rigFamRow(m, 'brmeg', 'reaction')}${_rigFamRow(m, 'brteg', 'reaction')}</section>
+    </div>
+    <div class="rx-build-routing">${_rxPinRow(m)}
+      ${m.location_id < 0
+        ? `<span class="pp-card-hint">Manual facilities cannot provide market prices.</span>`
+        : `<label class="rx-build-chk"><input type="checkbox" id="bp-${m.id}" ${m.price_from ? 'checked' : ''}> Use this market for pricing</label>`}</div>
     <div class="rx-build-foot"><button class="pp-add-btn" onclick="_rxSaveBuild(${m.id})">Save</button>${share}${bonus.length ? `<span class="rx-mkt-build-badge">${bonus.join(' · ')}</span>` : ''}</div>
   </div>`;
 }
@@ -4084,15 +4092,14 @@ function _rxManualFormHtml() {
     + `${h.rig_size_label ? ` — ${_esc(h.rig_size_label)} rigs` : ''}`
     + `${h.activity === 'reaction' ? ' (reactions)' : ''}</option>`).join('');
   if (!hulls) return '';
-  return `<div class="rx-mkt-search" style="flex-wrap:wrap;align-items:flex-start">
+  return `<details class="settings-advanced rx-manual-structure"><summary>Add a facility manually</summary><div class="rx-mkt-search" style="flex-wrap:wrap;align-items:flex-start">
       <input id="rxManualName" placeholder="Structure name, e.g. 1DQ1-A - Home Azbel" style="flex:1 1 220px">
       <select id="rxManualHull">${hulls}</select>
       ${_rxSystemInputHtml('rxManualSystem')}
       <button class="pp-add-btn" onclick="_rxManualAdd()">Add by hand</button>
-      <div class="settings-note" style="flex:1 1 100%"><span>You can <b>build</b> in a hand-added
-        structure but not <b>price</b> from it — reading a market needs its real in-game id.</span></div>
+      <div class="pp-card-hint" style="flex:1 1 100%">Manual facilities support production settings, but not market pricing.</div>
       <span id="rxManualMsg" class="pp-card-hint"></span>
-    </div>`;
+    </div></details>`;
 }
 
 async function _rxManualAdd() {
@@ -4247,13 +4254,13 @@ function _rxMarketManagerHtml(d) {
         + `connected character — public regions work without one.`
         + ` <button class="ind-link-btn" onclick="connectReactionsMarket()">Connect one</button></div>`);
   return inheritNote + warn
-    + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Price against — in priority order</div>`
+    + `<div class="rx-mkt-sec rx-market-pricing"><div class="rx-mkt-sec-h">Price against — in priority order</div>`
     + `<div class="rx-mkt-list">${_rxPricingRowsHtml(pricing, editable)}</div>`
     + `<div class="rx-mkt-search">`
     + `<input id="rxMarketSearchInput" placeholder="Search a structure or region…" onkeydown="if(event.key==='Enter')_rxMarketSearch()">`
     + `<button class="pp-add-btn" onclick="_rxMarketSearch()">Search</button>`
     + `<div id="rxMarketSearchResults"></div></div></div>`
-    + `<div class="rx-mkt-sec"><div class="rx-mkt-sec-h">Structures you build in <span class="pp-card-hint">their rigs set your ME &amp; TE</span></div>`
+    + `<div class="rx-mkt-sec rx-market-facilities"><div class="settings-panel-divider"><span>Production facilities</span></div><div class="rx-mkt-sec-h">Structures you build in <span class="pp-card-hint">Configure each activity and its rigs independently</span></div>`
     + (build.length ? build.map(m => _rxBuildRowHtml(m, d)).join('') : `<div class="pp-card-hint">None yet — search above and choose <b>+ Build</b> on a structure.</div>`)
     + _rxManualFormHtml()
     + `</div>`

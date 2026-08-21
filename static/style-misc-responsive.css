@@ -320,6 +320,9 @@ body.nav-collapsed .admin-nav-item .nav-lbl { display: none; }
   .settings-nav-item { flex: 0 0 auto; width: auto; padding: 7px 14px; font-size: 12px; }
   .settings-nav-ico { display: none; }
   .settings-modal-content { padding: 14px 16px; }
+  .settings-task-grid, .settings-source-grid, .rx-build-activities { grid-template-columns: 1fr; }
+  .settings-panel { padding: 12px; }
+  .settings-source-card { padding: 10px; }
 
   /* Admin mobile sub-page navigation */
   .admin-mobile-page-nav {

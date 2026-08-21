@@ -81,9 +81,11 @@ async function indLoadManualBps() {
       + `<button class="ind-src-del" title="Remove this declaration"`
       + ` onclick="indDeleteManualBp(${e.id})">✕</button></div>`;
   }).join('');
-  const list = batches + rows;
+  // Pasted batches have one canonical home in the print-library paste panel. This advanced area
+  // is intentionally only for precise, one-product overrides; showing the batches and a second
+  // paste box here made one source look like two unrelated stores.
+  const list = rows;
   el.innerHTML = `<div class="ind-src-list">${list || '<span class="ind-bp-hint">Nothing declared yet.</span>'}</div>`
-    + _indBpPasteFormHtml()
     + `<div class="ind-manual-bp-add">`
     + `<input id="indManualBpSearch" class="bug-input" placeholder="Product (e.g. Nitrogen Fuel Block)"`
     + ` autocomplete="off" oninput="indManualBpSearch(this.value)">`
