@@ -304,6 +304,26 @@ def test_recurring_order_releases_each_cycle(api: Api) -> bool:
     return ok
 
 
+def test_recurring_create_refreshes_visible_queue() -> bool:
+    """Creating recurring work assigns on the server, so the browser must repaint the task cards.
+
+    This is deliberately a small source contract: the backend integration test above already proves
+    rows are inserted. The reported production failure was that the success callback refreshed only
+    Orders and left Overview on its cached pre-create response.
+    """
+    print(f"\n{'='*60}\n  Recurring order create refreshes visible task queue\n{'='*60}")
+    with open("static/reactions.js", encoding="utf-8") as f:
+        js = f.read()
+    start = js.index("function _rxCreateOrder()")
+    end = js.index("function _rxOrderProfitHtml", start)
+    body = js[start:end]
+    ok = check("_rxReloadPlan();" in body,
+               "create success reloads the reaction dashboard after automatic assignment")
+    ok &= check("data.auto_assigned" in body,
+                "create success acknowledges the automatic assignment")
+    return ok
+
+
 # ── Deterministic unit tests (no network, no DB) ───────────────────────────────────────────────
 # The safety net for refactoring reactions.py: these pin the refactor-critical PURE functions —
 # the reaction-graph cost roll-up + cheaper-source selection (_resolve_reachable), the shopping-
@@ -1774,7 +1794,7 @@ def main() -> int:
     args = parser.parse_args()
     base = args.url.rstrip("/")
 
-    results = [run_unit_tests()]
+    results = [run_unit_tests(), test_recurring_create_refreshes_visible_queue()]
 
     if not args.no_live:
         try:

@@ -3154,8 +3154,15 @@ function _rxCreateOrder() {
     .then(data => {
       _rxCloseNewOrderModal();
       _rxLoadOrders();
+      // A recurring order claims slots inside the create request. The Orders list was refreshed,
+      // but the Overview task cards were left on their pre-create snapshot, making a successful
+      // assignment look like it had done nothing until the next page refresh.
+      _rxReloadPlan();
       document.getElementById('rxOrderDetailModal').style.display = '';
       _renderRxOrderDetail(data);
+      if (data.auto_assigned && data.auto_assigned.runs_assigned > 0) {
+        toast(`Assigned ${data.auto_assigned.runs_assigned.toLocaleString()} runs to the reaction queue`, 'success');
+      }
     })
     .catch(err => { status.textContent = err.message; });
 }

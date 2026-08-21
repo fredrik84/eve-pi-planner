@@ -34,6 +34,15 @@ function _indRuleRow(label, body, note) {
     + (note ? `<div class="ind-src-meta">${note}</div>` : '') + `</div></div>`;
 }
 
+function _indRuleGroup(kicker, title, hint, rows) {
+  const content = rows.filter(Boolean).join('');
+  if (!content) return '';
+  return `<section class="ind-rule-group"><div class="settings-panel-kicker">${_esc(kicker)}</div>`
+    + `<h4>${_esc(title)}</h4>`
+    + (hint ? `<div class="settings-source-copy">${hint}</div>` : '')
+    + content + `</section>`;
+}
+
 // In order mode a field either INHERITS or is CHANGED, and it has to say which — an inherited value
 // shown as a plain choice is how an override gets made by accident.
 function _indInheritTag(field) {
@@ -46,9 +55,8 @@ function _indInheritTag(field) {
 function _indRulesFacility(a) {
   const f = a.facility || {};
   return _indRuleRow('Where you build',
-    `<div class="ind-src-meta">Structure and rigs come from <b>Settings → Structures &amp; Markets</b>`
-    + ` — a rig changes the materials and time of every job.</div>`
-    + `<div class="ind-src-actions"><button class="ind-bp-btn" onclick="indCloseRules();openSettingsModal('markets')">Open Structures &amp; Markets</button></div>`,
+    `<div class="ind-src-meta">Facilities and rigs are configured separately.</div>`
+    + `<div class="ind-src-actions"><button class="ind-bp-btn" onclick="indCloseRules();openSettingsModal('markets')">Open Facilities &amp; pricing</button></div>`,
     f.facility_id ? `Currently: <b>${_esc(f.facility_id)}</b>`
       + (f.struct_material_pct != null ? ` · ME ${f.struct_material_pct}%` : '')
       + (f.struct_time_pct != null ? ` · TE ${f.struct_time_pct}%` : '')
@@ -199,7 +207,22 @@ function _indRulesSources(a) {
     : new Set(srcs.filter(s => s.enabled).map(s => s.key));
   if (!srcs.length) {
     return _indRuleRow('Materials from',
-      `<div class="ind-src-meta">No boxes scanned yet — set them up under <b>Settings → Blueprints &amp; formulas</b>.</div>`);
+      `<div class="ind-src-meta">No stock sources are configured.</div>`
+      + `<div class="ind-src-actions"><button class="ind-bp-btn" onclick="indCloseRules();openSettingsModal('blueprints')">Set up inventory</button></div>`);
+  }
+  // Account defaults are the enabled inventory sources themselves. Editing those keys here was a
+  // second editor for Settings → Blueprints & formulas and made it look as if containers had to be
+  // configured twice. Orders still need the picker below because choosing a subset for one build
+  // is a genuine override, not inventory definition.
+  if (_indRulesMode === 'account') {
+    const enabled = srcs.filter(s => s.enabled);
+    const names = enabled.slice(0, 3).map(s => _esc(s.name)).join(', ');
+    const more = enabled.length > 3 ? ` +${enabled.length - 3} more` : '';
+    return _indRuleRow('Available stock',
+      `<div class="ind-rule-source-summary"><b>${enabled.length}</b> of ${srcs.length} source${srcs.length === 1 ? '' : 's'} enabled`
+      + (names ? `<span>${names}${more}</span>` : '') + `</div>`
+      + `<div class="ind-src-actions"><button class="ind-bp-btn" onclick="indCloseRules();openSettingsModal('blueprints')">Manage inventory</button></div>`,
+      'Inventory is defined once under Blueprints & formulas. Builds spend enabled stock before buying.');
   }
   return _indRuleRow('Materials from',
     `<div class="ind-rule-checks">` + srcs.map(s => `<label class="ind-opt-check"><input type="checkbox" class="ir-src" data-key="${_esc(s.key)}"`
@@ -252,9 +275,14 @@ function indRulesPerOrderToggle(cb) {
 
 function _indRulesSectionsHtml() {
   const a = _indRules.account;
-  return [_indRulesFacility(a), _indRulesThreshold(a), _indRulesReactions(a),
-          _indRulesComponents(a), _indRulesJobLength(a), _indRulesSources(a),
-          _indRulesPerOrder(a), _indRulesMargin(a)].filter(Boolean).join('');
+  return `<div class="ind-rule-grid ind-rule-grid-${_indRulesMode}">`
+    + _indRuleGroup('Production', 'Build or buy', 'Where work runs and when the planner should manufacture instead of purchase.',
+        [_indRulesFacility(a), _indRulesThreshold(a), _indRulesReactions(a), _indRulesJobLength(a)])
+    + _indRuleGroup('Routing', 'Components and stock', 'Exceptions to automatic component sourcing.',
+        [_indRulesComponents(a), _indRulesSources(a), _indRulesPerOrder(a)])
+    + _indRuleGroup('Commercial', 'Customer pricing', 'How the planner calculates the suggested selling price.',
+        [_indRulesMargin(a)])
+    + `</div>`;
 }
 
 function indRulesForceToggle(cb) {

@@ -1764,10 +1764,17 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .ind-src-allin { color: var(--clr-green); }
 
 /* ── Build rules: one row per standing rule, in Settings and in the per-order dialog ────────── */
-.ind-rule-row { display: flex; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--clr-border); }
+.ind-rule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ind-rule-grid-order { grid-template-columns: 1fr; }
+.ind-rule-group { min-width: 0; padding: 14px; border: 1px solid var(--clr-border); border-radius: 8px; background: #10151f; }
+.ind-rule-group h4 { margin: 2px 0 0; color: #e2e9f3; font-size: 14px; }
+.ind-rule-grid-account .ind-rule-group:last-child { grid-column: 1 / -1; }
+.ind-rule-row { display: flex; gap: 11px; padding: 10px 0; border-bottom: 1px solid var(--clr-border); }
 .ind-rule-row:last-child { border-bottom: 0; }
-.ind-rule-lbl { flex: 0 0 150px; font-weight: 600; font-size: 13px; padding-top: 2px; }
+.ind-rule-lbl { flex: 0 0 118px; font-weight: 600; font-size: 12px; padding-top: 2px; color: #b8c6da; }
 .ind-rule-ctl { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.ind-rule-source-summary { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; color: #cbd6e6; font-size: 12px; }
+.ind-rule-source-summary > span { color: var(--clr-text-soft); }
 /* Inherited vs changed. The distinction is the whole point of order mode — an inherited value that
    looks like a choice is how an override gets made by accident. */
 .ind-rule-tag { font-size: 11px; padding: 1px 7px; border-radius: 9px; border: 1px solid var(--clr-border);
@@ -1776,6 +1783,8 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 /* A summary is a statement, not a control — it must not read like the chip it replaced. */
 .ind-rule-summary { align-items: baseline; flex-wrap: wrap; gap: 6px; }
 @media (max-width: 700px) {
+  .ind-rule-grid { grid-template-columns: 1fr; }
+  .ind-rule-grid-account .ind-rule-group:last-child { grid-column: auto; }
   .ind-rule-row { flex-direction: column; gap: 6px; }
   .ind-rule-lbl { flex: none; }
 }
