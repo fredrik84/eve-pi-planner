@@ -1030,11 +1030,18 @@ def _handoff_ready_reactions(ctx: int, install: dict,
         return {"created": [], "assigned": [], "shortfalls": [], "conflicts": [],
                 "orders": linked} if linked else None
     for row in grouped.values():
+        # Manufacturing's scheduler may split a stage into many provisional slot-sized tasks.
+        # Those rows answer when work could run; they are not an authoritative quantity ledger.
+        # The graph-derived owner demand is. Using the task sum here allowed repeated/split rows to
+        # inflate a handful of reaction runs into hundreds of thousands before Reactions saw them.
+        weights = (owner_weights or {}).get(row["type_id"], {})
+        if weights:
+            row["runs"] = max(1, int(round(sum(max(0.0, float(v)) for v in weights.values()))))
         if row["source_ref"].startswith("order:") and row["order_id"]:
             row["owners"] = [{"order_id": row["order_id"], "runs": row["runs"]}]
         else:
             row["owners"] = _allocate_owner_runs(
-                row["runs"], (owner_weights or {}).get(row["type_id"], {}))
+                row["runs"], weights)
         if row["owners"]:
             ids = ",".join(str(o["order_id"]) for o in row["owners"])
             row["source_ref"] = f"shared:{row['type_id']}:{ids}"

@@ -613,7 +613,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-action-menu > summary { list-style: none; cursor: pointer; }
 .rx-action-menu > summary::-webkit-details-marker { display: none; }
 .rx-action-menu-pop {
-  position: absolute; z-index: 20; top: calc(100% + 5px); right: 0; width: 230px;
+  position: absolute; z-index: 20; top: calc(100% + 5px); right: 0; width: 210px;
   display: flex; flex-direction: column; align-items: stretch; gap: 5px; padding: 8px;
   border: 1px solid var(--clr-border); border-radius: 7px; background: #151a25;
   box-shadow: 0 10px 24px rgba(0,0,0,.35);
@@ -1661,6 +1661,7 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 /* "Materials from" in the plan form — a container name is long, so it gets the same room as the
    customer label rather than the narrow numeric-field width. */
 .ind-field-src { min-width: 190px; }
+.ind-plan-form > .ind-field-src { align-self: flex-start; }
 .ind-field-src select { width: 100%; background: #0e121b; color: var(--clr-text);
   border: 1px solid var(--clr-border); border-radius: 4px; padding: 5px 6px; font-size: 13px; }
 .ind-oc-for { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;

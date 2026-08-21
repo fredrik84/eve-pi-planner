@@ -138,7 +138,10 @@ def test_order_lifecycle(api: Api) -> bool:
     order_id = order["id"]
     ok &= check(order["top_level_runs"] == expected_runs,
                 f"top_level_runs = ceil(target/per-run yield) (expected {expected_runs}, got {order['top_level_runs']})")
-    ok &= check(order["assigned_runs"] == 0, "starts with nothing assigned")
+    ok &= check(order["assigned_runs"] == order["top_level_runs"],
+                "creation automatically assigns the first batch")
+    ok &= check(data.get("auto_assigned", {}).get("runs_assigned", 0) > 0,
+                "the create response reports the automatic assignment")
     ok &= check(order["status"] == "open", "starts open")
     ok &= check(len(data["materials"]) > 0, "materials report is non-empty")
     ok &= check(data["cost"]["total_cost"] > 0, "cost report is non-empty")
@@ -152,8 +155,12 @@ def test_order_lifecycle(api: Api) -> bool:
     ok &= check(status == 200 and any(o["id"] == order_id for o in listed["orders"]),
                 "new order appears in the list endpoint")
 
-    # Assign a single run — must occupy a real reaction slot (see _allocate_and_insert) and show
+    # Free the automatic batch to exercise the manual override path too. Assigning a single run
+    # must occupy a real reaction slot (see _allocate_and_insert) and show
     # up, order-tagged, on GET /api/reactions/jobs (the same endpoint the dashboard reads).
+    status, cleared = api.delete(f"/api/reactions/orders/{order_id}/assignments")
+    ok &= check(status == 200 and cleared.get("runs_returned") == expected_runs,
+                "clear assignments returns the automatic batch for manual management")
     status, before_jobs = api.get("/api/reactions/jobs")
     free_before = before_jobs["free_slots"]
 
@@ -205,7 +212,6 @@ def test_order_lifecycle(api: Api) -> bool:
     status, order3_data = api.post("/api/reactions/orders", {"type_id": product["type_id"], "target_qty": per_run_yield})
     if status == 200:
         order3_id = order3_data["order"]["id"]
-        api.post(f"/api/reactions/orders/{order3_id}/assign", {"runs": 1})
         status, mid_jobs = api.get("/api/reactions/jobs")
         ok &= check(mid_jobs["free_slots"] == free_before - 1, "assigning to the cancel-test order took a slot")
         status, cancel_data = api.post(f"/api/reactions/orders/{order3_id}/status", {"status": "cancelled"})
@@ -220,6 +226,7 @@ def test_order_lifecycle(api: Api) -> bool:
     ok &= check(status == 200, "second (throwaway) order creates fine")
     if status == 200:
         order2_id = order2_data["order"]["id"]
+        api.delete(f"/api/reactions/orders/{order2_id}/assignments")
         status, del2 = api.delete(f"/api/reactions/orders/{order2_id}")
         ok &= check(status == 200, f"delete succeeds when nothing's been assigned yet (got {status}: {del2})")
 
@@ -1817,10 +1824,11 @@ def test_suggest_and_assign_respect_the_formula_cap(api: Api) -> bool:
                 "client_name": "Formula Cap"})
             if check(status == 200, f"an order for 20x the batch creates (got {status})"):
                 oid = created["order"]["id"]
-                status, res = api.post(f"/api/reactions/orders/{oid}/assign", {})
-                ok &= check(status == 200, f"assigning it succeeds (got {status})")
+                res = created.get("auto_assigned") or {}
+                ok &= check(res.get("runs_assigned", 0) > 0,
+                            "creation assigns the formula-capped order automatically")
                 jobs = [c["jobs"] for c in res.get("characters", [])]
-                ok &= check(jobs and all(j == 1 for j in jobs),
+                ok &= check(bool(jobs) and all(j == 1 for j in jobs),
                             f"the order commits ONE job per character, not one per free slot (got {jobs})")
                 api.post(f"/api/reactions/orders/{oid}/status", {"status": "cancelled"})
     finally:

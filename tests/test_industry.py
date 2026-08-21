@@ -359,6 +359,8 @@ def test_build_rules_has_one_home_and_the_strip_stops_being_a_control():
     marg = js[js.index("function _indMarginalBar("):]
     marg = marg[:marg.index("\nfunction ")]
     check("the borderline-components strip is left alone", "_indRulesActive()" not in marg)
+    check("the preview strip acts on the visible modal instead of a hidden Overview copy",
+          "function _indMargRoot()" in js and "inPlanner = false" in js)
 
     check("an order gets the same dialog, gated", "indOpenRules(${o.id}" in js
           and "_indRulesActive()" in js)
@@ -1878,6 +1880,12 @@ def test_price_is_net_cost_plus_margin():
     check("leftovers are NOT charged to the customer", m["price"] < m["total_cost"] * 1.10
           if m["leftover_value"] > 0 else True)
 
+    js = open("static/industry-plan.js", encoding="utf-8").read()
+    check("saved margin values are clamped to the visible slider range",
+          "Math.min(hi, Math.max(lo, parseFloat(v)))" in js)
+    check("a corrupt margin cannot escape the documented 0–50% range",
+          "Math.min(50, Math.max(0, raw))" in js)
+
     # Zero margin quotes cost — a legitimate setting (building for a corpmate at cost).
     P0 = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0, min_saving_isk=0.0,
                      marginal_pct_of_total=0.0, margin_pct=0.0)
@@ -3197,7 +3205,7 @@ def test_ready_reactions_cross_as_one_durable_order():
         check("the new behavior stays behind its rollout gate",
               _handoff_ready_reactions(42, install) is None)
     shared = {"ready": [{"activity": "reaction", "fits_now": True, "type_id": 9,
-                          "runs": 10, "handoff_ref": "queue:7,8"}]}
+                          "runs": 79069445, "handoff_ref": "queue:7,8"}]}
     captured.clear()
     with patch("app.features.feature_enabled_for", return_value=True), patch(
             "app.reactions.orders.sync_manufacturing_reaction_orders",
@@ -3205,7 +3213,8 @@ def test_ready_reactions_cross_as_one_durable_order():
         _handoff_ready_reactions(42, shared, {9: {7: 6.0, 8: 4.0}})
     check("an aggregated batch keeps one physical order with attributed owners",
           captured[0]["owners"] == [{"order_id": 7, "runs": 6}, {"order_id": 8, "runs": 4}]
-          and captured[0]["source_ref"] == "shared:9:7,8")
+          and captured[0]["source_ref"] == "shared:9:7,8"
+          and captured[0]["runs"] == 10)
     with patch("app.features.feature_enabled_for", return_value=True), patch(
             "app.reactions.orders.linked_manufacturing_reaction_orders",
             return_value=[{"order_id": 55, "type_id": 9}]):

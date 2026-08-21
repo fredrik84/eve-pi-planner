@@ -317,6 +317,7 @@
   justify-content: center;
   z-index: 100;
 }
+#settingsModal { z-index: 200; }
 .pp-modal-box {
   background: #141720;
   border: 1px solid var(--clr-border);
@@ -475,5 +476,4 @@
 .ptype-storm    { color: #9070c0; }
 .ptype-temperate { color: #70b870; }
 .ptype-plasma   { color: #d070a0; }
-
 

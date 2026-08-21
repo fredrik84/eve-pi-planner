@@ -217,7 +217,13 @@ async function _indApplySavedSettings() {
   _indLastSourceKeys = (d && d.last_source_keys) || (_indLastSourceKey ? [_indLastSourceKey] : []);
   _indHasSavedSettings = !!(d && d.updated_at);
   if (!d || !d.updated_at) return;
-  const set = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (!el || val == null) return;
+    const lo = el.min === '' ? -Infinity : Number(el.min);
+    const hi = el.max === '' ? Infinity : Number(el.max);
+    el.value = Math.min(hi, Math.max(lo, Number(val)));
+  };
   const check = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.checked = !!val; };
   const sel = document.getElementById('indFacility');
   if (sel && d.facility_id && _indFacilityMap[d.facility_id]) {
@@ -248,7 +254,11 @@ function _indRestoreNum(elId, storageKey, onInput) {
   if (!el) return;
   let v = null;
   try { v = localStorage.getItem(storageKey); } catch (e) {}
-  if (v !== null && !isNaN(parseFloat(v))) el.value = parseFloat(v);
+  if (v !== null && !isNaN(parseFloat(v))) {
+    const lo = el.min === '' ? -Infinity : Number(el.min);
+    const hi = el.max === '' ? Infinity : Number(el.max);
+    el.value = Math.min(hi, Math.max(lo, parseFloat(v)));
+  }
   onInput();
 }
 
@@ -298,7 +308,8 @@ function indOnMarginalChange() {
 const IND_MARGIN_DEFAULT = 10;
 function _indMarginPct() {
   const el = document.getElementById('indMargin');
-  return el ? parseFloat(el.value) : IND_MARGIN_DEFAULT;
+  const raw = el ? parseFloat(el.value) : IND_MARGIN_DEFAULT;
+  return Number.isFinite(raw) ? Math.min(50, Math.max(0, raw)) : IND_MARGIN_DEFAULT;
 }
 function indOnMarginInput() {
   const lbl = document.getElementById('indMarginPct');

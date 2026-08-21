@@ -604,7 +604,7 @@ async function _rxLoadCadence() {
     const r = await api('/api/reactions/cadence');
     _rxCadenceAvail = !!r.available;
     const d = r.max_reaction_job_days;
-    _rxCadenceDays = (d == null) ? '' : d;
+    _rxCadenceDays = (d == null || Number(d) <= 0) ? 7 : Number(d);
   } catch (e) {
     _rxCadenceAvail = false;                 // the flag is off, or the surface 403'd — show nothing
   }
@@ -3736,12 +3736,13 @@ function _rxAssignOrderBatch(orderId, runs) {
     .then(async data => {
       const where = data.characters.map(c => c.character_name).join(', ');
       if (status) status.textContent = `Assigned ${data.runs_assigned.toLocaleString()} run${data.runs_assigned === 1 ? '' : 's'} to ${where} — refreshing…`;
-      // Sequential and awaited, so "refreshing" ends when the page really is refreshed, and the
-      // three requests don't race each other to re-render the same panels.
-      await _rxFetchOrderDetail(orderId);
+      // Assignment is the end of this decision. Return to the task-first view immediately, then
+      // await its refresh so a fast click cannot expose the old empty-slot snapshot.
+      _rxCloseOrderDetail();
+      ppReturnToOverview('rx', 'overview', 'rxOverviewPanel');
       await _rxLoadOrders();
       await onReactionsTabOpen();
-      if (status) status.textContent = `Assigned ${data.runs_assigned.toLocaleString()} run${data.runs_assigned === 1 ? '' : 's'} to ${where}.`;
+      toast(`Assigned ${data.runs_assigned.toLocaleString()} run${data.runs_assigned === 1 ? '' : 's'} to ${where}`, 'success');
     })
     .catch(err => {
       if (status) status.textContent = err.message;

@@ -273,25 +273,26 @@ def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(req
     finally:
         con.close()
     payload = {"order": order, **_order_report(context_id, order)}
-    # Recurring is an explicit instruction to claim the batch, not merely decorate it. Creation
-    # itself still succeeds when the account is full; the order then remains visibly unassigned
-    # and the normal list refresh retries it once capacity becomes available.
-    if recurring_days:
-        try:
-            assigned = assign_reaction_order(order_id, OrderAssignRequest(), context_id)
-            payload["order"] = assigned["order"]
-            payload["auto_assigned"] = assigned
-            if assigned["order"]["assigned_runs"] >= assigned["order"]["top_level_runs"]:
-                con = get_connection()
-                try:
-                    con.execute("UPDATE pp_reaction_orders SET recurring_next_at=? WHERE id=?",
-                                (now + recurring_days * 86400, order_id))
-                    con.commit()
-                    payload["order"] = _order_row(con, order_id)
-                finally:
-                    con.close()
-            else:
-                payload["auto_assign_error"] = "Not enough free reaction slots to assign the whole recurring batch."
+    # Creating an order is the instruction to put its work in the queue.  Recurrence controls when
+    # another batch is released; it must not be the hidden switch that makes the first batch claim
+    # slots. Creation itself still succeeds when the account is full so the user can decide which
+    # existing work to move or leave this order waiting.
+    try:
+        assigned = assign_reaction_order(order_id, OrderAssignRequest(), context_id)
+        payload["order"] = assigned["order"]
+        payload["auto_assigned"] = assigned
+        if recurring_days and assigned["order"]["assigned_runs"] >= assigned["order"]["top_level_runs"]:
+            con = get_connection()
+            try:
+                con.execute("UPDATE pp_reaction_orders SET recurring_next_at=? WHERE id=?",
+                            (now + recurring_days * 86400, order_id))
+                con.commit()
+                payload["order"] = _order_row(con, order_id)
+            finally:
+                con.close()
+        elif assigned["order"]["assigned_runs"] < assigned["order"]["top_level_runs"]:
+            payload["auto_assign_error"] = "Not enough free reaction slots to assign the whole order."
+            if recurring_days:
                 con = get_connection()
                 try:
                     con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?",
@@ -300,8 +301,9 @@ def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(req
                     payload["order"] = _order_row(con, order_id)
                 finally:
                     con.close()
-        except HTTPException as exc:
-            payload["auto_assign_error"] = exc.detail
+    except HTTPException as exc:
+        payload["auto_assign_error"] = exc.detail
+        if recurring_days:
             con = get_connection()
             try:
                 con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?",

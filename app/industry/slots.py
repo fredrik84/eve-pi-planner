@@ -117,6 +117,15 @@ def _slot_pool(context_id: int) -> dict:
 
     from app.industry.jobs import running_counts   # local import avoids a slots↔jobs cycle
     running = running_counts(context_id)
+    # Reactions owns reaction reservations, including customer orders and Manufacturing handoffs.
+    # Feed that committed load back into Manufacturing's scheduler so its preview cannot spend the
+    # same reactors again and fan one-run jobs across slots already promised to another order.
+    try:
+        from app.reactions.jobs import _character_capacities
+        reaction_available = {int(r["character_id"]): int(r["free_slots"])
+                              for r in _character_capacities(context_id)}
+    except Exception:
+        reaction_available = {}
 
     per_char = []
     excluded = []
@@ -140,6 +149,8 @@ def _slot_pool(context_id: int) -> dict:
         run = running.get(c["character_id"], {"manufacturing": 0, "reaction": 0})
         mf = max(0, ms - run["manufacturing"])
         rf = max(0, rs - run["reaction"])
+        if not is_ph and c["character_id"] in reaction_available:
+            rf = min(rf, reaction_available[c["character_id"]])
         mfg_total += ms; rx_total += rs; mfg_free += mf; rx_free += rf
         per_char.append({
             "character_id": c["character_id"], "character_name": c["character_name"],

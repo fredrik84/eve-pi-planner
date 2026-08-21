@@ -374,13 +374,23 @@ function _indMarginalBar(d) {
 let _indMargRows = [];
 
 function _indMargCut() {
-  const el = document.getElementById('indMargCut');
+  const el = _indMargRoot().querySelector('#indMargCut');
   return el ? parseFloat(el.value) : Infinity;
 }
 
 function _indMargAbove() {
   const cut = _indMargCut();
-  return _indMargRows.filter(r => r.saving >= cut);
+  return [..._indMargRoot().querySelectorAll('.ind-marg-chip')].map(el => ({
+    type_id: Number(el.id.replace('margchip-', '')),
+    name: el.childNodes[0] ? el.childNodes[0].textContent.trim() : '',
+    saving: parseFloat(el.getAttribute('data-sav')),
+  })).filter(r => r.saving >= cut);
+}
+
+function _indMargRoot() {
+  const modal = document.getElementById('indPlanModal');
+  if (modal && modal.style.display !== 'none') return modal;
+  return document.getElementById('indStatusCard') || document;
 }
 
 // Live feedback while dragging — and the LIST is the feedback, not just a counter. Dragging marks
@@ -388,17 +398,18 @@ function _indMargAbove() {
 // looking at. A number saying "builds 3 of 7" over an unchanged row of chips reads as a control
 // that isn't connected to anything.
 function indMargCutLabel() {
-  const info = document.getElementById('indMargCutInfo');
+  const root = _indMargRoot();
+  const info = root.querySelector('#indMargCutInfo');
   if (!info) return;
   const cut = _indMargCut();
   const picked = _indMargAbove();
   const gain = picked.reduce((a, r) => a + r.saving, 0);
   info.textContent = picked.length
-    ? `${fmtIsk(cut)} — builds ${picked.length} of ${_indMargRows.length}, saving ${fmtIsk(gain)}`
+    ? `${fmtIsk(cut)} — builds ${picked.length} of ${root.querySelectorAll('.ind-marg-chip').length}, saving ${fmtIsk(gain)}`
     : `${fmtIsk(cut)} — nothing that high`;
-  const btn = document.querySelector('.ind-marg-apply');
+  const btn = root.querySelector('.ind-marg-apply');
   if (btn) btn.disabled = !picked.length;
-  document.querySelectorAll('.ind-marg-chip').forEach(el => {
+  root.querySelectorAll('.ind-marg-chip').forEach(el => {
     const sav = parseFloat(el.getAttribute('data-sav'));
     el.classList.toggle('ind-marg-in', isFinite(sav) && sav >= cut);
     el.classList.toggle('ind-marg-out', isFinite(sav) && sav < cut);
@@ -414,10 +425,11 @@ async function indBuildAllAbove() {
   const picked = _indMargAbove();
   if (!picked.length) return;
   // No queue yet (the preview): nothing to iterate against, so take the single pass.
-  if (!_indStatusVisible() || !(_indOrders || []).length) {
-    return _indKeepScroll(() => _indForceBuildMany(picked));
+  const inPlanner = _indMargRoot().id === 'indPlanModal';
+  if (inPlanner || !_indStatusVisible() || !(_indOrders || []).length) {
+    return _indKeepScroll(() => _indForceBuildMany(picked, inPlanner));
   }
-  const btn = document.querySelector('.ind-marg-apply');
+  const btn = _indMargRoot().querySelector('.ind-marg-apply');
   if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
   let d;
   try {
@@ -437,14 +449,15 @@ async function indBuildAllAbove() {
 // across orders, so one order carries it for the whole batch — and the ⚒ tag on that order chip is
 // how you take it back), while the preview keeps it in the session map until the build is queued.
 async function indBuildAnyway(typeId, name) {
-  return _indKeepScroll(() => _indForceBuildMany([{ type_id: typeId, name }]));
+  return _indKeepScroll(() => _indForceBuildMany(
+    [{ type_id: typeId, name }], _indMargRoot().id === 'indPlanModal'));
 }
 
 // One or many, one round trip and ONE re-plan either way. Overruling seven components must not mean
 // seven requests each re-planning the whole queue against a batch the next one is about to change.
-async function _indForceBuildMany(items) {
+async function _indForceBuildMany(items, inPlanner = false) {
   if (!items.length) return;
-  if (!_indStatusVisible() || !(_indOrders || []).length) {
+  if (inPlanner || !_indStatusVisible() || !(_indOrders || []).length) {
     items.forEach(i => _indForcedTypes.set(i.type_id, i.name || String(i.type_id)));
     _indSweep = null; _indSweepFailed = null;
     return indRunPlan();
