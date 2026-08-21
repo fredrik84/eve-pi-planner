@@ -142,6 +142,9 @@ def test_order_lifecycle(api: Api) -> bool:
     ok &= check(order["status"] == "open", "starts open")
     ok &= check(len(data["materials"]) > 0, "materials report is non-empty")
     ok &= check(data["cost"]["total_cost"] > 0, "cost report is non-empty")
+    shown_material_cost = sum(m["unit_cost"] * m["quantity"] for m in data["materials"])
+    ok &= check(abs(shown_material_cost - data["cost"]["material_cost"]) < 0.01,
+                "preview material cost equals its stock-netted shopping-list rows")
     ok &= check(abs((data["cost"]["material_cost"] + data["cost"]["job_cost"]) - data["cost"]["total_cost"]) < 0.01,
                 "total_cost = material_cost + job_cost")
 

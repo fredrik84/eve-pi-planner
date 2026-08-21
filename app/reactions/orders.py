@@ -97,7 +97,13 @@ def _order_report(context_id: int, order: dict) -> dict:
         job_cost = sum(int(r["runs"] or 0) * reached[int(r["type_id"])].get("own_job_cost_per_run", 0.0)
                        for r in plan_rows if reached.get(int(r["type_id"])))
     else:
-        material_cost = v["input_cost"]
+        # The preview's shopping list above is already net of pasted/scanned hangar stock. Cost
+        # must price those SAME rows: using the graph's full `input_cost` here made an unassigned
+        # order say e.g. 358m of materials beside a 260.95m shopping list, then silently switch to
+        # 260.95m after assignment when the plan-row branch above took over. Besides contradicting
+        # one screen, that made the quoted profit change merely because Assign was clicked. Stock
+        # the account already holds is not part of this batch's shopping outlay.
+        material_cost = sum(m["unit_cost"] * m["quantity"] for m in materials)
         job_cost = v["job_cost"]
     total_cost = material_cost + job_cost
     cost = {
