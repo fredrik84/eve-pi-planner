@@ -348,6 +348,8 @@ def test_reactions_phase1_is_task_first() -> bool:
                 "Shopping is an output, not a second planning launcher")
     ok &= check('class="rx-action-menu"' in page and 'Clear planned work' in page,
                 "rare and destructive queue actions are grouped behind More")
+    ok &= check('_rxCloseActionMenu();' in page and '_rxCloseActionMenu();\n  // First-run gate' in js,
+                "the More menu closes after an action and whenever Reactions reloads")
     ok &= check('class="rx-capacity-section"' in js and 'rx-capacity-fold' not in js,
                 "character and slot capacity stays visible under the task list")
     ok &= check('class="pp-card rx-metrics-card"' in page and 'rx-metrics-fold' not in page,

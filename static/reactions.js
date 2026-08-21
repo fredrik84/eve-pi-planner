@@ -108,7 +108,14 @@ function _rxLoadOpportunities(force) {
   return _rxOppsLoading;
 }
 
+function _rxCloseActionMenu() {
+  document.querySelectorAll('.rx-action-menu[open]').forEach(menu => menu.removeAttribute('open'));
+}
+
 async function onReactionsTabOpen() {
+  // Browsers may restore a native <details> element's open state across reloads. This menu is an
+  // ephemeral action picker, not page state, so every fresh tab paint starts closed.
+  _rxCloseActionMenu();
   // First-run gate (local_market flag): block the whole tab until the user has added a character
   // and saved. Returns true when the gate is showing, in which case we skip loading the dashboard.
   if (await _rxApplyGate()) return;

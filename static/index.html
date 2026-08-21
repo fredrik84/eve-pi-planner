@@ -629,11 +629,11 @@
                   <details class="rx-action-menu">
                     <summary class="pp-add-btn">More</summary>
                     <div class="rx-action-menu-pop">
-                      <button class="pp-add-btn" onclick="_rxRefreshJobs(true, this)">Refresh ESI jobs</button>
-                      <button class="pp-add-btn" onclick="openSettingsModal('markets')">Facilities &amp; pricing</button>
-                      <button class="pp-add-btn" onclick="_rxOpenRecurringDeadline()">Adjust current queue to a deadline</button>
-                      <button class="pp-add-btn" id="rxAdoptAllBtn" onclick="_rxAdoptAllOrphans(this)" title="Add every running job that isn't in your plan yet, so it recurs next cycle" style="display:none">Adopt all unplanned jobs</button>
-                      <button class="pp-danger-btn" onclick="ppConfirm('Clear every planned assignment, including slots committed to customer orders? Those orders go back to unassigned so you can re-assign them.').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear planned work</button>
+                      <button class="pp-add-btn" onclick="_rxCloseActionMenu();_rxRefreshJobs(true, this)">Refresh ESI jobs</button>
+                      <button class="pp-add-btn" onclick="_rxCloseActionMenu();openSettingsModal('markets')">Facilities &amp; pricing</button>
+                      <button class="pp-add-btn" onclick="_rxCloseActionMenu();_rxOpenRecurringDeadline()">Adjust current queue to a deadline</button>
+                      <button class="pp-add-btn" id="rxAdoptAllBtn" onclick="_rxCloseActionMenu();_rxAdoptAllOrphans(this)" title="Add every running job that isn't in your plan yet, so it recurs next cycle" style="display:none">Adopt all unplanned jobs</button>
+                      <button class="pp-danger-btn" onclick="_rxCloseActionMenu();ppConfirm('Clear every planned assignment, including slots committed to customer orders? Those orders go back to unassigned so you can re-assign them.').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear planned work</button>
                     </div>
                   </details>
                 </div>
