@@ -339,8 +339,8 @@ def test_reactions_phase1_is_task_first() -> bool:
     shopping = page[shop_start:shop_end]
     ok = check('Find profitable work' in page and 'Add a specific product' in page,
                "the two distinct planning intents are explicit")
-    ok &= check(page.index('Do this now') < page.index('rxMetricsContent'),
-                "actionable work appears before financial detail")
+    ok &= check(page.index('rxMetricsContent') < page.index('Do this now'),
+                "current-task metrics stay at the top of Overview")
     ok &= check('Advanced planning options' in page and 'id="wizRDeadline"' in page
                 and 'id="rxMaterialFilter"' in page,
                 "occasional deadline and material controls remain available under Advanced")

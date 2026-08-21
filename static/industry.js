@@ -785,6 +785,9 @@ function _indStatusHeadline(d, viewOrderId) {
     ? ((o => o ? _indOrderChipHtml(o, byOrder, tgt) : '')((_indOrders || []).find(o => o.id === viewOrderId)))
     : _indOrdersByRank(d.targets).map(o => _indOrderChipHtml(o, byOrder, tgt)).join('');
   return sim
+    + `<div class="an-stats">` + tiles.map(([l, v, tip]) =>
+        `<div class="an-stat" title="${_esc(tip)}"><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('')
+    + `</div>`
     + `<div class="ind-status-head"><div class="ind-order-chips">${chips}</div>`
     + `<button class="ind-primary-btn" onclick="indOpenPlanner()">Add manufacturing work</button>`
     + `<details class="ind-action-menu"><summary class="ind-secondary-btn">More</summary>`
@@ -793,9 +796,6 @@ function _indStatusHeadline(d, viewOrderId) {
         ? `<button class="ind-secondary-btn" onclick="indOpenOrder()">Reorder builds</button>` : '')
     + `<button class="ind-secondary-btn" onclick="indRefreshJobs()" title="Pull job status from EVE and re-plan">Refresh ESI jobs</button></div></details></div>`
     + `<div id="indInstall" class="ind-install"></div>`
-    + `<div class="an-stats">` + tiles.map(([l, v, tip]) =>
-        `<div class="an-stat" title="${_esc(tip)}"><div class="an-stat-lbl">${l}</div><div class="an-stat-val">${v}</div></div>`).join('')
-    + `</div>`
     // Opened from an order chip; empty until then, and re-rendered in place so the panel survives
     // the status card's own refreshes.
     + `<div id="indSourcing" class="ind-sourcing"></div>`;

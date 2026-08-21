@@ -3098,8 +3098,9 @@ def test_manufacturing_phase1_is_task_first():
           and '>Running jobs<' in page)
     check("the primary action says what it adds",
           page.count('Add manufacturing work') >= 1 and 'Add manufacturing work' in headline)
-    check("the next jobs appear before the always-visible task metrics",
-          headline.index('id="indInstall"') < headline.index('class="an-stats"'))
+    check("the always-visible task metrics stay at the top of Overview",
+          headline.index('class="an-stats"') < headline.index('class="ind-status-head"')
+          < headline.index('id="indInstall"'))
     check("capacity stays visible while setup, reorder and refresh sit under More",
           'id="indSetupSummary"' in page and 'class="ind-action-menu"' in headline
           and 'Job slots &amp; setup' in headline and 'Refresh ESI jobs' in headline)
