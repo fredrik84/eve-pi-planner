@@ -1352,14 +1352,18 @@ function _renderReactionsDashboard(data) {
       squares.push(`<div class="rx-slot rx-slot-empty" title="Free reaction slot — click to assign your own product" onclick="_rxOpenManualAssign('${c.character_id}')"><span class="rx-slot-empty-mark">+</span></div>`);
     }
     const queuedHtml = queuedSquares.length
-      ? `<div class="pp-card-hint" style="font-size:11px;flex-basis:100%;margin-top:4px">Queued — reuses a reactor once an earlier stage frees it up, not one of the ${c.slots} above:</div>
-         <div class="rx-slot-row rx-slot-row-queued">${queuedSquares.join('')}</div>`
+      ? `<div class="rx-queued-rail">
+           <span class="rx-queued-label" title="These jobs wait for an earlier stage and reuse its reactor when it finishes">Queued</span>
+           <div class="rx-queued-items">${queuedSquares.join('')}</div>
+         </div>`
       : '';
     return `
       <div class="rx-char-row">
         <div class="rx-char-label">${_esc(c.character_name)}<br><span class="pp-card-hint">${rowFree} / ${c.slots} free</span></div>
-        <div class="rx-slot-row">${squares.join('')}</div>
-        ${queuedHtml}
+        <div class="rx-char-work">
+          <div class="rx-slot-row">${squares.join('')}</div>
+          ${queuedHtml}
+        </div>
       </div>`;
   }).join('');
 

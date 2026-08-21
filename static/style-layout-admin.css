@@ -593,11 +593,12 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .rx-reconnect-btn:hover { color: #7cc6f0; }
 .rx-char-row {
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 14px;
   padding: 10px 0; border-bottom: 1px solid var(--clr-border);
 }
 .rx-char-row:last-child { border-bottom: none; }
 .rx-char-label { width: 130px; flex: 0 0 130px; font-weight: 600; color: #dbe1ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rx-char-work { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; }
 /* Reaction completion bars — job-detail modal + metrics "total complete" + dashboard. */
 .rx-prog-wrap { display: flex; flex-direction: column; gap: 8px; }
 .rx-prog-row { display: flex; flex-direction: column; gap: 3px; }
@@ -623,6 +624,26 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .rx-step-note { margin-left: auto; font-size: 11px; color: var(--clr-text-dim); }
 
 .rx-slot-row { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Later chain stages are a compact queue attached to the character, not a second row of
+   full-size reactors. They remain clickable/cancellable and keep their stage/count badges, but
+   no longer add 70px cards and a large band of empty space beneath every affected character. */
+.rx-queued-rail { display: flex; align-items: center; gap: 7px; min-height: 30px; }
+.rx-queued-label {
+  flex: 0 0 auto; font-size: 10px; line-height: 1; color: #a9935d; text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.rx-queued-items { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rx-queued-items .rx-slot {
+  width: 104px; height: 30px; padding: 2px 20px 2px 4px; box-sizing: border-box;
+  flex-direction: row; justify-content: flex-start; gap: 5px; border-radius: 5px;
+}
+.rx-queued-items .rx-slot-icon { width: 22px; height: 22px; flex: 0 0 22px; }
+.rx-queued-items .rx-slot-pending-label { margin: 0; max-width: 54px; }
+.rx-queued-items .rx-slot-timer-corner,
+.rx-queued-items .rx-slot-runs { display: none; }
+.rx-queued-items .rx-slot-pending-badge { top: 6px; right: 3px; }
+.rx-queued-items .rx-slot-stage { bottom: -5px; left: -4px; }
+.rx-queued-items .rx-slot-more { top: -5px; left: auto; right: 17px; }
 .rx-slot {
   width: 70px; height: 70px; flex: 0 0 auto; position: relative;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
