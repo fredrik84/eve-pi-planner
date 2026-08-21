@@ -1245,7 +1245,7 @@ def _load_char_planet_config(con, context_id: int, config_type_id: int):
     # (which character gets a marginal/scarce slot in a tight scenario), not a display list —
     # deliberately left as SQLite's default (BINARY) ordering rather than the natural-sort used
     # for actual character-list displays elsewhere. Changing it reshuffles who gets the leftover
-    # slot in capacity-constrained fixtures (confirmed via test_distribution.py's DE-IHK case)
+    # slot in capacity-constrained fixtures (confirmed via tests/test_distribution.py's DE-IHK case)
     # without being "more correct" either way — so leave the tie-break alone and only fix display
     # ordering (GET /api/characters, GET /api/plan-config/{id}, and the frontend result sort).
     char_rows = con.execute(f"""

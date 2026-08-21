@@ -1051,7 +1051,14 @@ function _rxRefreshJobs(force, btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
   return apiSend('POST', '/api/reactions/jobs/refresh' + (force ? '?force=1' : ''))
     .catch(() => null)
-    .then(res => { if (res && (res.characters_refreshed > 0 || force)) _loadReactionsDashboard(); })
+    .then(res => {
+      if (res && (res.characters_refreshed > 0 || force)) _loadReactionsDashboard();
+      const recovery = (res && res.automatic_recovery) || {};
+      const assigned = (recovery.assigned || []).reduce((n, x) => n + (x.runs || 0), 0);
+      const blocked = (recovery.blocked || []).length;
+      if (force && assigned) toast(`Refresh assigned ${assigned.toLocaleString()} waiting reaction run${assigned === 1 ? '' : 's'} in priority order.`, 'success');
+      else if (force && blocked) toast(`${blocked} reaction order${blocked === 1 ? '' : 's'} still need attention.`, 'warning');
+    })
     .catch(() => {})
     .finally(() => { if (btn) { btn.disabled = false; btn.textContent = orig; } });
 }
@@ -3005,6 +3012,38 @@ function _rxOrderBarHtml(o) {
   return `<div class="rx-order-bar" title="${pct}% of runs assigned"><div class="rx-order-bar-fill" style="width:${pct}%"></div></div>`;
 }
 
+function _rxOrderState(o) {
+  if (o.status !== 'open') return o.status === 'completed' ? 'done' : o.status;
+  if (o.source_state || o.recurring_error) return 'blocked';
+  if (o.assigned_runs >= o.top_level_runs) return 'ready';
+  if (o.assigned_runs > 0) return 'waiting';
+  return 'waiting';
+}
+
+function _rxManufacturingSourcesHtml(o) {
+  const sources = o.manufacturing_sources || [];
+  if (!sources.length) return '';
+  return `<div class="pp-card-hint">For ${sources.map(s =>
+    `<button class="ind-link-btn" onclick="event.stopPropagation();_rxGoToManufacturingOrder(${s.order_id})"`
+      + ` title="Open this Manufacturing build">${_esc(s.label)} · ${s.runs.toLocaleString()} run${s.runs === 1 ? '' : 's'}</button>`
+  ).join(' · ')}</div>`;
+}
+
+function _rxGoToManufacturingOrder(orderId) {
+  _rxCloseOrderDetail();
+  switchTab('industry');
+  if (typeof indOpenOrderLink === 'function') indOpenOrderLink(orderId);
+}
+
+function _rxAttentionHtml(open) {
+  const issues = open.filter(o => o.source_message || o.recurring_error);
+  if (!issues.length) return '';
+  return `<div class="rx-reconnect-note" style="margin-bottom:10px"><b>${issues.length} order${issues.length === 1 ? '' : 's'} need attention</b>`
+    + `<div class="pp-card-hint">Work is kept safe. Open an order to see what is blocked and the available decision.</div>`
+    + issues.map(o => `<button class="ind-link-btn" onclick="_rxOpenOrderDetail(${o.id})">${_esc(o.name)} — ${_esc(o.source_message || o.recurring_error)}</button>`).join('<br>')
+    + `</div>`;
+}
+
 function _renderRxOrdersList(orders) {
   const el = document.getElementById('rxOrdersContent');
   if (!el) return;
@@ -3018,7 +3057,8 @@ function _renderRxOrdersList(orders) {
     <div class="rx-order-row${_rxIsUnpriced(o) ? ' rx-order-unpriced' : ''}" onclick="_rxOpenOrderDetail(${o.id})">
       <div class="rx-order-info">
         <div class="rx-order-name">${_esc(o.name)} <span class="pp-card-hint">× ${Math.round(o.target_qty).toLocaleString()} units</span>${o.source_kind === 'manufacturing' ? ' <span class="rx-order-noprice" style="color:#8fc7a5;border-color:#2f6b48">Manufacturing</span>' : ''}${o.recurring_interval_days ? ` <span class="rx-order-noprice" style="color:#8fc7a5;border-color:#2f6b48">every ${o.recurring_interval_days}d</span>` : ''}${_rxIsUnpriced(o) && o.source_kind !== 'manufacturing' ? ' <span class="rx-order-noprice">no price set</span>' : ''}</div>
-        <div class="pp-card-hint">${o.client_name ? _esc(o.client_name) + ' · ' : ''}${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned${o.recurring_interval_days && o.recurring_next_at ? ` · next ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}${o.status !== 'open' ? ' · ' + _esc(o.status) : ''}</div>
+        <div class="pp-card-hint"><b>${_esc(_rxOrderState(o))}</b> · ${o.client_name ? _esc(o.client_name) + ' · ' : ''}${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned${o.recurring_interval_days && o.recurring_next_at ? ` · next ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}</div>
+        ${_rxManufacturingSourcesHtml(o)}
         ${o.source_message ? `<div class="rx-order-noprice" title="Linked Manufacturing work needs a decision">${_esc(o.source_message)}</div>` : ''}
       </div>
       ${o.status === 'open' ? `<div class="rx-order-priority" onclick="event.stopPropagation()"><button class="pp-add-btn" ${i === 0 ? 'disabled' : ''} onclick="_rxMoveOrder(${o.id},-1)" title="Higher priority">▲</button><button class="pp-add-btn" ${i === list.length - 1 ? 'disabled' : ''} onclick="_rxMoveOrder(${o.id},1)" title="Lower priority">▼</button></div>` : ''}
@@ -3028,7 +3068,7 @@ function _renderRxOrdersList(orders) {
   const historyHtml = history.length
     ? `<details style="margin-top:10px"><summary class="pp-card-hint" style="cursor:pointer">History (${history.length})</summary>${history.map((o, i) => row(o, i, history)).join('')}</details>`
     : '';
-  el.innerHTML = openHtml + historyHtml;
+  el.innerHTML = _rxAttentionHtml(open) + openHtml + historyHtml;
 }
 
 function _rxMoveOrder(orderId, delta) {
@@ -3268,6 +3308,19 @@ function _rxOpenOrderDetail(orderId) {
   _rxFetchOrderDetail(orderId);
 }
 
+async function _rxOpenOrderLink(orderId) {
+  const id = Number(orderId);
+  if (!Number.isFinite(id)) return false;
+  try {
+    const data = await api(`/api/reactions/orders/${id}`);
+    document.getElementById('rxOrderDetailModal').style.display = '';
+    _rxOpenOrderId = id;
+    _renderRxOrderDetail(data);
+    if (typeof noteRecord === 'function') noteRecord('reactions', 'order', id);
+    return true;
+  } catch (e) { return false; }
+}
+
 function _rxFetchOrderDetail(orderId) {
   // Which order the modal is showing RIGHT NOW. A slow response for an order the user has since
   // closed (or navigated away from) must not paint itself over whatever they are looking at —
@@ -3280,6 +3333,7 @@ function _rxFetchOrderDetail(orderId) {
       const modal = document.getElementById('rxOrderDetailModal');
       if (modal && modal.style.display === 'none') return;
       _renderRxOrderDetail(data);
+      if (typeof noteRecord === 'function') noteRecord('reactions', 'order', orderId);
     })
     .catch(err => {
       if (_rxOpenOrderId !== orderId) return;
@@ -3321,6 +3375,10 @@ async function _rxClearOrderAssignments(orderId) {
 function _rxCloseOrderDetail() {
   document.getElementById('rxOrderDetailModal').style.display = 'none';
   _rxOpenOrderId = null;               // anything still in flight for it is now stale
+  if (typeof currentRecord === 'function' && currentRecord()
+      && currentRecord().kind === 'order' && typeof noteRecord === 'function') {
+    noteRecord('reactions', null, null);
+  }
 }
 
 // The cost/time/materials report body, shared by the order-detail modal AND the pre-commit review
@@ -3446,6 +3504,11 @@ function _renderRxOrderDetail(data) {
         <button class="pp-danger-btn" onclick="_rxRecurringOrderAction(${o.id}, 'stop')">Stop recurring</button>
       </div>
     </div>` : '';
+  const sourceBlocked = o.source_message ? `
+    <div class="rx-reconnect-note" style="margin-top:10px">
+      <b>⚠ ${o.source_state === 'running_after_finish' ? 'Running work was kept safe.' : o.source_state === 'quantity_conflict' ? 'Quantity needs a decision.' : o.source_state === 'missing_formula' ? 'A reaction formula or priced recipe is missing.' : 'Waiting for reaction capacity.'}</b><br>${_esc(o.source_message)}
+      ${o.source_state === 'capacity_blocked' ? `<div style="margin-top:7px"><button onclick="_rxRetryLinkedOrder(${o.id})">Retry now</button></div>` : ''}
+    </div>` : '';
 
   const actionButtons = o.status === 'open' ? `
       ${remaining > 0 ? `<button id="rxOrderAssignBtn" onclick="_rxAssignOrderBatch(${o.id})">Assign next batch (${remaining.toLocaleString()} run${remaining === 1 ? '' : 's'} left)</button>` : '<span class="pp-card-hint">Every run has been assigned.</span>'}
@@ -3460,6 +3523,8 @@ function _renderRxOrderDetail(data) {
     <div class="pp-card-hint">${o.client_name ? `For <b>${_esc(o.client_name)}</b> — ` : ''}${Math.round(o.target_qty).toLocaleString()} units needed → ${o.top_level_runs.toLocaleString()} reaction run${o.top_level_runs === 1 ? '' : 's'}${o.recurring_interval_days ? ` · repeats every <b>${o.recurring_interval_days} days</b>${o.recurring_next_at ? ` · next cycle ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}` : ''}</div>
     ${o.notes ? `<div class="pp-card-hint" style="margin-top:2px">${_esc(o.notes)}</div>` : ''}
     ${recurringBlocked}
+    ${sourceBlocked}
+    ${_rxManufacturingSourcesHtml(o)}
 
     <div style="margin:10px 0 4px">${_rxOrderBarHtml(o)}</div>
     <div class="pp-card-hint">${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned to characters</div>
@@ -3472,6 +3537,17 @@ function _renderRxOrderDetail(data) {
       <span id="rxOrderDetailStatus" class="bug-status-msg"></span>
     </div>
     <div id="rxOrderDeadlineBox" style="display:none;margin-top:10px"></div>`;
+}
+
+function _rxRetryLinkedOrder(orderId) {
+  const status = document.getElementById('rxOrderDetailStatus');
+  if (status) status.textContent = 'Trying the next available capacity…';
+  apiSend('POST', `/api/reactions/orders/${orderId}/assign`, {})
+    .then(async res => {
+      toast(`Assigned ${res.runs_assigned.toLocaleString()} reaction run${res.runs_assigned === 1 ? '' : 's'}`, 'success');
+      await _rxFetchOrderDetail(orderId); await _rxLoadOrders(); await _loadReactionsDashboard();
+    })
+    .catch(err => { if (status) status.textContent = err.message; });
 }
 
 function _rxRecurringOrderAction(orderId, action) {

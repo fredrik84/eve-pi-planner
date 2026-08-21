@@ -1019,8 +1019,16 @@ def _handoff_ready_reactions(ctx: int, install: dict,
                                        "type_id": key[1], "runs": 0,
                                        "priority": int(task.get("order_priority") or 0)})
         row["runs"] += int(task.get("runs") or 0)
+    owner_ids = {int(order_id) for weights in (owner_weights or {}).values()
+                 for order_id in weights}
+    owner_ids.update(int(t.get("handoff_order_id") or t.get("order_id") or 0)
+                     for t in (install.get("ready") or []))
+    from app.reactions.orders import (linked_manufacturing_reaction_orders,
+                                      sync_manufacturing_reaction_orders)
     if not grouped:
-        return None
+        linked = linked_manufacturing_reaction_orders(ctx, list(owner_ids))
+        return {"created": [], "assigned": [], "shortfalls": [], "conflicts": [],
+                "orders": linked} if linked else None
     for row in grouped.values():
         if row["source_ref"].startswith("order:") and row["order_id"]:
             row["owners"] = [{"order_id": row["order_id"], "runs": row["runs"]}]
@@ -1031,7 +1039,6 @@ def _handoff_ready_reactions(ctx: int, install: dict,
             ids = ",".join(str(o["order_id"]) for o in row["owners"])
             row["source_ref"] = f"shared:{row['type_id']}:{ids}"
             row["order_id"] = row["owners"][0]["order_id"] if len(row["owners"]) == 1 else 0
-    from app.reactions.orders import sync_manufacturing_reaction_orders
     return sync_manufacturing_reaction_orders(ctx, list(grouped.values()))
 
 

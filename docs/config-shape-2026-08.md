@@ -59,7 +59,7 @@ its own pooled connection, for a row that cannot change while the request is in 
 
 The risk a cache creates is the part worth reading: a write followed by a read in the same request
 would otherwise return the pre-write value, silently. Every writer therefore drops the memo
-(`_forget_settings_memo`), and `test_settings_memo.py` pins it two ways — by exercising writers, and
+(`_forget_settings_memo`), and `tests/test_settings_memo.py` pins it two ways — by exercising writers, and
 by a **source scan asserting that every function writing `pp_industry_settings` also drops the
 memo**. The scan exists because the per-writer assertions did not catch removing the invalidation
 from a writer the test did not happen to call; there are nine writers and the tenth will be added by
@@ -93,7 +93,7 @@ the exporter itself fills.
 * **Build pins** are stored as `s:<pp_markets row id>`, the account's own primary key. They travel
   as the structure's `location_id` and are re-resolved against the importing account's rows. A pin
   written through verbatim would name whatever row happens to hold that id — a plan silently
-  installing jobs in the wrong building, and the failure `test_config_io.py` exists for.
+  installing jobs in the wrong building, and the failure `tests/test_config_io.py` exists for.
 * **Stock-source keys** name containers this account has scanned. Any key the importing account does
   not have is dropped and counted, never written as a pointer to nothing.
 

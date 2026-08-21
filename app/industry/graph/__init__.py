@@ -2,7 +2,7 @@
 
 Split from one 1,383-line module (TODO 34). The public surface is unchanged: every name defined
 across this package is re-exported here, private ones included — `app/reactions/graph.py` imports
-`_fallback_build_system`, and `test_cost_basis.py` reaches for `_default_system_on`.
+`_fallback_build_system`, and `tests/test_cost_basis.py` reaches for `_default_system_on`.
 
 Read `scripts/symbols.sh app/industry/graph` (the DIRECTORY) for the map."""
 

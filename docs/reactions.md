@@ -106,7 +106,7 @@ skipped (the plan makes it); an input nothing in the plan produces is real unsch
 derived from its recipe, where a stock holding legitimately applies because nothing will be
 installed for it.
 
-The invariant, pinned in `test_shopping_roots.py` against the reported plan's six hand-computed
+The invariant, pinned in `tests/test_shopping_roots.py` against the reported plan's six hand-computed
 totals: **the list equals what the game asks for, job by job** — and neither where the jobs sit nor
 what sits in the hangar changes it.
 
@@ -165,7 +165,7 @@ are. Widening a tier that is not the busiest costs nothing at all, so it happens
 character. **It moves `jobs` only** — runs, cost and profit are not its business — and the count is
 reported as `totals.idle_slots_used` so the extra jobs read as a choice, not an overbooking.
 
-Off ⇒ every one of those numbers is the old per-row sum. `test_parallel_stages.py` pins both.
+Off ⇒ every one of those numbers is the old per-row sum. `tests/test_parallel_stages.py` pins both.
 
 ## Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)
 
@@ -604,7 +604,7 @@ handed 1,000 and barely move the total. Pooling made it unreachable: the search 
 per product per stage, so "any one chain" and "the whole product" became the same quantity and the
 per-chain rule reduced to the total budget it sat beside. It was carried for a day as dead
 plumbing — list-shaped `totals`/`caps`/`per_group` arguments with exactly one element in them — and
-the whole of it went with the ceiling. `test_level_runs.py`.
+the whole of it went with the ceiling. `tests/test_level_runs.py`.
 
 **Committing a plan blocks the view (`_rxRunSteps`).** Levelling runs on the plan re-read, so the
 run counts a player sees are only true once that read lands — an assign is a POST per suggestion
@@ -1056,7 +1056,7 @@ Everything that IS a profit signal is buy-priced and netted against the **full**
 `_value_reaction_batch`'s `fixed_costs`): the opportunity ranking and the wizard's LP, the dashboard
 tiles, the running-job modal and its ROI, an adopted orphan's stored `reward`, and the completions
 ledger behind *Lifetime net profit*. The last four were quoting sell orders until 2026-08-14, none
-of them gated. `test_reactions_profit_clock.py` is the guard: it fails if a profit field is fed a
+of them gated. `tests/test_reactions_profit_clock.py` is the guard: it fails if a profit field is fed a
 sell-side expression anywhere in `app/reactions`.
 
 ## Reactions owns its cadence and its paste (`reactions_cadence`, 2026-08-14)
@@ -1099,7 +1099,7 @@ directly, with a form in Settings → *Blueprints & formulas* beside the Industr
 same batch-name replacement rule, one library — paste on either side and both show it.
 
 No flag for that: it is a route to an existing feature, and the REPORT it feeds is still gated on
-`reactions_missing_formulas` (pinned by `test_reactions_standalone.py`). Two reads had to follow it,
+`reactions_missing_formulas` (pinned by `tests/test_reactions_standalone.py`). Two reads had to follow it,
 or the change would have been worse than the bug:
 
 * `_library_state` no longer requires `industry_manual_blueprints`. The evidence is a pasted row in

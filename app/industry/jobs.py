@@ -111,6 +111,13 @@ def refresh_manufacturing_jobs(context_id: int = Depends(require_context)):
         out = {**out, "formula_history_refreshed": formulas["refreshed"]}
     except Exception:
         pass
+    # A Manufacturing refresh is also when a builder expects newly-free reaction capacity to be
+    # noticed. The reaction allocator remains the only writer of reaction reservations.
+    try:
+        from app.reactions.orders import retry_automatic_orders
+        out = {**out, "reaction_recovery": retry_automatic_orders(context_id)}
+    except Exception:
+        pass
     return out
 
 

@@ -11,7 +11,7 @@ It tests what a player sees on dev; it is not a substitute for the automated sui
 - [Phase 2 — automatic planning](#phase-2--automatic-planning) — cadence, recurring work, warnings, and parity
 - [Phase 3 — Manufacturing hand-off](#phase-3--manufacturing-hand-off) — one build creating and maintaining reaction work
 - [Phase 4 — shared work and ownership](#phase-4--shared-work-and-ownership) — aggregation, priority, and safe removal
-- [Phase 5 acceptance criteria](#phase-5-acceptance-criteria) — checks to run after Phase 5 is built
+- [Phase 5 acceptance](#phase-5-acceptance) — recovery, attention, and cross-navigation checks
 - [Result sheet](#result-sheet) — what to record when something differs
 
 ## Phase 5 summary
@@ -20,7 +20,7 @@ Phases 1–4 establish the two planners, automate assignment, hand ready Manufac
 Reactions, and preserve shared work correctly. Phase 5 should make that combined system easy to
 operate when reality differs from the plan.
 
-The proposed scope is:
+Phase 5 is implemented on dev with this scope:
 
 1. **One clear attention queue.** Slot shortages, missing formulas, quantity conflicts, and jobs
    still running after a build is removed use the same small vocabulary: waiting, ready, running,
@@ -32,7 +32,7 @@ The proposed scope is:
    and that order identifies and links to every Manufacturing build that owns a share.
 4. **Consistent controls and feedback.** Both pages put metrics first, use the same refresh outcome,
    close transient menus, and return the user to Overview after creating work.
-5. **Remove the old parallel paths.** Once the dev acceptance checks pass, retire redundant
+5. **Remove the old parallel paths.** Once the dev acceptance checks below pass, retire redundant
    Manufacturing-side reaction allocation/splitting displays and compatibility response fields.
    Manufacturing keeps planning demand and readiness; Reactions remains the sole owner of reaction
    slot allocation, queueing, cadence, and live runtime.
@@ -261,9 +261,9 @@ Pass when the UI explicitly warns that shared components will be made separately
 trade-off. Separate reaction demand in this mode is intentional, not a Phase 4 aggregation failure.
 Turn the setting off after the test unless separate delivery containers are desired.
 
-## Phase 5 acceptance criteria
+## Phase 5 acceptance
 
-These checks are **pending implementation**. Run them after Phase 5 is built:
+Run these against dev before removing the compatibility paths:
 
 1. Create a formula-missing order, a slot-blocked order, and a linked quantity conflict. Confirm one
    attention surface lists each once, names its source, explains what is safe, and presents only

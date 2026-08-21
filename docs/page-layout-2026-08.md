@@ -115,6 +115,6 @@ Both were tried and are worth naming so nobody re-derives them from scratch:
 - **A route (`/manufacturing/pipeline`) is for something somebody would deep-link or expect Back
   to return to as its own step.** None of these sections are that — they're views of the SAME
   build/plan a user is already looking at, selected via a click, not typed as an address. The
-  routing scaffolding (`TAB_SUBPAGES`, `SPA_PAGES`, a sidebar sub-item, `test_routing.py`'s
+  routing scaffolding (`TAB_SUBPAGES`, `SPA_PAGES`, a sidebar sub-item, `tests/test_routing.py`'s
   four-list check) is real, tested, working machinery for the few pages that ARE several pages —
   Admin, PI Planner — and reaching for it here was solving a problem this split didn't have.

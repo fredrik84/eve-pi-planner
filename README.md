@@ -73,10 +73,10 @@ DATABASE_URL=postgresql://user:pass@localhost/evpi  # optional; omit to use SQLi
 
 ```bash
 # Planner distribution correctness (requires a running instance with DEBUG_PI=1)
-python test_distribution.py --url http://localhost:8000
+python tests/test_distribution.py --url http://localhost:8000
 
 # Feature flag surface
-python test_features.py --url http://localhost:8000
+python tests/test_features.py --url http://localhost:8000
 ```
 
 ---

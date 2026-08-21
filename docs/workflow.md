@@ -30,44 +30,45 @@ anything shipped. Add to these or create a new `test_*.py` in the same urllib/`-
 
 A passing test proves nothing on its own — **reintroduce the bug it claims to catch and watch it go
 red** before trusting it. Several tests in this table were green against a defect they were written
-for, and only the mutation showed it (see the guard notes in `test_settings_memo.py`,
-`test_print_locking.py` and `test_routing_client.js`).
+for, and only the mutation showed it (see the guard notes in `tests/test_settings_memo.py`,
+`tests/test_print_locking.py` and `tests/test_routing_client.js`).
 Assert *durable invariants*, not runtime state an admin can change (e.g. don't assert a flag's
 enabled value equals its code default — admins toggle it).
 
 | Suite | Covers |
 | --- | --- |
-| `test_distribution.py` | planner correctness; needs `DEBUG_PI`/`DEBUG_CONTEXT_ID` |
-| `test_features.py` | feature flags + skill-roi public surface |
-| `test_optimizer.py` | LP-solver correctness for `/api/optimize` — synthetic hand-computable cases + a live smoke test. Run the in-process cases **inside the container**, not the bare host: `highspy`/`numpy` are only installed there |
-| `test_alert_cadence.py` | TODO §37's two behaviours: the backoff on repeats (including that the FIRST send is never delayed, and that a resolved-then-recurring alert resets rather than staying on the slow rung) and the alert-triggered rescan (every filter that stops an ESI call being made, suppression when a read fails, and the per-tick budget). The scan function is injected, so it needs no ESI and no network. In-process, run in the container |
-| `test_alerts.py` | the shared alert engine + notification prefs migration. Seeds fake `pp_char_planets` rows and a fabricated `pp_sessions` cookie to exercise the real `/api/dashboard` without a live ESI login |
-| `test_min_cc.py` | layout CPU/PG fitting: the FIT_HEADROOM promise, `min_cc`, the head-drop fallback. Pure in-process layout math — run in the container |
-| `test_skill_enough.py` | the "already enough skill" half of `/api/skill-roi`; seeded rows + fabricated cookie |
-| `test_page_access.py` | the per-group `require_page` backend gate — that a group with no restrictions stays a no-op, that a restricted group really is 403'd, and that the public customer build-status link is NOT gated |
-| `test_disconnect_character.py` | `DELETE /api/characters/{id}` — every per-character table cleared, another account's character untouchable, account-level history survives |
-| `test_delete_account.py` | `DELETE /api/me` — nothing keyed to the account survives, a second account is unaffected, bug reports are anonymised rather than deleted |
-| `test_epoch_precision.py` | the epoch round trip, idempotency and targeting (see the `double precision` rule in CLAUDE.md) |
-| `test_fresh_db_tables.py` | fresh-DB migration traps; fakes Postgres abort semantics — a SQLite-based test proves nothing here |
-| `test_routing.py` | that the lists naming the pages agree (panels in `index.html`, `TAB_SLUGS`/`TAB_SUBPAGES`/`TAB_RECORDS` in `app.js`, `SPA_PAGES`/`SPA_RECORDS` in `main.py`), that every page URL serves and that a non-page path still 404s instead of being swallowed by a wildcard — plus, for the record URLs (`/manufacturing/order/123`), that the server route looks nothing up and answers a nonexistent id exactly as it answers a real one |
-| `test_factory_drain.py` | when a factory colony runs its imported inputs dry (TODO §21b): consumption read off real pins and scaling with them, on-planet chains draining only what the player delivers, the run-dry instant staying put as the countdown to it shrinks, and — part 4 — that the `factory_refill` alert reads observed stock rather than a from-full cadence anchored to `scanned_at`. In-process, run in the container |
-| `test_refill_rates.py` | the per-factory refill rates behind "refill to a deadline": `_p1_batch_sizes` over the whole SDE, and per-factory `units_per_day` summing to the plan total through the real `derive_setup_plans` over a seeded multi-factory account (several factories of ONE product, two products sharing a P1 — with one factory each the invariant is vacuous). A `--url` half repeats it on a live account. Both fail loudly rather than passing over an empty loop |
-| `test_refill_deadline.js` | **runs the real `_deadlineSplit`** in a `vm` — the four ceilings on a deadline quantity and the ORDER they apply in, which no string match can see. Node is on the host, not in the web image, so run it **outside** the container: `node test_refill_deadline.js` |
-| `test_config_io.py` | config export/import (§18b): that a build pin travels as the structure's `location_id` rather than the account's own row id, that a document with any problem in it writes NOTHING (the checks are hoisted into `_validate` because the writes span four stores and cannot be one transaction), that `replace_structures` spares the followed REGION markets sharing `pp_markets`, that importing twice is idempotent, and that a gated section is skipped by name rather than 403ing the import. In-process, run in the container |
-| `test_setup_page.py` | the PI planner setup page's sections: that the Character Roles card is never shipped hidden and is never hidden again by an unresolved product (bug 3), and which cards MAY hide and why. Pure string matching over `static/index.html` + `static/planetary.js`; runs on the host |
-| `test_routing_client.js` | **the one test that RUNS client code.** The routing region of `app.js` is executed in a `vm` context with stubbed `location`/`history`/`localStorage`, so history entries, back/forward and the multi-tab bug are checked behaviourally rather than by string match. Node is on the host but not in the web image, so this one runs **outside** the container: `node test_routing_client.js` |
+| `tests/test_distribution.py` | planner correctness; needs `DEBUG_PI`/`DEBUG_CONTEXT_ID` |
+| `tests/test_features.py` | feature flags + skill-roi public surface |
+| `tests/test_optimizer.py` | LP-solver correctness for `/api/optimize` — synthetic hand-computable cases + a live smoke test. Run the in-process cases **inside the container**, not the bare host: `highspy`/`numpy` are only installed there |
+| `tests/test_alert_cadence.py` | TODO §37's two behaviours: the backoff on repeats (including that the FIRST send is never delayed, and that a resolved-then-recurring alert resets rather than staying on the slow rung) and the alert-triggered rescan (every filter that stops an ESI call being made, suppression when a read fails, and the per-tick budget). The scan function is injected, so it needs no ESI and no network. In-process, run in the container |
+| `tests/test_alerts.py` | the shared alert engine + notification prefs migration. Seeds fake `pp_char_planets` rows and a fabricated `pp_sessions` cookie to exercise the real `/api/dashboard` without a live ESI login |
+| `tests/test_min_cc.py` | layout CPU/PG fitting: the FIT_HEADROOM promise, `min_cc`, the head-drop fallback. Pure in-process layout math — run in the container |
+| `tests/test_skill_enough.py` | the "already enough skill" half of `/api/skill-roi`; seeded rows + fabricated cookie |
+| `tests/test_page_access.py` | the per-group `require_page` backend gate — that a group with no restrictions stays a no-op, that a restricted group really is 403'd, and that the public customer build-status link is NOT gated |
+| `tests/test_disconnect_character.py` | `DELETE /api/characters/{id}` — every per-character table cleared, another account's character untouchable, account-level history survives |
+| `tests/test_delete_account.py` | `DELETE /api/me` — nothing keyed to the account survives, a second account is unaffected, bug reports are anonymised rather than deleted |
+| `tests/test_epoch_precision.py` | the epoch round trip, idempotency and targeting (see the `double precision` rule in CLAUDE.md) |
+| `tests/test_fresh_db_tables.py` | fresh-DB migration traps; fakes Postgres abort semantics — a SQLite-based test proves nothing here |
+| `tests/test_routing.py` | that the lists naming the pages agree (panels in `index.html`, `TAB_SLUGS`/`TAB_SUBPAGES`/`TAB_RECORDS` in `app.js`, `SPA_PAGES`/`SPA_RECORDS` in `main.py`), that every page URL serves and that a non-page path still 404s instead of being swallowed by a wildcard — plus, for the record URLs (`/manufacturing/order/123`), that the server route looks nothing up and answers a nonexistent id exactly as it answers a real one |
+| `tests/test_factory_drain.py` | when a factory colony runs its imported inputs dry (TODO §21b): consumption read off real pins and scaling with them, on-planet chains draining only what the player delivers, the run-dry instant staying put as the countdown to it shrinks, and — part 4 — that the `factory_refill` alert reads observed stock rather than a from-full cadence anchored to `scanned_at`. In-process, run in the container |
+| `tests/test_refill_rates.py` | the per-factory refill rates behind "refill to a deadline": `_p1_batch_sizes` over the whole SDE, and per-factory `units_per_day` summing to the plan total through the real `derive_setup_plans` over a seeded multi-factory account (several factories of ONE product, two products sharing a P1 — with one factory each the invariant is vacuous). A `--url` half repeats it on a live account. Both fail loudly rather than passing over an empty loop |
+| `tests/test_refill_deadline.js` | **runs the real `_deadlineSplit`** in a `vm` — the four ceilings on a deadline quantity and the ORDER they apply in, which no string match can see. Node is on the host, not in the web image, so run it **outside** the container: `node tests/test_refill_deadline.js` |
+| `tests/test_config_io.py` | config export/import (§18b): that a build pin travels as the structure's `location_id` rather than the account's own row id, that a document with any problem in it writes NOTHING (the checks are hoisted into `_validate` because the writes span four stores and cannot be one transaction), that `replace_structures` spares the followed REGION markets sharing `pp_markets`, that importing twice is idempotent, and that a gated section is skipped by name rather than 403ing the import. In-process, run in the container |
+| `tests/test_setup_page.py` | the PI planner setup page's sections: that the Character Roles card is never shipped hidden and is never hidden again by an unresolved product (bug 3), and which cards MAY hide and why. Pure string matching over `static/index.html` + `static/planetary.js`; runs on the host |
+| `tests/test_routing_client.js` | **the one test that RUNS client code.** The routing region of `app.js` is executed in a `vm` context with stubbed `location`/`history`/`localStorage`, so history entries, back/forward and the multi-tab bug are checked behaviourally rather than by string match. Node is on the host but not in the web image, so this one runs **outside** the container: `node tests/test_routing_client.js` |
 
 ### Local test runs (docker compose, not prod)
 
 These failures are *not* regressions:
 
-- Fuel-block cases in `test_distribution.py` fail locally: no market data in the local container,
+- Fuel-block cases in `tests/test_distribution.py` fail locally: no market data in the local container,
   so basket BOM demand resolves to 0 upstream of any planet placement. They pass on prod.
-- `test_reactions.py` must run *inside* the container
-  (`docker compose cp test_reactions.py web:/srv/app/`).
+- Tests that import the application must run *inside* the container. Copy the directory once with
+  `docker compose cp tests web:/srv/app/`, then run—for example—
+  `docker compose exec -T web python3 tests/test_reactions.py`.
 - **The container layout: `/srv/app` is the project root, the package is `/srv/app/app`.** The
-  working dir is `/srv/app`, so a test copied to `web:/srv/app/` runs with `docker compose exec -T
-  web python3 test_x.py` and no `PYTHONPATH`. Application code goes one level deeper —
+  working dir is `/srv/app`, so the copied suite runs with `docker compose exec -T
+  web python3 tests/test_x.py` and no `PYTHONPATH`. Application code goes one level deeper —
   `docker compose cp app/notifications.py web:/srv/app/app/notifications.py`, or
   `docker compose cp app web:/srv/app/` for the whole tree, which merges into `/srv/app/app`.
   Copying `app` to `web:/srv/` instead silently creates a SECOND package that shadows the real one
@@ -109,7 +110,7 @@ curl -s -X POST http://localhost:8000/api/debug/plan \
 
 It returns per-P0-type distribution analysis: expected vs actual extractor counts, whether the
 distribution is within acceptable rounding tolerance, and any out-of-system assignments.
-`test_distribution.py` tests distribution correctness against this endpoint.
+`tests/test_distribution.py` tests distribution correctness against this endpoint.
 
 ## Inspecting the database
 

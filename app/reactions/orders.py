@@ -370,7 +370,47 @@ def list_reaction_orders(context_id: int = Depends(require_context)):
         ).fetchall()
     finally:
         con.close()
-    return {"orders": [dict(r) for r in rows]}
+    orders = [dict(r) for r in rows]
+    _attach_manufacturing_sources(context_id, orders)
+    return {"orders": orders}
+
+
+def _attach_manufacturing_sources(context_id: int, orders: list[dict]) -> None:
+    """Expose the Manufacturing owners behind a physical reaction order.
+
+    The bridge stores exact run shares, but an id and a source_ref are backend bookkeeping rather
+    than something a builder can recognise.  Resolve labels here, under the same context boundary,
+    so Reactions can link back without a second endpoint or leaking whether another account's order
+    exists.
+    """
+    linked = [int(o["id"]) for o in orders if o.get("source_kind") == "manufacturing"]
+    if not linked:
+        return
+    marks = ",".join("?" * len(linked))
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT s.reaction_order_id,s.manufacturing_order_id,s.runs,i.name,i.label "
+            "FROM pp_reaction_order_sources s JOIN pp_industry_orders i "
+            "ON i.id=s.manufacturing_order_id AND i.context_id=s.context_id "
+            f"WHERE s.context_id=? AND s.reaction_order_id IN ({marks}) "
+            "ORDER BY s.reaction_order_id,i.priority DESC,i.id",
+            (context_id, *linked)).fetchall()
+    except Exception:
+        rows = []                 # rolling deploy / pre-bridge database: links are enhancement only
+    finally:
+        con.close()
+    by_order: dict[int, list[dict]] = {}
+    for row in rows:
+        label = (row["label"] or "").strip()
+        by_order.setdefault(int(row["reaction_order_id"]), []).append({
+            "order_id": int(row["manufacturing_order_id"]),
+            "runs": int(row["runs"] or 0),
+            "label": label or row["name"],
+            "product_name": row["name"],
+        })
+    for order in orders:
+        order["manufacturing_sources"] = by_order.get(int(order["id"]), [])
 
 
 class OrderReorderRequest(BaseModel):
@@ -418,6 +458,31 @@ def _active_linked_top_runs(con, order_id: int) -> int:
     return int((row and row["runs"]) or 0)
 
 
+def _automatic_block_state(detail: str) -> str:
+    text = detail.lower()
+    return "missing_formula" if "formula" in text or "reachable" in text or "priced material" in text \
+        else "capacity_blocked"
+
+
+def linked_manufacturing_reaction_orders(context_id: int, manufacturing_order_ids: list[int]) -> list[dict]:
+    """Physical reaction orders owned by any of the supplied Manufacturing builds."""
+    ids = sorted({int(i) for i in manufacturing_order_ids if int(i or 0) > 0})
+    if not ids:
+        return []
+    ensure_reaction_orders_table()
+    marks = ",".join("?" * len(ids))
+    con = get_connection()
+    try:
+        rows = con.execute(
+            "SELECT DISTINCT o.id AS order_id,o.type_id FROM pp_reaction_orders o "
+            "JOIN pp_reaction_order_sources s ON s.reaction_order_id=o.id AND s.context_id=o.context_id "
+            f"WHERE o.context_id=? AND o.status='open' AND s.manufacturing_order_id IN ({marks}) "
+            "ORDER BY o.priority DESC,o.id", (context_id, *ids)).fetchall()
+        return [{"order_id": int(r["order_id"]), "type_id": int(r["type_id"])} for r in rows]
+    finally:
+        con.close()
+
+
 def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> dict:
     """Publish ready Manufacturing demand once, then let Reactions own its execution."""
     ensure_reaction_orders_table()
@@ -435,6 +500,7 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
         name, top_runs = _resolve_order_target(context_id, request)
         resolved.append((demand, request, name, top_runs))
     created: list[int] = []
+    linked_orders: list[dict] = []
     conflicts: list[dict] = []
     con = get_connection()
     try:
@@ -484,6 +550,8 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
                                 "(reaction_order_id,context_id,manufacturing_order_id,runs) "
                                 "VALUES (?,?,?,?)", (existing["id"], context_id,
                                                      owner["order_id"], owner["runs"]))
+                linked_orders.append({"order_id": int(existing["id"]), "type_id": type_id,
+                                      "owners": owners})
                 continue
             now = _time.time()
             order_id = con.execute(
@@ -494,6 +562,8 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
                  "Ready work from Manufacturing", now, int(demand.get("priority") or 0),
                  source_order_id or None, source_ref)).fetchone()[0]
             created.append(int(order_id))
+            linked_orders.append({"order_id": int(order_id), "type_id": type_id,
+                                  "owners": owners})
             for owner in owners:
                 con.execute("INSERT INTO pp_reaction_order_sources "
                             "(reaction_order_id,context_id,manufacturing_order_id,runs) VALUES (?,?,?,?)",
@@ -516,10 +586,81 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
         try:
             result = assign_reaction_order(order_id, OrderAssignRequest(), context_id)
             assigned.append({"order_id": order_id, "runs": result["runs_assigned"]})
+            con = get_connection()
+            try:
+                con.execute("UPDATE pp_reaction_orders SET source_state=NULL, source_message=NULL "
+                            "WHERE id=?", (order_id,))
+                con.commit()
+            finally:
+                con.close()
         except HTTPException as exc:
-            shortfalls.append({"order_id": order_id, "detail": str(exc.detail)})
+            detail = str(exc.detail)
+            shortfalls.append({"order_id": order_id, "detail": detail})
+            con = get_connection()
+            try:
+                con.execute("UPDATE pp_reaction_orders SET source_state=?, source_message=? WHERE id=?",
+                            (_automatic_block_state(detail), detail, order_id))
+                con.commit()
+            finally:
+                con.close()
     return {"created": created, "assigned": assigned,
-            "shortfalls": shortfalls, "conflicts": conflicts}
+            "shortfalls": shortfalls, "conflicts": conflicts, "orders": linked_orders}
+
+
+def retry_automatic_orders(context_id: int) -> dict:
+    """Retry work the application owns after capacity may have changed, in visible priority order.
+
+    One-off customer orders remain manual. Manufacturing hand-offs and due/previously-blocked
+    recurring cycles are automatic by contract. A failure is recorded on the order and does not
+    stop lower-priority rows being inspected, while the allocator itself remains the authority on
+    whether any capacity really exists.
+    """
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM pp_reaction_orders WHERE context_id=? AND status='open' "
+            "AND assigned_runs<top_level_runs AND (source_kind='manufacturing' OR "
+            "(recurring_interval_days>0 AND (recurring_next_at<=? OR recurring_error IS NOT NULL))) "
+            "ORDER BY priority DESC,id", (context_id, _time.time())).fetchall()]
+    finally:
+        con.close()
+    assigned, blocked = [], []
+    for order in rows:
+        try:
+            result = assign_reaction_order(int(order["id"]), OrderAssignRequest(), context_id)
+            assigned.append({"order_id": int(order["id"]), "runs": int(result["runs_assigned"])})
+            con = get_connection()
+            try:
+                current = _order_row(con, int(order["id"]))
+                nxt = current.get("recurring_next_at")
+                days = float(current.get("recurring_interval_days") or 0)
+                if days > 0 and current["assigned_runs"] >= current["top_level_runs"]:
+                    nxt = float(nxt or _time.time())
+                    while nxt <= _time.time():
+                        nxt += days * 86400
+                con.execute("UPDATE pp_reaction_orders SET source_state=NULL,source_message=NULL,"
+                            "recurring_error=NULL,recurring_next_at=? WHERE id=?", (nxt, order["id"]))
+                con.commit()
+            finally:
+                con.close()
+        except HTTPException as exc:
+            detail = str(exc.detail)
+            blocked.append({"order_id": int(order["id"]), "detail": detail})
+            con = get_connection()
+            try:
+                if order.get("source_kind") == "manufacturing":
+                    con.execute("UPDATE pp_reaction_orders SET source_state=?,source_message=? WHERE id=?",
+                                (_automatic_block_state(detail), detail, order["id"]))
+                else:
+                    con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?",
+                                (detail, order["id"]))
+                con.commit()
+            finally:
+                con.close()
+    if rows:
+        _invalidate_dashboard_cache(context_id)
+    return {"attempted": len(rows), "assigned": assigned, "blocked": blocked}
 
 
 def finish_manufacturing_reaction_orders(context_id: int, manufacturing_order_id: int,
@@ -630,6 +771,7 @@ def get_reaction_order(order_id: int, context_id: int = Depends(require_context)
         order = _get_order_or_404(con, order_id, context_id)
     finally:
         con.close()
+    _attach_manufacturing_sources(context_id, [order])
     return {"order": order, **_order_report(context_id, order)}
 
 
@@ -708,6 +850,9 @@ def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: in
     try:
         con.execute("UPDATE pp_reaction_orders SET assigned_runs = assigned_runs + ? WHERE id=?",
                      (result["runs_assigned"], order_id))
+        if order.get("source_kind") == "manufacturing":
+            con.execute("UPDATE pp_reaction_orders SET source_state=NULL,source_message=NULL WHERE id=?",
+                        (order_id,))
         con.commit()
         order = _order_row(con, order_id)
     finally:

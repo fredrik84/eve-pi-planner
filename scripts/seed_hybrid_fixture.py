@@ -77,7 +77,7 @@ def add_colony(cid, sid, pn, ptype, is_ext, product=None, out_name=None, per_day
          json.dumps(prods) if prods else None, sim, is_hybrid))
 
 
-TST_BB = 99990002  # reuses scripts/seed_test_fixture.py's already-seeded system/planets
+TST_BB = 99990002  # reuses scripts/seed_tests/test_fixture.py's already-seeded system/planets
 
 add_char(999200, "Test Dana", CTX_HYBRID_ONLY)
 add_char(999201, "Test Erin", CTX_MIXED)

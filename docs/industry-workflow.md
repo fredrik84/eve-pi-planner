@@ -317,9 +317,9 @@ gates one step of the path above.
 
 ## Tests
 
-`test_industry.py` is the main suite. Adjacent: `test_required_skills.py`,
-`test_skill_time_mults.py`, `test_cost_basis.py`, `test_job_summary.py`,
-`test_group_structures.py`. Frontend behaviour has no browser harness (TODO 2e-residual);
+`tests/test_industry.py` is the main suite. Adjacent: `tests/test_required_skills.py`,
+`tests/test_skill_time_mults.py`, `tests/test_cost_basis.py`, `tests/test_job_summary.py`,
+`tests/test_group_structures.py`. Frontend behaviour has no browser harness (TODO 2e-residual);
 `scripts/lint_js.mjs` / the `lint-js` CI job is the only automated guard over `static/industry*.js`.
 
 ---
@@ -373,4 +373,4 @@ gates one step of the path above.
     Closed 2026-08-16 (TODO §34): it is now ten `static/industry*.js` files split along the steps
     above — `industry.js` (shell + status), `-setup`, `-blueprints`, `-plan`, `-shopping`, `-steps`,
     `-render`, `-queue`, `-running`, `-rules`. Which file a function is in is not pinned by any
-    test; the source-level guards read them as one string (`_industry_js()` in `test_industry.py`).
+    test; the source-level guards read them as one string (`_industry_js()` in `tests/test_industry.py`).

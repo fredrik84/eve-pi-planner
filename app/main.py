@@ -420,7 +420,7 @@ def _api_not_found(rest: str):
 #
 # The Dashboard keeps `/` (see the index route above) rather than gaining a second address.
 #
-# `test_routing.py` asserts this list, `TAB_SLUGS` and the panels in index.html all agree.
+# `tests/test_routing.py` asserts this list, `TAB_SLUGS` and the panels in index.html all agree.
 SPA_PAGES = (
     "setup-analysis", "planetary-planning", "planner", "factory-layout", "planet-db",
     "contribute", "how-it-works", "reactions", "manufacturing", "industry/how-it-works", "admin",
@@ -437,7 +437,7 @@ SPA_PAGES = (
 # ── Pages that can name a RECORD ───────────────────────────────────────────────────────────────
 #
 # `/manufacturing/order/123`. One entry per (page, record kind); the id is a path parameter, and
-# these mirror `TAB_RECORDS` in static/app.js — `test_routing.py` asserts the two agree.
+# these mirror `TAB_RECORDS` in static/app.js — `tests/test_routing.py` asserts the two agree.
 #
 # **These routes look nothing up.** They serve the same document every other page does, with no
 # database access and no notion of whether that id exists — so the SERVER tells a recipient nothing
@@ -451,6 +451,7 @@ SPA_PAGES = (
 # would swallow `/static/img/foo.png`-shaped requests and answer them with this HTML document.
 SPA_RECORDS = (
     ("manufacturing", "order"),
+    ("reactions", "order"),
     ("planetary-planning", "plan"),
     ("planner", "plan"),
     # …and under each of the PI Planner's two modes, so the mode a link was sent from survives it.

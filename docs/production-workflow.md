@@ -25,6 +25,14 @@ share a conditional planner that conceals genuine differences between formulas a
 - Aggregated Manufacturing keeps its shared-batch savings. The build trees attribute each ready
   reaction's runs across the orders that consume it in `pp_reaction_order_sources`; Reactions still
   receives one physical order, while resize/cancel can remove one owner's share without guessing.
+- Refreshing ESI jobs from either tool retries application-owned blocked reaction work in visible
+  priority order. One-off customer orders remain manual; Manufacturing hand-offs and due recurring
+  cycles recover automatically.
+- Linked work is navigable in both directions. Manufacturing reaction cards open the physical
+  Reactions order; that order names every Manufacturing owner and its exact run share.
+- Persistent attention states distinguish missing formula/recipe data, capacity shortage, quantity
+  conflict, and running work kept after its source finished. Reactions groups them into one decision
+  surface instead of relying on a transient toast from the Manufacturing plan response.
 
 ## Intentional differences
 

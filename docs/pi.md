@@ -209,7 +209,7 @@ that, not the average, is the deadline). It reports its `source`:
   stand-in, not a pin count.
 
 **Do not re-derive this arithmetic anywhere.** It used to exist in three places (the dashboard
-loop, `project_factory_pad`, and — wrongly — the alert); `test_factory_drain.py` pins the shared
+loop, `project_factory_pad`, and — wrongly — the alert); `tests/test_factory_drain.py` pins the shared
 one, including that the run-dry *instant* doesn't move as time passes, only the countdown to it.
 
 ## Setup Analysis tab + "Current setup" demand (`/api/my-setup-plan`)
@@ -327,7 +327,7 @@ anchored it to `scanned_at` — i.e. it assumed every colony was topped up to fu
 last polled ESI, so a player who dropped half a load, or dropped it a day before the scan, was
 given the wrong time *and* a different one than the Dashboard agenda, which had already moved to
 the observed number. `_fetch_factory_refill_hours` survives only as the fallback for a planet whose
-scan can't answer. `test_factory_drain.py` part 4 pins the anchor bug specifically. `dashboard()` passes
+scan can't answer. `tests/test_factory_drain.py` part 4 pins the anchor bug specifically. `dashboard()` passes
 its own already-fetched `pp_char_planets` rows in via `rows=` to avoid a second query; the
 scheduler (iterating many contexts) leaves it `None` and the function does its own fetch.
 `dashboard()` re-groups the flat list into its existing display cards (per-character correctness
@@ -388,7 +388,7 @@ the under-fill people hit was the stale `input_m3`, not the volume constant.
 (`_refillMode = 'deadline'`, flag `refill_deadline`) inverts that: the player names the time they
 want to come back and `_deadlineSplit` (`static/refill.js`) sizes each factory's drop to land
 there. Quantity = per-factory burn rate × time, then four ceilings, **in this order** — the order
-is the feature, and `test_refill_deadline.js` runs the real function to pin it:
+is the feature, and `tests/test_refill_deadline.js` runs the real function to pin it:
 
 1. **What's already in the pads** (only when "Pads emptied at drop-off" is off) — split across a
    factory's inputs in ITS burn ratio, since a pad stocked to be eaten together empties together.
@@ -416,7 +416,7 @@ in `planner.py` derives the run size — always the P1→P2 input quantity, 40, 
 because P1→P2 is the first on-planet step). The combined "Current setup" plan sums `consumption`
 across products, so once two products share a P1 a plan total and a share can't be turned back into
 one factory's rate. Plans saved before this shipped fall back to plan-total × share, which is exact
-for a single-product plan. `test_refill_rates.py` pins both halves.
+for a single-product plan. `tests/test_refill_rates.py` pins both halves.
 
 **Two clocks, and nothing stored.** The picker reads and writes **local** time and shows both
 (`Sat 14:00 local · 12:00 EVE` — EVE time is UTC, and a fleet op is quoted in it). What it holds is
@@ -470,7 +470,7 @@ plenty of colonies never touch. Two sources, in order:
   rank-4 skill for a slot while one sits empty is backwards.
 `_units_per_planet` returns **0** (not `max_count`'s floor of 1) when not even one unit fits the
 budget — otherwise the advice reads "this level runs your P4 planet" for a level that can't host it.
-Covered by `test_skill_enough.py` (seeds colonies deployed below the trained level + a character
+Covered by `tests/test_skill_enough.py` (seeds colonies deployed below the trained level + a character
 with idle slots, via a fabricated session cookie).
 **Limitations (v1):** flat per-unit factory rate (same model as `my-setup-plan`); P4 factories are
 1/planet so CCU shows no gain for them; **extractor-side CCU (more basics → more P0→P1 refining) is

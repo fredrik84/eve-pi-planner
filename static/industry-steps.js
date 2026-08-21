@@ -470,12 +470,14 @@ function _indPipeBuildCard(e, prog) {
   // never mind aim at.
   const markable = _featureActive('industry_manual_done') && p && p.required_runs;
   const st = markable ? _indDoneState(p) : 'none';
-  const onclick = markable ? ` onclick="indCycleDone(${e.type_id})"` : '';
+  const linkedOrder = e.activity === 'reaction' ? (_indReactionOrderLinks[e.type_id] || null) : null;
+  const onclick = linkedOrder ? ` onclick="_indGoToReactionOrder(${linkedOrder})"`
+    : (markable ? ` onclick="indCycleDone(${e.type_id})"` : '');
   const nextTip = st === 'done' ? ' Click to set it back to not started.'
     : st === 'running' ? ' Click when it has finished.'
     : ' Click to say it is running.';
   const tip = `${_esc(e.name)} — ${qty}${e.runs ? ', ' + e.runs + ' runs' : ''}. Hover to trace its chain.`
-    + (markable ? nextTip : '');
+    + (linkedOrder ? ' Click to open its Reactions order.' : (markable ? nextTip : ''));
   // The run count doubles as the way in to a partial mark when there's more than one run to
   // split. One run can't be half done, so it stays plain text there.
   const runsCell = (markable && p.required_runs > 1)
@@ -488,7 +490,7 @@ function _indPipeBuildCard(e, prog) {
     : runs;
   return `<div class="ind-pipe-card ind-pipe-build${cls}${markable ? ' ind-pipe-markable' : ''}"${onclick}`
     + ` data-tid="${e.type_id}" title="${tip}">`
-    + `<span class="ind-pipe-name">${_esc(e.name)}</span>`
+    + `<span class="ind-pipe-name">${_esc(e.name)}${linkedOrder ? ' ↗' : ''}</span>`
     + `<span class="ind-pipe-meta"><span class="ind-pipe-qty">${qty}</span>${runsCell}${owned}${state}</span></div>`;
 }
 

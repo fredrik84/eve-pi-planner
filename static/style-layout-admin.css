@@ -170,7 +170,7 @@ html.nav-li .tab[data-pimode="build"] { display: flex; }
    visitor used to get a bare "Industry" heading with everything beneath it hidden. Login is now
    the weakest condition any item under here carries — Reactions and the group's own How it works
    need only that, Manufacturing needs the feature flag too — so gating the heading on login alone
-   is exactly right, and stays right as items move between flags. `test_nav_gating.py` checks the
+   is exactly right, and stays right as items move between flags. `tests/test_nav_gating.py` checks the
    property (never drawn over an empty group) rather than this particular selector, because an
    earlier version pinned the selector and failed when Reactions went from feature-gated to public.
    (_hideEmptyNavGroups() in planetary.js covers the cases CSS can't see — a feature switched off

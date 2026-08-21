@@ -506,7 +506,19 @@ function _indPaintBlueprints(d) {
 function _indPaintPipeline(d) {
   const el = document.getElementById('indPipelineBody');
   if (!el || !d) return;
+  _indReactionOrderLinks = {};
+  (((d.reaction_handoff || {}).orders) || []).forEach(o => {
+    _indReactionOrderLinks[o.type_id] = o.order_id;
+  });
   el.innerHTML = _indOrderViewSelector('pipeline') + _indRenderPipelineBody(d);
+}
+
+let _indReactionOrderLinks = {};
+
+function _indGoToReactionOrder(orderId) {
+  switchTab('reactions');
+  ppSelectTab('rx', 'orders');
+  if (typeof _rxOpenOrderLink === 'function') _rxOpenOrderLink(orderId);
 }
 
 // ── Viewing one order alone ─────────────────────────────────────────────────────────────────

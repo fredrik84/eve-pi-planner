@@ -327,7 +327,7 @@ async function indRefreshCorpAssets() {
 // so pasting is the path that works for everyone, not a fallback.
 // It is also the ONLY way to declare a reaction formula held outside a character's personal
 // hangar — /characters/{id}/blueprints/ never returns those — and the copy used to say "materials"
-// throughout, so nobody found it. Formulas are named here on purpose; see test_formula_stock.py.
+// throughout, so nobody found it. Formulas are named here on purpose; see tests/test_formula_stock.py.
 // Four sentences of justification became one line of instruction — reported 2026-08-08 as
 // "extremely long winded". Why a paste is the only way to declare a corp-hangar formula is real,
 // but it belongs where someone goes looking for it, not in front of the box every time.

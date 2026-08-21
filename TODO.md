@@ -141,5 +141,5 @@ closed-with-reasoning verdicts. **Read it before reopening anything.**
 
 **Closed, do not reopen:** a browser/E2E test (§2e-residual) is **won't build** — user decision,
 2026-08-16 (*"the browser test is not something I want us to do"*). Routing is pinned by
-`test_routing_client.js` (which runs the router for real) plus source-level checks; live-browser
+`tests/test_routing_client.js` (which runs the router for real) plus source-level checks; live-browser
 bugs stay the user's to catch. Don't propose a headless-browser suite again.

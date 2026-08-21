@@ -4,10 +4,16 @@
 
 // ── "To install now" checklist + in-progress jobs ───────────────────────────────────────────
 async function indRefreshJobs() {
-  try { await apiSend('POST', '/api/industry/jobs/refresh'); } catch (e) {}
+  let res = null;
+  try { res = await apiSend('POST', '/api/industry/jobs/refresh'); } catch (e) {}
   indLoadSlots();
   indLoadSetupSummary();
   await indRefreshStatus();   // redraws install / pipeline / running from the fresh job data
+  const recovery = (res && res.reaction_recovery) || {};
+  const assigned = (recovery.assigned || []).reduce((n, x) => n + (x.runs || 0), 0);
+  const blocked = (recovery.blocked || []).length;
+  if (assigned) toast(`Refresh assigned ${assigned.toLocaleString()} waiting reaction run${assigned === 1 ? '' : 's'} in priority order.`, 'success');
+  else if (blocked) toast(`${blocked} linked reaction order${blocked === 1 ? '' : 's'} still need attention in Reactions.`, 'warning');
 }
 
 // "Do this now", written as instructions rather than a status. We know which characters have free

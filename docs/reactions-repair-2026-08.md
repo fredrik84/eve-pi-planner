@@ -559,9 +559,9 @@ container before anything is called shipped.
 * **A guard test that fails if any user-facing profit field derives from `sell_price`.** This is the
   most valuable single test in the spec: the rule was written before the code that broke it and
   drifted past it unnoticed for days. Make the next drift loud.
-* `test_reactions.py` — the ceiling holds where it can, and where it cannot, the breach is *reported*
+* `tests/test_reactions.py` — the ceiling holds where it can, and where it cannot, the breach is *reported*
   (both directions, per decision 1).
-* `test_level_runs.py` — extend for all three breach routes in 2a, and for the ISK-denominated budget.
+* `tests/test_level_runs.py` — extend for all three breach routes in 2a, and for the ISK-denominated budget.
 * New — the order quote at commit time equals the order layout on the next dashboard read.
 * New — the wizard's totals equal the dashboard's for the same plan (C's F6; the reconciliation is
   the assertion).

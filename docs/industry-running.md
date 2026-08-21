@@ -303,7 +303,7 @@ and no session: the page must be incapable of showing account data even by accid
 
 - **Privacy is the design** (rule 8): the payload in `build_status()` is assembled field by field,
   never filtered from a plan. It carries NO character names, systems/structures, ISK of any kind
-  (cost, shopping list, margin), and nothing about the account's other orders. `test_industry.py`'s
+  (cost, shopping list, margin), and nothing about the account's other orders. `tests/test_industry.py`'s
   `test_customer_build_status_leaks_nothing` asserts this against the function source, so adding a
   leaky field fails the suite.
 - **Stages** = depth from the shared product (`_stage_of_types` reuses the scheduler's `_depths`),

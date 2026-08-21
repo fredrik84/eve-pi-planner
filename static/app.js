@@ -472,7 +472,7 @@ async function loadHelpPanel(name) {
 //
 // The slug is deliberately NOT the internal tab id: `indhowitworks` is fine in the DOM and awful in
 // something you paste to somebody. The map is the only place the two vocabularies meet, and
-// `test_routing.py` asserts it stays in step with both the panels in index.html and the server's
+// `tests/test_routing.py` asserts it stays in step with both the panels in index.html and the server's
 // route list — three lists that must agree, checked rather than remembered.
 //
 // The DASHBOARD keeps `/`. It is the landing page, it is what an unrouted visit already showed, and
@@ -545,6 +545,12 @@ const TAB_SUBPAGES = {
 // drops it from the address bar with a REPLACE, so a bounced link leaves no back-button entry
 // pointing at a record you cannot open. `close()` is how Back out of a record puts the page back.
 const TAB_RECORDS = {
+  reactions: {
+    order: {
+      open: id => (typeof _rxOpenOrderLink === 'function' ? _rxOpenOrderLink(id) : false),
+      close: () => { if (typeof _rxCloseOrderDetail === 'function') _rxCloseOrderDetail(); },
+    },
+  },
   industry: {
     order: {
       open: id => (typeof indOpenOrderLink === 'function' ? indOpenOrderLink(id) : false),

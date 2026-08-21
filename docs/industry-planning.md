@@ -206,7 +206,7 @@ the ESI panel (`/api/industry/manual-blueprints`, GET/POST/DELETE). Its encoding
   written under the old `paste:loc:` keys are re-keyed to `_batch_key(batch_name)` by
   `_migrate_location_batches` (in `ensure_manual_blueprints_table`, so once per process), which
   makes them ordinary named batches instead of orphans nothing could ever replace. The regression is
-  pinned by the `MOVED_A`/`MOVED_B` case in `test_blueprint_paste.py`.
+  pinned by the `MOVED_A`/`MOVED_B` case in `tests/test_blueprint_paste.py`.
   Location's one remaining job is the **default batch name** when the user types none
   (`_default_batch_name`: one container → `container — structure`, several in one structure → the
   structure, several structures → the first plus a count, none → "Industry window"); the preview
@@ -245,7 +245,7 @@ the ESI panel (`/api/industry/manual-blueprints`, GET/POST/DELETE). Its encoding
   ESI *can* see states a choice without retyping the holding.
 - Manual prints feed the copies pool, `_print_limits` and the cost basis exactly as ESI-read ones do
   — they are the same `{me, te, kind, runs}` entries in the same `copies` list.
-- Covered by `test_manual_blueprints.py`, including the conservatism case: with the flag off nothing
+- Covered by `tests/test_manual_blueprints.py`, including the conservatism case: with the flag off nothing
   is read, and a plan run against a holding whose dicts RAISE on the two new keys (`source`,
   `prefer`) is byte-for-byte the plan run against a plain one.
 - Covered by `test_every_copy_the_account_holds_counts`,
@@ -336,8 +336,8 @@ ORIGINAL is one item too) plus the copies the plan already buys to cover the run
   `test_a_reaction_formula_is_an_item_too_and_unknown_ownership_never_serialises` and
   `test_a_half_connected_account_is_never_capped_on_what_it_half_shows` — the second exists
   specifically so the coverage check can't be "simplified" away later — plus
-  `test_manual_blueprints.py`'s "an incomplete ESI picture does not suppress a DECLARED holding's
-  cap" and `test_reactions.py`'s
+  `tests/test_manual_blueprints.py`'s "an incomplete ESI picture does not suppress a DECLARED holding's
+  cap" and `tests/test_reactions.py`'s
   `test_a_declared_holding_is_known_without_full_esi_coverage`, which reproduce the 20-jobs-on-10-
   formulas report and assert the undeclared control in the same breath.
 - **What can't be bought is REPORTED, not spent on** — `print_limits` (`{name, noun, held, jobs,
@@ -609,7 +609,7 @@ Three rules, all load-bearing:
 Only a **manager** may share, because a wrong rig answer adopted by everyone is an efficiency the
 plan quotes and nobody can see is wrong. `_SHAREABLE_COLS` is what travels — everything describing
 the building, rig families and its own system and tax included; a shared structure whose rigs each
-member must re-answer has shared nothing. Covered by `test_group_structures.py`.
+member must re-answer has shared nothing. Covered by `tests/test_group_structures.py`.
 
 ## Defaulting the build system (`industry_default_build_system`)
 

@@ -15,7 +15,7 @@ card shows the product dropdown:
 
 Each product has a deliberate bottleneck so the expansion cards send spare slots to the short input
 first, then add factories. Idempotent: wipes context 999001 first. Run inside the container:
-  docker compose exec -T web python3 scripts/seed_test_fixture.py
+  docker compose exec -T web python3 scripts/seed_tests/test_fixture.py
 """
 import json
 import sys

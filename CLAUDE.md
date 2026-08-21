@@ -192,7 +192,7 @@ See [docs/reactions.md](docs/reactions.md).
 `TAB_SUBPAGES` / `TAB_RECORDS` in `static/app.js`); the stored `activeTab` answers only "what should a bare visit to
 `/` restore". Storage is shared across BROWSER TABS, so a guard reading it gets whichever page the
 *other* tab last opened. Adding an SPA page means four lists agreeing — the panel in `index.html`,
-`TAB_SLUGS`, `SPA_PAGES` in `app/main.py`, and the nav button — which `test_routing.py` checks. A
+`TAB_SLUGS`, `SPA_PAGES` in `app/main.py`, and the nav button — which `tests/test_routing.py` checks. A
 URL may also name a ROW (`/manufacturing/order/123` — `TAB_RECORDS` + `SPA_RECORDS`): **that route
 must look nothing up**, so a recipient learns nothing from it answering, and a record the caller may
 not open is dropped from the address bar with a REPLACE rather than explained (rule 8). **A record
@@ -219,7 +219,7 @@ The Planet DB (`pp_planets`) is a single **global, shared** table (no `context_i
 (`GET /api/planets`, `/api/constellations`) are open; **`POST /api/planets/import` requires a
 login** (`Depends(require_context)`, 401s without a valid `pp_session`) because the merge path never
 deletes. **`DELETE /api/planets` requires a SITE ADMIN** — it wipes the table for every user, and
-being gated on a mere session is what emptied it on 2026-08-15 (TODO §20). `test_planetdb_guard.py`
+being gated on a mere session is what emptied it on 2026-08-15 (TODO §20). `tests/test_planetdb_guard.py`
 fails on any unscoped global delete that is not admin-gated. Everything else (`pp_characters`, `pp_profiles`, `pp_shares`,
 `pp_plan_config`) is per-`context_id` and session-gated. Only admins write to `pp_planets`
 directly; everyone else goes through the

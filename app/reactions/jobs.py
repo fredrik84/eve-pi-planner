@@ -259,7 +259,17 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
     if refreshed:
         cache_invalidate(charlist_key(context_id))
         _invalidate_dashboard_cache(context_id)
-    return {"ok": True, "characters_refreshed": refreshed, "characters_skipped": skipped}
+    # Capacity may just have been freed by a completed ESI job. Reactions owns assignment, so the
+    # refresh endpoint is also the natural recovery point for application-owned queued work.
+    # Import lazily: orders depends on this module's allocator and must remain the upper layer.
+    recovery = {"attempted": 0, "assigned": [], "blocked": []}
+    try:
+        from app.reactions.orders import retry_automatic_orders
+        recovery = retry_automatic_orders(context_id)
+    except Exception:
+        log.exception("automatic reaction-order recovery failed for context %s", context_id)
+    return {"ok": True, "characters_refreshed": refreshed, "characters_skipped": skipped,
+            "automatic_recovery": recovery}
 
 
 def refresh_character_jobs(character_id: int) -> bool:

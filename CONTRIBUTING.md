@@ -50,15 +50,15 @@ Bug fixes and hot-patches to *existing* features don't need a flag — fix them 
 
 ## Testing
 
-Run `test_distribution.py` (planner correctness) and `test_features.py` (feature-flag/API surface)
+Run `tests/test_distribution.py` (planner correctness) and `tests/test_features.py` (feature-flag/API surface)
 against a running instance before opening a PR touching the planner or public API:
 
 ```bash
-python test_distribution.py --url http://localhost:8000
-python test_features.py --url http://localhost:8000
+python tests/test_distribution.py --url http://localhost:8000
+python tests/test_features.py --url http://localhost:8000
 ```
 
-Add to these, or a new `test_*.py` in the same plain-`urllib`/`--url` style, for new endpoints.
+Add to these, or add a new `tests/test_*.py` in the same plain-`urllib`/`--url` style, for new endpoints.
 Assert durable invariants (things that are always true), not runtime state an admin can change —
 e.g. don't assert a feature flag's enabled value equals its code default.
 

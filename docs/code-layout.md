@@ -33,7 +33,7 @@ What a subsystem *does* lives in the service file ([pi.md](pi.md), [reactions.md
 | Factory Layout generator (`app/layout.py`) | the standalone template exporter |
 | Frontend JS (`static/*.js`) | load order, why the split is safe, asset cache-busting |
 | CSS bundles | the `style-*.css` slices and their cascade order |
-| After planner changes | run `test_distribution.py` against the container |
+| After planner changes | run `tests/test_distribution.py` against the container |
 
 ## Code layout
 
@@ -223,7 +223,7 @@ tells you to build cannot disagree. They were two copies of the loop until 2026-
 planner's copy had drifted: no head-drop stage, and no `diam` parameter at all, so the plan was
 stuck on the planet-TYPE default while the export could already size to a real planet. Put a new
 fitting lever in `fit_extractor`, never in a caller;
-`test_the_plan_and_the_exported_template_fit_the_same` (test_min_cc.py) asserts the two agree
+`test_the_plan_and_the_exported_template_fit_the_same` (tests/test_min_cc.py) asserts the two agree
 across every type × CC × diameter. Pinned extractor slots carry `diameter`, which
 `_ext_actual_p0_per_day` / `_actual_p0_per_day_by_p0` pass through to `_basics_factor`.
 The supply-limited throughput uses
@@ -255,7 +255,7 @@ wrong in two ways at once:
 Now: heads flat, size only in the link formula, so a bigger planet sheds basics gently (Gas 8 at
 Ø40k, 7 at Ø110k, 6 at Ø221k). Changing this changes plan sizing (`fitted_extractor_basics` →
 `_basics_factor`) — `_LAYOUT_CALC_VER` is at **v3**. Covered by
-`test_head_cost_is_flat_and_size_only_moves_links` in `test_min_cc.py`.
+`test_head_cost_is_flat_and_size_only_moves_links` in `tests/test_min_cc.py`.
 
 ## OPEN: `PLANET_DIAM` is not calibrated
 
@@ -405,6 +405,6 @@ carving further: only cut at existing section-comment boundaries and never move 
 
 ## After planner changes
 
-**Always run `test_distribution.py` against the container after planner changes** (see Testing) — this was repeatedly the difference between "looks done" and "actually correct."
+**Always run `tests/test_distribution.py` against the container after planner changes** (see Testing) — this was repeatedly the difference between "looks done" and "actually correct."
 
 ---

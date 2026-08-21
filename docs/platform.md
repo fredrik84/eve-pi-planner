@@ -107,7 +107,7 @@ always current. Journal is the master division (1) only.
 only when opened, since it hits ESI). `connectCorpWallet()` mirrors `esiLogin()` but opens
 `/auth/login?wallet=1`. The connected toon joins the admin's context like any character (shows in
 Characters / may get PI-scanned — set `planet_limit=0` to exclude from plans if it clutters).
-Gating test in `test_features.py` (`test_corp_wallet_gated` → 403 for anonymous).
+Gating test in `tests/test_features.py` (`test_corp_wallet_gated` → 403 for anonymous).
 
 ## Notifications (`app/notifications.py`, `app/notifiers.py`)
 
@@ -205,7 +205,7 @@ without it a problem that genuinely recurs weekly would be permanently demoted t
 
 **The first send is never delayed by any of this.** `_recently_notified` only suppresses a send when
 one already went out inside the window, so a newly-detected problem always fires at once. That is
-what makes a 12h cap safe, and `test_alert_cadence.py` asserts it directly rather than assuming it.
+what makes a 12h cap safe, and `tests/test_alert_cadence.py` asserts it directly rather than assuming it.
 
 **A colony that could not be CHECKED is held back, not reported.** User's call, 2026-08-17: an
 alert we cannot verify is not sent. That covers all four ways a check does not happen — a failed
@@ -377,7 +377,7 @@ fuel blocks stay on Jita).
   callback is `_rxAfterConnect` (refreshes gate / settings / tab depending on what's open). The leaf
   source name is threaded onto each `reached` leaf node (`market_name`) in `_load_goo_and_reached` and
   surfaced by `_materials_report`, rendered as a per-line **price-source badge** in the shopping list.
-- Gating test `test_markets_gated` in `test_features.py`; `local_market` in the registry.
+- Gating test `test_markets_gated` in `tests/test_features.py`; `local_market` in the registry.
 
 ## Disconnecting a character (`DELETE /api/characters/{id}`)
 
@@ -417,7 +417,7 @@ what was missing was that it only cleared `pp_characters` + `pp_char_planets` an
 - **Irreversible bit:** `pp_colony_yield` (measured yield per colony across reseats) cannot be
   re-derived by re-adding the character — ESI only reports the CURRENT extraction program. The UI
   confirm names that specifically; everything else comes back on a rescan.
-- Covered by `test_disconnect_character.py` (in-process + a live HTTP layer for the
+- Covered by `tests/test_disconnect_character.py` (in-process + a live HTTP layer for the
   `require_context` gate).
 
 ## Deleting an account (`DELETE /api/me`)
@@ -446,7 +446,7 @@ on the endpoint whose entire promise is "delete all my data".
   the account that created it. There is nothing to delete by context, not an omission.
 - Missing tables are skipped via the same `_table_exists` probe, for the same Postgres
   whole-transaction-abort reason described above.
-- Covered by `test_delete_account.py` (seeds rows by introspecting each table's NOT NULL columns,
+- Covered by `tests/test_delete_account.py` (seeds rows by introspecting each table's NOT NULL columns,
   so a new column can't silently turn a seed into a skipped assertion).
 
 ## Mobile layout + "Add to Home Screen"
