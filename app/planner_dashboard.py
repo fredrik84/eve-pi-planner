@@ -375,9 +375,11 @@ def dashboard(pp_session: str = Cookie(default=None)):
          "character_name": a["character_name"], "runs": a.get("runs"), "hours_left": a.get("hours_left"),
          # Only reaction_stage_ready carries these — which stage became startable and what to
          # install — so the Dashboard can say it without opening the Reactions tab.
-         "stage": a.get("stage"), "names": a.get("names")}
+         "stage": a.get("stage"), "names": a.get("names"), "order_id": a.get("order_id"),
+         "message": a.get("message")}
         for a in _all_alerts
-        if a["kind"] in ("reaction_finishing_soon", "reaction_completed", "reaction_stage_ready")
+        if a["kind"] in ("reaction_finishing_soon", "reaction_completed", "reaction_stage_ready",
+                         "recurring_order_blocked")
     ]
 
     # Reactions summary for the main Overview/Maintenance cards — naturally empty/None for
@@ -475,4 +477,3 @@ def dashboard(pp_session: str = Cookie(default=None)):
         },
         "top_pi": top_pi,
     }
-

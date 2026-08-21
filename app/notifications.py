@@ -276,6 +276,9 @@ _COOLDOWN_HOURS = {
     # kind rather than a decaying one — nag rarely. Its dedupe_id is per (character, chain,
     # stage), so a SECOND chain reaching its own stage 2 still pings inside the window.
     "reaction_stage_ready": 12.0,
+    # Capacity will not improve by itself predictably, and this alert asks for a deliberate
+    # retry/skip/stop choice. Remind daily without turning every scheduler tick into pressure.
+    "recurring_order_blocked": 24.0,
 }
 
 # ── Backing off on an alert nobody is acting on ───────────────────────────────────────────────
@@ -777,6 +780,7 @@ _KIND_LABELS = {
     "reaction_finishing_soon": ("Reactions finishing soon", "character", "characters"),
     "reaction_completed": ("Reactions completed", "character", "characters"),
     "reaction_stage_ready": ("Reaction stage ready to start", "stage", "stages"),
+    "recurring_order_blocked": ("Recurring reaction order needs a decision", "order", "orders"),
 }
 
 

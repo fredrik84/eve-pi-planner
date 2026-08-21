@@ -49,6 +49,7 @@ ALERT_KINDS = [
     {"key": "reaction_finishing_soon", "label": "Reactions finishing soon"},
     {"key": "reaction_completed", "label": "Reactions completed"},
     {"key": "reaction_stage_ready", "label": "Reaction stage ready to start"},
+    {"key": "recurring_order_blocked", "label": "Recurring order needs a slot decision"},
 ]
 _VALID_KINDS = {k["key"] for k in ALERT_KINDS}
 

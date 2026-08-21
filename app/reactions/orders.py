@@ -202,6 +202,7 @@ class OrderCreateRequest(BaseModel):
     # What the client pays for the whole order. Optional, and None means "not told" rather than
     # free — see `_order_report`'s profit block.
     client_price: float | None = None
+    recurring_interval_days: float | None = None
 
 
 def _resolve_order_target(context_id: int, req: OrderCreateRequest) -> tuple[str, int]:
@@ -237,27 +238,110 @@ def preview_reaction_order(req: OrderCreateRequest, context_id: int = Depends(re
 @router.post("/api/reactions/orders")
 def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(require_context)):
     name, top_level_runs = _resolve_order_target(context_id, req)
+    recurring_days = float(req.recurring_interval_days or 0)
+    if recurring_days < 0 or recurring_days > 365:
+        raise HTTPException(status_code=400, detail="Recurring cadence must be between 0 and 365 days")
+    recurring_days = recurring_days or None
+    now = _time.time()
     ensure_reaction_orders_table()
     con = get_connection()
     try:
         order_id = con.execute(
             "INSERT INTO pp_reaction_orders (context_id, type_id, name, target_qty, top_level_runs, "
-            "assigned_runs, client_name, notes, status, created_at, client_price) "
-            "VALUES (?,?,?,?,?,0,?,?,'open',?,?) RETURNING id",
+            "assigned_runs, client_name, notes, status, created_at, client_price, "
+            "recurring_interval_days, recurring_next_at) "
+            "VALUES (?,?,?,?,?,0,?,?,'open',?,?,?,?) RETURNING id",
             (context_id, req.type_id, name, req.target_qty, top_level_runs,
-             (req.client_name or "").strip() or None, (req.notes or "").strip() or None, _time.time(),
-             req.client_price if (req.client_price or 0) > 0 else None),
+             (req.client_name or "").strip() or None, (req.notes or "").strip() or None, now,
+             req.client_price if (req.client_price or 0) > 0 else None,
+             recurring_days, now if recurring_days else None),
         ).fetchone()[0]
         con.commit()
         order = _order_row(con, order_id)
     finally:
         con.close()
-    return {"order": order, **_order_report(context_id, order)}
+    payload = {"order": order, **_order_report(context_id, order)}
+    # Recurring is an explicit instruction to claim the batch, not merely decorate it. Creation
+    # itself still succeeds when the account is full; the order then remains visibly unassigned
+    # and the normal list refresh retries it once capacity becomes available.
+    if recurring_days:
+        try:
+            assigned = assign_reaction_order(order_id, OrderAssignRequest(), context_id)
+            payload["order"] = assigned["order"]
+            payload["auto_assigned"] = assigned
+            if assigned["order"]["assigned_runs"] >= assigned["order"]["top_level_runs"]:
+                con = get_connection()
+                try:
+                    con.execute("UPDATE pp_reaction_orders SET recurring_next_at=? WHERE id=?",
+                                (now + recurring_days * 86400, order_id))
+                    con.commit()
+                    payload["order"] = _order_row(con, order_id)
+                finally:
+                    con.close()
+            else:
+                payload["auto_assign_error"] = "Not enough free reaction slots to assign the whole recurring batch."
+                con = get_connection()
+                try:
+                    con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?",
+                                (payload["auto_assign_error"], order_id))
+                    con.commit()
+                    payload["order"] = _order_row(con, order_id)
+                finally:
+                    con.close()
+        except HTTPException as exc:
+            payload["auto_assign_error"] = exc.detail
+            con = get_connection()
+            try:
+                con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?",
+                            (str(exc.detail), order_id))
+                con.commit()
+                payload["order"] = _order_row(con, order_id)
+            finally:
+                con.close()
+    return payload
 
 
 @router.get("/api/reactions/orders")
 def list_reaction_orders(context_id: int = Depends(require_context)):
     ensure_reaction_orders_table()
+    # A due recurring order with no current cycle claimed is released automatically when the
+    # Reactions surface refreshes. Failures are per-order and non-fatal: a full account must still
+    # get its order list, where the zero-assigned due batch is visible and will be retried.
+    con = get_connection()
+    try:
+        due = [r["id"] for r in con.execute(
+            "SELECT id FROM pp_reaction_orders WHERE context_id=? AND status='open' "
+            "AND recurring_interval_days>0 AND recurring_next_at<=? AND assigned_runs<top_level_runs",
+            (context_id, _time.time())).fetchall()]
+    finally:
+        con.close()
+    for order_id in due:
+        try:
+            result = assign_reaction_order(order_id, OrderAssignRequest(), context_id)
+            con = get_connection()
+            try:
+                complete = result["order"]["assigned_runs"] >= result["order"]["top_level_runs"]
+                error = None if complete else "Not enough free reaction slots to assign the whole recurring batch."
+                if complete:
+                    row = _order_row(con, order_id)
+                    nxt = float(row.get("recurring_next_at") or _time.time())
+                    interval = float(row["recurring_interval_days"]) * 86400
+                    while nxt <= _time.time():
+                        nxt += interval
+                    con.execute("UPDATE pp_reaction_orders SET recurring_error=NULL, recurring_next_at=? "
+                                "WHERE id=?", (nxt, order_id))
+                else:
+                    con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?", (error, order_id))
+                con.commit()
+            finally:
+                con.close()
+        except HTTPException as exc:
+            con = get_connection()
+            try:
+                con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?", (str(exc.detail), order_id))
+                con.commit()
+            finally:
+                con.close()
     con = get_connection()
     try:
         rows = con.execute(
@@ -266,7 +350,8 @@ def list_reaction_orders(context_id: int = Depends(require_context)):
             # send the reader somewhere; without the price on the row, "somewhere" could only ever
             # be the whole card, leaving them to open each order to find the one meant.
             "SELECT id, type_id, name, target_qty, top_level_runs, assigned_runs, client_name, notes, "
-            "status, created_at, client_price FROM pp_reaction_orders WHERE context_id=? "
+            "status, created_at, client_price, recurring_interval_days, recurring_next_at, recurring_error "
+            "FROM pp_reaction_orders WHERE context_id=? "
             "ORDER BY CASE WHEN status='open' THEN 0 ELSE 1 END, created_at DESC",
             (context_id,),
         ).fetchall()
@@ -489,6 +574,75 @@ class OrderStatusRequest(BaseModel):
     status: str  # 'completed' or 'cancelled'
 
 
+class OrderRecurrenceRequest(BaseModel):
+    action: str  # retry, skip, or stop
+
+
+@router.post("/api/reactions/orders/{order_id}/recurrence")
+def change_reaction_order_recurrence(order_id: int, req: OrderRecurrenceRequest,
+                                     context_id: int = Depends(require_context)):
+    """Resolve a recurring release that could not claim enough capacity without guessing for the
+    user: retry after they free slots, skip only this cadence point, or stop future recurrence."""
+    if req.action not in ("retry", "skip", "stop"):
+        raise HTTPException(status_code=400, detail="action must be retry, skip, or stop")
+    ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        order = _get_order_or_404(con, order_id, context_id)
+        days = float(order.get("recurring_interval_days") or 0)
+        if days <= 0:
+            raise HTTPException(status_code=400, detail="This order is not recurring")
+        if req.action == "stop":
+            con.execute("UPDATE pp_reaction_orders SET recurring_interval_days=NULL, "
+                        "recurring_next_at=NULL, recurring_error=NULL WHERE id=?", (order_id,))
+        elif req.action == "skip":
+            nxt = float(order.get("recurring_next_at") or _time.time())
+            while nxt <= _time.time():
+                nxt += days * 86400
+            con.execute("UPDATE pp_reaction_orders SET recurring_next_at=?, recurring_error=NULL WHERE id=?",
+                        (nxt, order_id))
+        else:
+            con.execute("UPDATE pp_reaction_orders SET recurring_error=NULL WHERE id=?", (order_id,))
+        con.commit()
+    finally:
+        con.close()
+    if req.action == "retry":
+        try:
+            result = assign_reaction_order(order_id, OrderAssignRequest(), context_id)
+        except HTTPException as exc:
+            con = get_connection()
+            try:
+                con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?",
+                            (str(exc.detail), order_id))
+                con.commit()
+            finally:
+                con.close()
+            raise
+        con = get_connection()
+        try:
+            current = _order_row(con, order_id)
+            complete = current["assigned_runs"] >= current["top_level_runs"]
+            error = None if complete else "Not enough free reaction slots to assign the whole recurring batch."
+            if complete:
+                nxt = float(current.get("recurring_next_at") or _time.time())
+                while nxt <= _time.time():
+                    nxt += float(current["recurring_interval_days"]) * 86400
+                con.execute("UPDATE pp_reaction_orders SET recurring_error=NULL, recurring_next_at=? WHERE id=?",
+                            (nxt, order_id))
+            else:
+                con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?", (error, order_id))
+            con.commit()
+            result["order"] = _order_row(con, order_id)
+        finally:
+            con.close()
+        return result
+    con = get_connection()
+    try:
+        return {"order": _order_row(con, order_id)}
+    finally:
+        con.close()
+
+
 @router.post("/api/reactions/orders/{order_id}/status")
 def set_reaction_order_status(order_id: int, req: OrderStatusRequest, context_id: int = Depends(require_context)):
     """Manual override — "I delivered the goods to the client" / "the client backed out". This
@@ -502,11 +656,19 @@ def set_reaction_order_status(order_id: int, req: OrderStatusRequest, context_id
     ensure_reaction_assignments_table()
     con = get_connection()
     try:
-        _get_order_or_404(con, order_id, context_id)
+        current = _get_order_or_404(con, order_id, context_id)
         # Release the slots this order claimed (scoped to the account's own characters as defence in
         # depth — the order is already ownership-checked above).
         freed = _release_order_slots(con, order_id, context_id)
-        con.execute("UPDATE pp_reaction_orders SET status=? WHERE id=?", (req.status, order_id))
+        if req.status == "completed" and (current.get("recurring_interval_days") or 0) > 0:
+            interval = float(current["recurring_interval_days"]) * 86400
+            next_at = float(current.get("recurring_next_at") or _time.time())
+            while next_at <= _time.time():
+                next_at += interval
+            con.execute("UPDATE pp_reaction_orders SET assigned_runs=0, recurring_next_at=?, "
+                        "status='open' WHERE id=?", (next_at, order_id))
+        else:
+            con.execute("UPDATE pp_reaction_orders SET status=? WHERE id=?", (req.status, order_id))
         con.commit()
         order = _order_row(con, order_id)
     finally:

@@ -61,9 +61,10 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
     earlier, a reaction_low_stock kind — removed for the alliance-sheet-stock-is-untrustworthy
     reason documented in app.reactions._resolve_reachable's docstring.)
     """
+    want_blocked = "recurring_order_blocked" not in muted
     want_soon = "reaction_finishing_soon" not in muted
     want_done = "reaction_completed" not in muted
-    if not want_soon and not want_done:
+    if not want_soon and not want_done and not want_blocked:
         return []
     con = get_connection()
     try:
@@ -73,15 +74,31 @@ def _reaction_alerts(context_id: int, muted: set, now: float) -> list[dict]:
             (context_id,),
         ).fetchall()
     except Exception:
-        return []  # table may not exist yet on a freshly-deployed environment — never let that break PI alerts
+        rows = []  # table may not exist yet on a freshly-deployed environment — blocked orders still matter
     finally:
         con.close()
-    if not rows:
-        return []
-
     from datetime import datetime
     threshold_hours = get_alert_settings(context_id)["reaction_refill_hours"]
     alerts: list[dict] = []
+
+    if want_blocked:
+        con = get_connection()
+        try:
+            blocked = con.execute(
+                "SELECT id, name, client_name, recurring_error FROM pp_reaction_orders "
+                "WHERE context_id=? AND status='open' AND recurring_interval_days>0 "
+                "AND recurring_error IS NOT NULL", (context_id,)).fetchall()
+            for o in blocked:
+                alerts.append({
+                    "kind": "recurring_order_blocked", "severity": "high",
+                    "character_id": None, "character_name": o["client_name"] or "Customer order",
+                    "planet_id": None, "location": o["name"], "hours_left": None,
+                    "order_id": o["id"], "message": o["recurring_error"], "dedupe_id": o["id"],
+                })
+        except Exception:
+            pass
+        finally:
+            con.close()
 
     for r in rows:
         try:

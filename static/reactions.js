@@ -2982,8 +2982,8 @@ function _renderRxOrdersList(orders) {
   const row = o => `
     <div class="rx-order-row${_rxIsUnpriced(o) ? ' rx-order-unpriced' : ''}" onclick="_rxOpenOrderDetail(${o.id})">
       <div class="rx-order-info">
-        <div class="rx-order-name">${_esc(o.name)} <span class="pp-card-hint">× ${Math.round(o.target_qty).toLocaleString()} units</span>${_rxIsUnpriced(o) ? ' <span class="rx-order-noprice">no price set</span>' : ''}</div>
-        <div class="pp-card-hint">${o.client_name ? _esc(o.client_name) + ' · ' : ''}${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned${o.status !== 'open' ? ' · ' + _esc(o.status) : ''}</div>
+        <div class="rx-order-name">${_esc(o.name)} <span class="pp-card-hint">× ${Math.round(o.target_qty).toLocaleString()} units</span>${o.recurring_interval_days ? ` <span class="rx-order-noprice" style="color:#8fc7a5;border-color:#2f6b48">every ${o.recurring_interval_days}d</span>` : ''}${_rxIsUnpriced(o) ? ' <span class="rx-order-noprice">no price set</span>' : ''}</div>
+        <div class="pp-card-hint">${o.client_name ? _esc(o.client_name) + ' · ' : ''}${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned${o.recurring_interval_days && o.recurring_next_at ? ` · next ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}${o.status !== 'open' ? ' · ' + _esc(o.status) : ''}</div>
       </div>
       ${_rxOrderBarHtml(o)}
     </div>`;
@@ -3002,6 +3002,9 @@ function _rxOpenNewOrderModal() {
   document.getElementById('rxOrderQty').value = 100;
   document.getElementById('rxOrderClient').value = '';
   document.getElementById('rxOrderPrice').value = '';
+  document.getElementById('rxOrderRecurring').checked = false;
+  document.getElementById('rxOrderRecurringDays').value = 7;
+  _rxOrderRecurringChanged();
   document.getElementById('rxOrderNotes').value = '';
   document.getElementById('rxOrderCreateStatus').textContent = '';
   _rxOrderResetReview();
@@ -3014,6 +3017,12 @@ function _rxOpenNewOrderModal() {
       .then(() => { status.textContent = ''; })
       .catch(err => { status.textContent = err.message; });
   }
+}
+
+function _rxOrderRecurringChanged() {
+  const on = document.getElementById('rxOrderRecurring');
+  const fields = document.getElementById('rxOrderRecurringFields');
+  if (fields) fields.style.display = on && on.checked ? '' : 'none';
 }
 
 function _rxCloseNewOrderModal() {
@@ -3101,6 +3110,9 @@ function _rxReviewOrder() {
   rv.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Working out the order…</div>';
   document.getElementById('rxOrderCreateBtn').style.display = 'none';
   const price = parseFloat(document.getElementById('rxOrderPrice').value);
+  const recurring = document.getElementById('rxOrderRecurring').checked;
+  const recurringDays = parseFloat(document.getElementById('rxOrderRecurringDays').value);
+  if (recurring && (!(recurringDays > 0) || recurringDays > 365)) { status.textContent = 'Enter a recurring cadence between 0.25 and 365 days.'; return; }
   apiSend('POST', '/api/reactions/orders/preview',
           { type_id: o.type_id, target_qty: qty, client_price: price > 0 ? price : null })
     .then(data => {
@@ -3122,7 +3134,8 @@ function _rxCreateOrder() {
   status.textContent = 'Creating…';
   apiSend('POST', '/api/reactions/orders',
           { type_id: o.type_id, target_qty: qty, client_name: clientName || null, notes: notes || null,
-            client_price: price > 0 ? price : null })
+            client_price: price > 0 ? price : null,
+            recurring_interval_days: recurring ? recurringDays : null })
     .then(data => {
       _rxCloseNewOrderModal();
       _rxLoadOrders();
@@ -3356,19 +3369,29 @@ function _renderRxOrderDetail(data) {
   const titleEl = document.getElementById('rxOrderDetailTitle');
   if (titleEl.firstChild) titleEl.firstChild.textContent = `${o.name} — order`;
   const remaining = o.top_level_runs - o.assigned_runs;
+  const recurringBlocked = o.recurring_error ? `
+    <div class="rx-reconnect-note" style="margin-top:10px">
+      <b>⚠ This recurring batch could not be assigned automatically.</b><br>${_esc(o.recurring_error)}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
+        <button onclick="_rxRecurringOrderAction(${o.id}, 'retry')">Retry now</button>
+        <button class="pp-add-btn" onclick="_rxRecurringOrderAction(${o.id}, 'skip')">Skip this cycle</button>
+        <button class="pp-danger-btn" onclick="_rxRecurringOrderAction(${o.id}, 'stop')">Stop recurring</button>
+      </div>
+    </div>` : '';
 
   const actionButtons = o.status === 'open' ? `
       ${remaining > 0 ? `<button id="rxOrderAssignBtn" onclick="_rxAssignOrderBatch(${o.id})">Assign next batch (${remaining.toLocaleString()} run${remaining === 1 ? '' : 's'} left)</button>` : '<span class="pp-card-hint">Every run has been assigned.</span>'}
       ${remaining > 0 ? `<button class="pp-add-btn" onclick="_rxToggleOrderDeadline(${o.id}, ${o.type_id})">…sized to a deadline</button>` : ''}
       ${o.assigned_runs > 0 ? `<button class="pp-add-btn" onclick="_rxClearOrderAssignments(${o.id})" title="Free every slot this order holds and hand its runs back, so you can assign it again from scratch. The order itself is kept.">Clear its jobs</button>` : ''}
-      <button class="pp-add-btn" onclick="_rxCompleteOrder(${o.id})">Mark completed</button>
+      <button class="pp-add-btn" onclick="_rxCompleteOrder(${o.id})">${o.recurring_interval_days ? 'Complete this cycle' : 'Mark completed'}</button>
       <button class="pp-danger-btn" onclick="_rxCancelOrder(${o.id})">Cancel order</button>
       ${o.assigned_runs === 0 ? `<button class="pp-danger-btn" onclick="_rxDeleteOrder(${o.id})">Delete</button>` : ''}
     ` : `<span class="pp-card-hint">Order ${_esc(o.status)}.</span>`;
 
   el.innerHTML = `
-    <div class="pp-card-hint">${o.client_name ? `For <b>${_esc(o.client_name)}</b> — ` : ''}${Math.round(o.target_qty).toLocaleString()} units needed → ${o.top_level_runs.toLocaleString()} reaction run${o.top_level_runs === 1 ? '' : 's'}</div>
+    <div class="pp-card-hint">${o.client_name ? `For <b>${_esc(o.client_name)}</b> — ` : ''}${Math.round(o.target_qty).toLocaleString()} units needed → ${o.top_level_runs.toLocaleString()} reaction run${o.top_level_runs === 1 ? '' : 's'}${o.recurring_interval_days ? ` · repeats every <b>${o.recurring_interval_days} days</b>${o.recurring_next_at ? ` · next cycle ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}` : ''}</div>
     ${o.notes ? `<div class="pp-card-hint" style="margin-top:2px">${_esc(o.notes)}</div>` : ''}
+    ${recurringBlocked}
 
     <div style="margin:10px 0 4px">${_rxOrderBarHtml(o)}</div>
     <div class="pp-card-hint">${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned to characters</div>
@@ -3381,6 +3404,18 @@ function _renderRxOrderDetail(data) {
       <span id="rxOrderDetailStatus" class="bug-status-msg"></span>
     </div>
     <div id="rxOrderDeadlineBox" style="display:none;margin-top:10px"></div>`;
+}
+
+function _rxRecurringOrderAction(orderId, action) {
+  const status = document.getElementById('rxOrderDetailStatus');
+  if (status) status.textContent = action === 'retry' ? 'Trying to claim the batch…' : 'Updating recurrence…';
+  apiSend('POST', `/api/reactions/orders/${orderId}/recurrence`, { action })
+    .then(async () => {
+      await _rxFetchOrderDetail(orderId);
+      await _rxLoadOrders();
+      await onReactionsTabOpen();
+    })
+    .catch(err => { if (status) status.textContent = err.message; });
 }
 
 // ── "Assign next batch, sized to a deadline" ────────────────────────────────────────────────
@@ -3713,7 +3748,11 @@ function _rxSetOrderStatus(orderId, newStatus) {
 }
 
 async function _rxCompleteOrder(orderId) {
-  if (!await ppConfirm('Mark this order completed? Any reaction slots reserved for it will be freed.')) return;
+  const order = (_rxOrders || []).find(o => o.id === orderId);
+  const msg = order && order.recurring_interval_days
+    ? 'Complete this recurring cycle? Its current reaction slots will be freed and the next batch will be assigned when its cadence arrives.'
+    : 'Mark this order completed? Any reaction slots reserved for it will be freed.';
+  if (!await ppConfirm(msg)) return;
   _rxSetOrderStatus(orderId, 'completed');
 }
 

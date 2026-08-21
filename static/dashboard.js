@@ -184,7 +184,15 @@ function _renderReactionAlerts(data) {
   const done = items.filter(a => a.kind === 'reaction_completed');
   const soon = items.filter(a => a.kind === 'reaction_finishing_soon');
   const ready = items.filter(a => a.kind === 'reaction_stage_ready');
+  const blocked = items.filter(a => a.kind === 'recurring_order_blocked');
   const rows = [];
+  if (blocked.length) {
+    const tally = blocked.map(a => `<a href="#" onclick="ppSelectTab('rx','orders');_rxOpenOrderDetail(${a.order_id});return false;"><b>${_esc(a.location || 'Order')}</b></a> — ${_esc(a.message || 'not enough free reaction slots')}`).join('<br>');
+    rows.push(`<div class="dash-issue dash-issue-high">
+        <div class="dash-issue-char">${blocked.length} recurring order${blocked.length === 1 ? '' : 's'} need a decision</div>
+        <ul class="dash-issue-items"><li class="dash-il-high">Automatic assignment could not fit. Free slots and retry, skip this cycle, or stop recurrence.<br>${tally}</li></ul>
+      </div>`);
+  }
   // Good news first, and styled as such: a chain stage whose inputs have all finished is work you
   // can start right now, not a problem to fix.
   if (ready.length) {

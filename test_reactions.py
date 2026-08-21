@@ -255,6 +255,52 @@ def test_order_preview(api: Api) -> bool:
     return ok
 
 
+def test_recurring_order_releases_each_cycle(api: Api) -> bool:
+    """Recurring is operational, not a label: creation claims the first batch, completing a cycle
+    keeps the standing order open, and a due list refresh claims the next one automatically."""
+    print(f"\n{'='*60}\n  Recurring customer order: auto-assign -> complete -> release again\n{'='*60}")
+    ok = True
+    product = _find_test_product(api)
+    if not check(product is not None, "found a reachable product for a recurring order"):
+        return ok
+    per_run_yield = product["output_qty"] / product["top_level_runs"]
+    status, created = api.post("/api/reactions/orders", {
+        "type_id": product["type_id"], "target_qty": per_run_yield,
+        "client_name": "Weekly Client", "recurring_interval_days": 7,
+    })
+    ok &= check(status == 200, f"recurring order creates (got {status})")
+    if status != 200:
+        return ok
+    order = created["order"]
+    oid = order["id"]
+    ok &= check(order["recurring_interval_days"] == 7, "weekly cadence is persisted")
+    ok &= check(order["assigned_runs"] == order["top_level_runs"],
+                "the first recurring batch is assigned automatically")
+
+    status, completed = api.post(f"/api/reactions/orders/{oid}/status", {"status": "completed"})
+    cycle = completed.get("order", {})
+    ok &= check(status == 200 and cycle.get("status") == "open",
+                "completing a recurring cycle keeps the standing order open")
+    ok &= check(cycle.get("assigned_runs") == 0, "completion hands the cycle's runs back")
+
+    # Bring the next cadence boundary forward; GET /orders is the release/retry sweep used by the
+    # live Reactions refresh and must claim it without another button press.
+    con = get_connection()
+    con.execute("UPDATE pp_reaction_orders SET recurring_next_at=0 WHERE id=?", (oid,))
+    con.commit()
+    con.close()
+    status, listed = api.get("/api/reactions/orders")
+    again = next((o for o in listed.get("orders", []) if o["id"] == oid), {})
+    ok &= check(status == 200 and again.get("assigned_runs") == again.get("top_level_runs"),
+                "a due cadence refresh automatically assigns the next batch")
+
+    status, stopped = api.post(f"/api/reactions/orders/{oid}/recurrence", {"action": "stop"})
+    ok &= check(status == 200 and stopped.get("order", {}).get("recurring_interval_days") is None,
+                "the user can stop future recurrence without deleting the order")
+    api.post(f"/api/reactions/orders/{oid}/status", {"status": "cancelled"})
+    return ok
+
+
 # ── Deterministic unit tests (no network, no DB) ───────────────────────────────────────────────
 # The safety net for refactoring reactions.py: these pin the refactor-critical PURE functions —
 # the reaction-graph cost roll-up + cheaper-source selection (_resolve_reachable), the shopping-
@@ -1733,6 +1779,7 @@ def main() -> int:
             token = _seed_session()
             api = Api(base, token)
             results.append(test_order_lifecycle(api))
+            results.append(test_recurring_order_releases_each_cycle(api))
             results.append(test_order_preview(api))
             results.append(test_pricing_endpoints_live(api))
             results.append(test_suggest_absorb_contract(api))
