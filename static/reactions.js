@@ -660,13 +660,18 @@ const _RX_CADENCE_PRESETS = [24, 168, 336, 720];
 function _rxSyncWizardCadence() {
   const sel = document.getElementById('wizRCadence');
   if (!sel) return;
+  const summary = document.getElementById('wizRCadenceSummary');
   const days = (_rxCadenceDays === '' || _rxCadenceDays == null) ? 0 : Number(_rxCadenceDays);
   // A cadence the presets cannot express (2.5 days, say) is still the account's real answer, so it
   // becomes an option rather than being rounded onto one — silently changing the rhythm the plan is
   // built around is exactly the disagreement this merge exists to end.
   const custom = sel.querySelector('option[data-rx-custom]');
   if (custom) custom.remove();
-  if (!(days > 0)) return;
+  if (!(days > 0)) {
+    sel.value = '168';
+    if (summary) summary.textContent = 'Weekly for this plan · no saved schedule yet';
+    return;
+  }
   const hours = days * 24;
   if (_RX_CADENCE_PRESETS.indexOf(hours) === -1) {
     const o = document.createElement('option');
@@ -676,6 +681,13 @@ function _rxSyncWizardCadence() {
     sel.appendChild(o);
   }
   sel.value = String(hours);
+  if (summary) {
+    summary.textContent = days === 1 ? 'Using your daily schedule'
+      : days === 7 ? 'Using your weekly schedule'
+      : days === 14 ? 'Using your two-week schedule'
+      : days === 30 ? 'Using your monthly schedule'
+      : `Using your saved ${days}-day schedule`;
+  }
 }
 
 // Changing it in the wizard sets the account's cadence — the same write the card's number field
@@ -1546,6 +1558,15 @@ function _renderReactionsDashboard(data) {
     <div class="rx-stage-ready">✅ <b>Stage ${readyNow[0].stage} is ready to start${readyNow.length > 1 ? ' on several characters' : ` on ${_esc(readyNow[0].character)}`}</b>
       — everything it waits on has finished. Install ${readyNow.map(r => r.names.map(_esc).join(', ')).join(' · ')}.</div>`;
 
+  // The action list is the normal workflow. The physical slot board remains available for
+  // capacity checks, editing, and manual assignment, but no longer competes with the instruction
+  // the user came here for. When there is nothing to install, open it automatically so running
+  // work is still the useful default state rather than an empty task card.
+  const capacityHtml = `<details class="rx-capacity-fold"${todoRows.length ? '' : ' open'}>
+    <summary>Characters &amp; capacity <span class="pp-card-hint">${usedSlots} of ${data.total_slots} slots in use</span></summary>
+    <div class="rx-capacity-body">${rows}</div>
+  </details>`;
+
   // TODO §41 (docs/page-layout-2026-08.md): missing formulas used to render inline here, on every
   // visit whether or not anything was actually missing — moved into the Shopping list fold (the
   // section it actually blocks) with a count badge on the fold's own <summary>, so it's still
@@ -1554,7 +1575,7 @@ function _renderReactionsDashboard(data) {
   el.innerHTML = scopeLostNote + reconnectNote + _rxUnderProductionWarn(data.under_production) + readyBanner
     // Under the cadence row it is about, and above the checklist it would change — the remedy is
     // "type more numbers", so it belongs where the numbers are about to be read.
-    + _rxEaseCostLine(data) + todoListHtml + rows + untrackedNote;
+    + _rxEaseCostLine(data) + todoListHtml + capacityHtml + untrackedNote;
 }
 
 // The Shopping list fold's count badge — set from the dashboard's own `missing_formulas` (the
@@ -2119,7 +2140,11 @@ function wizRGo(n) {
 function _wizRFillLive() {
   const s = document.getElementById('wizRFill');
   const out = document.getElementById('wizRFillFmt');
-  if (s && out) out.textContent = `${s.value}%`;
+  if (s && out) {
+    const n = Number(s.value);
+    const label = n <= 25 ? 'Conservative' : n <= 60 ? 'Balanced' : 'Aggressive';
+    out.textContent = `${label} · ${n}% of traded volume`;
+  }
 }
 
 function wizRSuggest() {
@@ -2161,7 +2186,7 @@ function _renderReactionsSuggestions(data) {
   }
 
   if (!data.suggestions.length) {
-    el.innerHTML = '<div class="pp-empty">No suggestions fit that budget — try raising the ISK budget, loosening the max chain depth, or connect more characters for reaction tracking.</div>';
+    el.innerHTML = '<div class="pp-empty">No suggestions fit that budget — try raising the ISK budget, checking the advanced material exclusions, or connecting more characters for reaction tracking.</div>';
     return;
   }
 
@@ -2170,7 +2195,7 @@ function _renderReactionsSuggestions(data) {
   // in the common case, so a bar added no information a line of text doesn't already say.
   const bindingNote = t.binding === 'isk'
     ? 'Used your full ISK budget.'
-    : 'There weren\'t enough profitable, liquid reactions within the chain-depth limit to use the whole budget — try loosening "Max chain depth" or the material filter.';
+    : 'There weren\'t enough profitable, liquid reactions within the current material and market limits to use the whole budget.';
   // Echo the current Market-fill slider setting on the results page (the slider itself lives on the
   // input page), with a one-click way back to default when it's been moved off 50%.
   const absorbNote = (t.absorb_fill_pct != null && t.absorb_fill_pct !== 50)

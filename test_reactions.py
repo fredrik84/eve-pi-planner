@@ -324,6 +324,35 @@ def test_recurring_create_refreshes_visible_queue() -> bool:
     return ok
 
 
+def test_reactions_phase1_is_task_first() -> bool:
+    """The common Reactions path stays automated; manual/risk controls remain secondary."""
+    print(f"\n{'='*60}\n  Reactions Phase 1: automated, task-first UI\n{'='*60}")
+    with open("static/index.html", encoding="utf-8") as f:
+        html = f.read()
+    with open("static/reactions.js", encoding="utf-8") as f:
+        js = f.read()
+    start = html.index('id="tab-reactions"')
+    end = html.index('id="tab-industry"', start)
+    page = html[start:end]
+    shop_start = page.index('id="rxShoppingPanel"')
+    shop_end = page.index('id="rxOrdersPanel"', shop_start)
+    shopping = page[shop_start:shop_end]
+    ok = check('Find profitable work' in page and 'Add a specific product' in page,
+               "the two distinct planning intents are explicit")
+    ok &= check(page.index('Do this now') < page.index('rxMetricsContent'),
+                "actionable work appears before financial detail")
+    ok &= check('Advanced planning options' in page and 'id="wizRDeadline"' in page
+                and 'id="rxMaterialFilter"' in page,
+                "occasional deadline and material controls remain available under Advanced")
+    ok &= check('_rxOpenSuggestForDeadline' not in shopping and '_rxOpenRecurringDeadline' not in shopping,
+                "Shopping is an output, not a second planning launcher")
+    ok &= check('class="rx-action-menu"' in page and 'Clear planned work' in page,
+                "rare and destructive queue actions are grouped behind More")
+    ok &= check('class="rx-capacity-fold"' in js and "todoRows.length ? '' : ' open'" in js,
+                "slot management is secondary when tasks exist and opens automatically otherwise")
+    return ok
+
+
 # ── Deterministic unit tests (no network, no DB) ───────────────────────────────────────────────
 # The safety net for refactoring reactions.py: these pin the refactor-critical PURE functions —
 # the reaction-graph cost roll-up + cheaper-source selection (_resolve_reachable), the shopping-
@@ -1794,7 +1823,8 @@ def main() -> int:
     args = parser.parse_args()
     base = args.url.rstrip("/")
 
-    results = [run_unit_tests(), test_recurring_create_refreshes_visible_queue()]
+    results = [run_unit_tests(), test_recurring_create_refreshes_visible_queue(),
+               test_reactions_phase1_is_task_first()]
 
     if not args.no_live:
         try:

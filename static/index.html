@@ -595,9 +595,10 @@
         <div class="pp-layout">
           <div class="pp-main" style="grid-column: 1 / -1; max-width: 100%;">
 
-            <div class="rx-suggest-cta">
-              <button onclick="wizRStart()">Suggest Reaction Products</button>
-              <span class="pp-card-hint">— let the optimizer pick profitable products for your budget, cadence and free slots. Prefer a specific product instead? Click any empty <b>+</b> slot below.</span>
+            <div class="rx-suggest-cta rx-primary-actions">
+              <div><div class="settings-panel-kicker">Add work</div><div class="rx-primary-copy">Let the planner use your available characters, formulas, stock, and saved schedule.</div></div>
+              <button onclick="wizRStart()">Find profitable work</button>
+              <button class="pp-add-btn" onclick="_rxOpenManualAssign('')">Add a specific product</button>
             </div>
 
             <!-- Four sections of one dashboard, as tabs rather than a long scroll of folds —
@@ -613,32 +614,33 @@
 
             <div data-tabpanel="rx" data-tabkey="overview" id="rxOverviewPanel">
               <section class="pp-card">
-                <div class="pp-card-title">Metrics
-                  <span class="pp-card-hint">— what's currently committed, at a glance</span>
-                </div>
-                <div id="rxMetricsContent" class="pp-card-body">
-                  <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
-                </div>
-              </section>
-
-              <section class="pp-card">
-                <div class="pp-card-title">Reactions
-                  <span class="pp-card-hint">— your reaction capacity and currently-running jobs</span>
-                  <button class="pp-add-btn" onclick="_rxRefreshJobs(true, this)" title="Pull the latest job status from ESI now (bypasses the ~5min cache)">↻ Refresh jobs</button>
-                  <button class="pp-add-btn" onclick="openSettingsModal('markets')">⚙ Settings</button>
+                <div class="pp-card-title">Do this now
+                  <span class="pp-card-hint">— install the ready jobs; later stages wait below them automatically</span>
                   <button class="pp-add-btn" id="rxConnectBtn" onclick="connectReactionsTracking()" style="display:none">Connect a character</button>
-                  <button class="pp-add-btn" id="rxAdoptAllBtn" onclick="_rxAdoptAllOrphans(this)" title="Add every running job that isn't in your plan yet, so they all recur next cycle" style="display:none">⊕ Adopt all</button>
-                  <!-- ppConfirm, not native confirm(): a browser that has been offered "prevent this
-                       page from creating additional dialogs" makes confirm() return false silently,
-                       and the button then does nothing at all. See the comment on ppConfirm in
-                       utils.js — this was the last native confirm() in the app, and it produced the
-                       same silent no-op that had already been reported once against Cancel order. -->
-                  <button class="pp-add-btn" onclick="ppConfirm('Clear every planned assignment, including slots committed to customer orders? Those orders go back to unassigned so you can re-assign them.').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear all</button>
+                  <details class="rx-action-menu">
+                    <summary class="pp-add-btn">More</summary>
+                    <div class="rx-action-menu-pop">
+                      <button class="pp-add-btn" onclick="_rxRefreshJobs(true, this)">Refresh ESI jobs</button>
+                      <button class="pp-add-btn" onclick="openSettingsModal('markets')">Facilities &amp; pricing</button>
+                      <button class="pp-add-btn" onclick="_rxOpenRecurringDeadline()">Adjust current queue to a deadline</button>
+                      <button class="pp-add-btn" id="rxAdoptAllBtn" onclick="_rxAdoptAllOrphans(this)" title="Add every running job that isn't in your plan yet, so it recurs next cycle" style="display:none">Adopt all unplanned jobs</button>
+                      <button class="pp-danger-btn" onclick="ppConfirm('Clear every planned assignment, including slots committed to customer orders? Those orders go back to unassigned so you can re-assign them.').then(ok =&gt; { if (ok) _rxClearAllAssignments(); })">Clear planned work</button>
+                    </div>
+                  </details>
                 </div>
                 <div id="rxDashboardContent" class="pp-card-body">
                   <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
                 </div>
               </section>
+
+              <details class="pp-card rx-metrics-fold">
+                <summary class="pp-card-title rx-fold-summary"><span class="rx-fold-caret">▸</span> Plan value &amp; capacity
+                  <span class="pp-card-hint">— costs, expected profit, slot usage, and lifetime totals</span>
+                </summary>
+                <div id="rxMetricsContent" class="pp-card-body">
+                  <div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>
+                </div>
+              </details>
             </div>
 
             <div data-tabpanel="rx" data-tabkey="shopping" id="rxShoppingPanel" style="display:none">
@@ -646,8 +648,6 @@
                 <div class="pp-card-title">Shopping list
                   <span class="pp-card-hint">— total materials needed for everything currently assigned</span>
                   <button class="pp-add-btn" onclick="_rxCopyShoppingList(this)">Copy for Janice</button>
-                  <button class="pp-add-btn" onclick="_rxOpenSuggestForDeadline()" title="Opens Suggest Reaction Products with the 'finish by' field ready — it already picks profitable products for you, sized to a date instead of a day-count rhythm">Plan to a deadline</button>
-                  <button class="pp-add-btn" onclick="_rxOpenRecurringDeadline()" title="Sizes what you already have queued (speculative work + open customer orders) to a date — how many runs to start and what to buy for them, instead of a new product">Scale to a deadline</button>
                 </div>
                 <div id="rxShoppingListContent" class="pp-card-body"></div>
                 <details style="margin-top:10px">
@@ -722,55 +722,39 @@
                      the whole space costs nothing worth a control. CLAUDE.md rule 3. -->
                 <input type="hidden" id="wizRDepth" value="5">
 
-                <!-- This IS the "Come back every N days" setting on the Reactions card, not a
-                     second one: it is seeded from the stored cadence and writes back when changed
-                     (_rxSyncWizardCadence / _rxWizCadenceChanged). Two controls for one rhythm, in
-                     two units, with only one remembered, is what this replaced. -->
-                <label class="pp-label" for="wizRCadence" title="How often you come back to install the next stage. This is the same setting as 'Come back every N days' on the Reactions card — changing it here changes it there.">Run on a...</label>
-                <select id="wizRCadence" class="pp-select" onchange="_rxWizCadenceChanged(this.value)">
+                <label class="pp-label">Schedule</label>
+                <div class="rx-wiz-schedule"><span id="wizRCadenceSummary">Using your saved schedule</span>
+                  <button class="pp-btn-link" onclick="openSettingsModal('general')">change</button></div>
+                <select id="wizRCadence" style="display:none">
                   <option value="24">Daily basis</option>
                   <option value="168" selected>Weekly basis</option>
                   <option value="336">Every 2 weeks</option>
                   <option value="720">Monthly basis</option>
                 </select>
-
-                <!-- A ONE-OFF override for this suggestion run only — reported live (2026-08-19):
-                     the day-count rhythm above routinely lands a batch finishing mid-workday, when
-                     nothing can actually be done about it. Does NOT touch the saved cadence
-                     (_rxWizCadenceChanged does that; this deliberately doesn't call it) — picking a
-                     time here just changes what THIS "Suggest reactions" click sends. -->
-                <label class="pp-label" for="wizRDeadline" title="Size this suggestion to finish by a specific time instead of the rhythm above — one-off, doesn't change your saved cadence.">...or finish by, just this once</label>
-                <div>
-                  <input type="datetime-local" id="wizRDeadline" onchange="_rxWizDeadlineChanged(this.value)">
-                  <div id="wizRDeadlineClock" class="pp-card-hint" style="margin-top:4px"></div>
-                  <button class="pp-btn-link" id="wizRDeadlineClear" onclick="_rxWizDeadlineClear()" style="display:none">Use the rhythm above instead</button>
-                </div>
-
-                <label class="pp-label" for="wizRFill" title="What share of the product's own market trade volume (over your run period) a suggested batch is allowed to be. Higher = bigger batches, but you sell into deeper, cheaper demand and can move the price; lower = safer prices, smaller batches. Sizing uses real daily traded volume where available.">Market fill</label>
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                  <input type="range" id="wizRFill" min="5" max="100" step="5" value="50" style="width:180px" oninput="_wizRFillLive()">
-                  <span id="wizRFillFmt" class="pp-card-hint" style="flex:0 0 auto">50%</span>
-                </div>
               </div>
-              <div class="pp-card-hint" style="margin-top:6px">
-                "Max chain depth" caps how many reactions deep a suggestion is allowed to be, from raw moon goo to
-                the final product — a shallower chain is simpler to keep running (fewer separate reaction types to
-                manage), a deeper one can be more profitable but is more to keep track of. "Run on a..." targets how
-                long each batch should take — a big batch will use several reaction slots at once (not just one) so
-                it still finishes on that schedule, instead of monopolizing a single slot for weeks. It is the same
-                setting as "Come back every N days" on the Reactions card, so the plan you get here and the plan you
-                come back to are built around one rhythm. How many runs each suggestion needs is worked out
-                automatically from your ISK budget.
-              </div>
-
-              <details id="rxMaterialFilter" open style="margin-top:10px">
-                <summary class="pp-card-hint" style="cursor:pointer;font-weight:600;color:var(--clr-text-soft)">Restrict which materials to use</summary>
-                <div class="pp-card-hint" style="margin:6px 0">Uncheck anything you can't reliably get (e.g. a Gas type your alliance doesn't stock, or a fuel block variant you don't produce locally) — suggestions needing it will be skipped. If Oxygen Fuel Block is your cheap/local one, uncheck the other three to keep every suggestion on one fuel block.</div>
-                <div id="rxMaterialFilterList"><div class="pp-loading"><span class="pp-spinner"></span> Loading…</div></div>
+              <details class="settings-advanced rx-wiz-advanced" style="margin-top:12px">
+                <summary>Advanced planning options</summary>
+                <div class="settings-source-copy">Use these only when this batch must differ from your normal automated plan.</div>
+                <div class="pp-target-form">
+                  <label class="pp-label" for="wizRDeadline">Finish this batch by</label>
+                  <div><input type="datetime-local" id="wizRDeadline" onchange="_rxWizDeadlineChanged(this.value)">
+                    <div id="wizRDeadlineClock" class="pp-card-hint" style="margin-top:4px"></div>
+                    <button class="pp-btn-link" id="wizRDeadlineClear" onclick="_rxWizDeadlineClear()" style="display:none">Use saved schedule</button></div>
+                  <label class="pp-label" for="wizRFill">Market exposure</label>
+                  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                    <input type="range" id="wizRFill" min="5" max="100" step="5" value="50" style="width:180px" oninput="_wizRFillLive()">
+                    <span id="wizRFillFmt" class="pp-card-hint">Balanced · 50% of traded volume</span>
+                  </div>
+                </div>
+                <details id="rxMaterialFilter" style="margin-top:10px">
+                  <summary class="pp-card-hint" style="cursor:pointer;font-weight:600;color:var(--clr-text-soft)">Exclude unavailable materials</summary>
+                  <div class="pp-card-hint" style="margin:6px 0">Only exclude materials you cannot reliably source. The planner handles everything else automatically.</div>
+                  <div id="rxMaterialFilterList"><div class="pp-loading"><span class="pp-spinner"></span> Loading…</div></div>
+                </details>
               </details>
 
               <div style="margin-top:14px">
-                <button class="wiz-find-btn" style="width:auto;display:inline-block" onclick="wizRSuggest()">Suggest reactions</button>
+                <button class="wiz-find-btn" style="width:auto;display:inline-block" onclick="wizRSuggest()">Find profitable work</button>
                 <button class="pp-cancel-btn" onclick="wizRCancel()">Cancel</button>
               </div>
             </div>
