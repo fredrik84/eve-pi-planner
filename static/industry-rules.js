@@ -199,6 +199,17 @@ function _indRulesJobLength(a) {
     'Defaults to 7 days. Blank or 0 resets to weekly; increase it only when you prefer fewer, longer jobs.');
 }
 
+function _indRulesPace(a) {
+  if (_indRulesMode === 'order') return '';
+  const mode = (a.pace || {}).mode === 'fastest' ? 'fastest' : 'balanced';
+  return _indRuleRow('Production pace',
+    `<div class="ind-rule-seg"><label><input type="radio" name="ir-pace" value="balanced" ${mode === 'balanced' ? 'checked' : ''}> Balanced</label>`
+    + `<label><input type="radio" name="ir-pace" value="fastest" ${mode === 'fastest' ? 'checked' : ''}> Fastest</label></div>`,
+    mode === 'fastest'
+      ? 'Uses useful spare reaction slots to finish as soon as possible.'
+      : 'Uses the fewest reaction slots needed to meet the configured cadence; later work stays queued.');
+}
+
 function _indRulesSources(a) {
   if (!_indRules.available.sources) return '';
   const srcs = (a.sources || {}).sources || [];
@@ -277,7 +288,7 @@ function _indRulesSectionsHtml() {
   const a = _indRules.account;
   return `<div class="ind-rule-grid ind-rule-grid-${_indRulesMode}">`
     + _indRuleGroup('Production', 'Build or buy', 'Where work runs and when the planner should manufacture instead of purchase.',
-        [_indRulesFacility(a), _indRulesThreshold(a), _indRulesReactions(a), _indRulesJobLength(a)])
+        [_indRulesFacility(a), _indRulesThreshold(a), _indRulesReactions(a), _indRulesJobLength(a), _indRulesPace(a)])
     + _indRuleGroup('Routing', 'Components and stock', 'Exceptions to automatic component sourcing.',
         [_indRulesComponents(a), _indRulesSources(a), _indRulesPerOrder(a)])
     + _indRuleGroup('Commercial', 'Customer pricing', 'How the planner calculates the suggested selling price.',
@@ -426,6 +437,8 @@ async function indSaveRules() {
       const d = f.val('ir-joblen');
       patch.job_length = { max_reaction_job_days: (d === '' || d === null) ? null : parseFloat(d) };
     }
+    const pace = document.querySelector('input[name="ir-pace"]:checked');
+    if (pace) patch.pace = { mode: pace.value };
     if (_indRules.available.sources && document.querySelector('.ir-src')) {
       patch.sources = { keys: f.srcs, enabled: true };
     }

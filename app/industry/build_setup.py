@@ -38,6 +38,7 @@ _SECTION_FEATURES: dict[str, str | None] = {
     "reactions": "industry_reaction_policy",
     "components": "industry_blacklist",
     "job_length": "industry_job_length_policy",
+    "pace": None,
     "pins": None,              # rides on the routing flag — see settings._pins_available
     "sources": "industry_plan_sources",
     "per_order_plans": "industry_per_order_plans",
@@ -86,6 +87,7 @@ def account_setup(context_id: int) -> dict:
                       "defaulted": policy["defaulted"]},
         "components": _components_section(context_id),
         "job_length": {"max_reaction_job_days": get_max_reaction_job_days(context_id)},
+        "pace": {"mode": s.get("production_pace") or "balanced"},
         "pins": {"pins": pins["pins"], "families": pins["families"]},
         "sources": _sources_section(context_id),
         # Whether the queue is planned order by order rather than as one shared batch. It lives here
@@ -188,6 +190,7 @@ class BuildSetupPatch(BaseModel):
     reactions: dict | None = None
     components: dict | None = None
     job_length: dict | None = None
+    pace: dict | None = None
     pins: dict | None = None
     sources: dict | None = None
 
@@ -240,6 +243,9 @@ def apply_patch(context_id: int, patch: BuildSetupPatch) -> list[str]:
     if "job_length" in sent:
         set_max_reaction_job_days(context_id, sent["job_length"].get("max_reaction_job_days"))
         written.append("job_length")
+    if "pace" in sent:
+        save_settings(context_id, {"production_pace": sent["pace"].get("mode")})
+        written.append("pace")
     if "pins" in sent:
         set_build_pins(context_id, sent["pins"].get("pins") or {})
         written.append("pins")

@@ -437,6 +437,13 @@ def test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field(
         check("and did NOT clobber the first", after["facility"]["facility_id"] == "sotiyo-1"
               and after["facility"]["struct_material_pct"] == 4.2)
 
+        B.apply_patch(7, B.BuildSetupPatch(pace={"mode": "fastest"}))
+        check("production pace round-trips through the shared setup",
+              B.account_setup(7)["pace"]["mode"] == "fastest")
+        B.apply_patch(7, B.BuildSetupPatch(pace={"mode": "unexpected"}))
+        check("an unknown pace safely returns to Balanced",
+              B.account_setup(7)["pace"]["mode"] == "balanced")
+
         # Sections owned by other stores round-trip through the same patch.
         B.apply_patch(7, B.BuildSetupPatch(
             reactions={"buy_categories": []},
@@ -478,6 +485,9 @@ def test_build_setup_is_one_surface_over_the_stores_that_already_own_each_field(
     from app.features import FEATURE_REGISTRY
     check("the surface is gated like every other Industry feature",
           any(f["key"] == "industry_build_setup" for f in FEATURE_REGISTRY))
+    js = open("static/industry-rules.js").read()
+    check("Build Rules offers exactly the two shared production modes",
+          'value="balanced"' in js and 'value="fastest"' in js and 'patch.pace' in js)
 
 
 def test_reaction_policy_is_gated_by_its_own_feature():

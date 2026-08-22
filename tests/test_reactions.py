@@ -516,7 +516,8 @@ def test_an_order_stops_at_the_character_that_is_not_worth_a_login() -> bool:
 def test_customer_orders_only_claim_cadence_worth_of_capacity() -> bool:
     """A small weekly batch must not occupy every reactor merely because they are free."""
     import inspect
-    from app.reactions.jobs import _compact_hosts
+    from app.reactions.jobs import _compact_hosts, _production_pace
+    from app.industry import settings as industry_settings
     hosts = [{"character_id": i, "free_slots": n}
              for i, n in enumerate((10, 10, 10, 5, 5, 5, 5))]
     ok = check([h["character_id"] for h in _compact_hosts(hosts, 2, 1)] == [0],
@@ -524,8 +525,21 @@ def test_customer_orders_only_claim_cadence_worth_of_capacity() -> bool:
     ok &= check(len(_compact_hosts(hosts, 25, 1)) == 3,
                 "a larger batch adds only the characters needed to hold its cadence layout")
     src = inspect.getsource(__import__('app.reactions.jobs', fromlist=['_allocate_and_insert'])._allocate_and_insert)
-    ok &= check("slots = [1] * len(works)" in src,
-                "allocation starts compact and only the cadence pass may add jobs")
+    ok &= check('if pace == "fastest" else [1] * len(works)' in src,
+                "Balanced starts compact and only the cadence pass may add jobs")
+    real_get = industry_settings.get_settings
+    try:
+        industry_settings.get_settings = lambda _ctx: {"production_pace": "fastest"}
+        ok &= check(_production_pace(7) == "fastest",
+                    "Fastest is an explicit shared account setting")
+        industry_settings.get_settings = lambda _ctx: {"production_pace": "surprise"}
+        ok &= check(_production_pace(7) == "balanced",
+                    "unknown or old values fail safe to Balanced")
+    finally:
+        industry_settings.get_settings = real_get
+    ok &= check('_lean_hosts(hosts) if pace == "fastest"' in src
+                and '_compact_hosts(hosts, wanted_slots, per_chain)' in src,
+                "the allocator has Fastest and compact Balanced branches")
     return ok
 
 

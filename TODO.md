@@ -131,15 +131,25 @@ the final diff (the `data-pimode`→`data-submode` generalization it needed was 
 byte-for-byte). **Lesson, not just a note:** for a UI-shape decision like this, a written proposal
 is necessary but not sufficient — build the smallest piece and show it before the second page.
 
+## 42. Investigate interactive browser checks for the coding agent
+
+**Open — user direction, 2026-08-22.** Revisit the earlier browser-test decision, but with a sharper
+boundary than “build an E2E suite”:
+
+- investigate whether the coding agent can open and operate the deployed/local UI interactively to
+  check its own work;
+- automate pure functional acceptance (calculations, state transitions, API contracts, persistence,
+  routing, and regressions) so those checks are not delegated to the user;
+- reserve the user's manual acceptance protocol for whether the flow, hierarchy, wording, and visual
+  design feel right;
+- identify the smallest reliable browser setup, authentication/test-data requirements, and where a
+  browser check adds coverage that component/API tests cannot.
+
+This supersedes the 2026-08-16 “won't build” verdict for §2e-residual. It does **not** pre-decide that
+a large headless-browser suite is the answer; the first deliverable is an evidence-backed proposal
+for interactive checking plus the functional-test boundary.
+
 ## Nothing else open beyond the above
 
-That is the whole backlog as of 2026-08-18: §39 shipped (archive), two fresh items still open
-(§40-41), two "if it comes back" notes, one measurement to read in a few days, two
-recorded-not-scheduled risks, and a bug row to close. Everything else is in
-[TODO-archive.md](TODO-archive.md) — the one-line shipped list, the detail worth keeping, and the
-closed-with-reasoning verdicts. **Read it before reopening anything.**
-
-**Closed, do not reopen:** a browser/E2E test (§2e-residual) is **won't build** — user decision,
-2026-08-16 (*"the browser test is not something I want us to do"*). Routing is pinned by
-`tests/test_routing_client.js` (which runs the router for real) plus source-level checks; live-browser
-bugs stay the user's to catch. Don't propose a headless-browser suite again.
+Everything else is in [TODO-archive.md](TODO-archive.md) — the one-line shipped list, the detail
+worth keeping, and the closed-with-reasoning verdicts. **Read it before reopening anything.**

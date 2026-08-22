@@ -3904,6 +3904,11 @@ def _compact_hosts(hosts: list[dict], wanted_slots: int, per_chain: int) -> list
     return keep
 
 
+def _production_pace(context_id: int) -> str:
+    from app.industry.settings import get_settings
+    return "fastest" if get_settings(context_id).get("production_pace") == "fastest" else "balanced"
+
+
 def _fit_chain_slots(works: list[float], caps: list[int], budget: int) -> list[int]:
     """How many slots each tier of ONE chain gets, out of a character's free slots.
 
@@ -4029,8 +4034,10 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
         jobs = max(1, -(-run_n // max(1, cap_runs)))
         cadence_jobs.append(_cap_jobs(chain_caps.get(tid), min(run_n, jobs)))
     wanted_slots = sum(cadence_jobs)
-    # Every additional host duplicates the chain's one-job-per-tier floor.
-    hosts = _compact_hosts(hosts, wanted_slots, per_chain)
+    pace = _production_pace(context_id)
+    # Every additional host duplicates the chain's one-job-per-tier floor. Fastest is the explicit
+    # opt-in to the old speed-first behavior; Balanced is intentionally compact.
+    hosts = _lean_hosts(hosts) if pace == "fastest" else _compact_hosts(hosts, wanted_slots, per_chain)
 
     # How the order's runs are split across the characters that will run it: PROPORTIONAL to each
     # host's free slots. The roomiest character does the most work, so every host finishes at
@@ -4078,7 +4085,8 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
             # Begin compact: one job per tier. The cadence pass below adds only the jobs needed to
             # keep collection inside the configured window. It deliberately does not spend every
             # otherwise-free reactor on progressively smaller runtime gains.
-            slots = [1] * len(works)
+            slots = (_fit_chain_slots(works, caps, host["free_slots"])
+                     if pace == "fastest" else [1] * len(works))
             # `_fit_chain_slots` minimises the SUM of the tier durations, which was the right
             # objective while every tier was its own stage. Now that siblings share one, what gates
             # the stage above is the LAST of them to land — so re-balance within each stage the

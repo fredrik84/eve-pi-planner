@@ -105,7 +105,11 @@ def ensure_industry_settings_table():
                     # structure has a synthetic negative location, two rows can name one location,
                     # and a row that is deleted takes its id with it — so a stale pin resolves to no
                     # candidate and falls back, instead of silently matching a different building.
-                    "build_pins TEXT")
+                    "build_pins TEXT",
+                    # How aggressively reaction work spends free capacity. Balanced holds work to
+                    # the configured cadence with the fewest slots; fastest deliberately consumes
+                    # useful spare slots. Shared by customer and Manufacturing-linked reactions.
+                    "production_pace TEXT")
         # Anyone who already has saved build options has plainly used this tab before, so they must
         # not be handed a first-run screen. Safe to re-run on a restart precisely because a user who
         # has NOT been through setup owns no settings row: the frontend only seeds one once the
@@ -175,6 +179,7 @@ def _get_settings_uncached(context_id: int) -> dict:
     d["onboarded"] = bool(d.get("onboarded"))
     d["build_pins"] = _parse_build_pins(d.get("build_pins"))
     d["per_order_plans"] = bool(d.get("per_order_plans"))
+    d["production_pace"] = "fastest" if d.get("production_pace") == "fastest" else "balanced"
     # None means "no ceiling", and it has to stay None rather than becoming 0.0: `apply_account_
     # build_options` only fills a field the account has an opinion about, and a 0 would read as one.
     try:
@@ -506,7 +511,7 @@ def read_industry_settings(ctx: int = Depends(require_context)):
 
 
 _SETTINGS_COLUMNS = ("struct_material_pct", "struct_time_pct", "prioritize_speed", "marginal_pct",
-                     "force_build", "margin_pct", "facility_id")
+                     "force_build", "margin_pct", "facility_id", "production_pace")
 
 
 def save_settings(context_id: int, fields: dict) -> None:
@@ -528,6 +533,8 @@ def save_settings(context_id: int, fields: dict) -> None:
             use[flag] = None if use[flag] is None else int(use[flag])
     if "facility_id" in use:
         use["facility_id"] = (use["facility_id"] or "")[:40]
+    if "production_pace" in use:
+        use["production_pace"] = "fastest" if use["production_pace"] == "fastest" else "balanced"
     ensure_industry_settings_table()
     keys = list(use)
     con = get_connection()
