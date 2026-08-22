@@ -476,7 +476,7 @@ def linked_manufacturing_reaction_orders(context_id: int, manufacturing_order_id
     con = get_connection()
     try:
         rows = con.execute(
-            "SELECT DISTINCT o.id AS order_id,o.type_id FROM pp_reaction_orders o "
+            "SELECT DISTINCT o.id AS order_id,o.type_id,o.priority FROM pp_reaction_orders o "
             "JOIN pp_reaction_order_sources s ON s.reaction_order_id=o.id AND s.context_id=o.context_id "
             f"WHERE o.context_id=? AND o.status='open' AND s.manufacturing_order_id IN ({marks}) "
             "ORDER BY o.priority DESC,o.id", (context_id, *ids)).fetchall()

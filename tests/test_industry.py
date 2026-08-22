@@ -3182,6 +3182,7 @@ def test_ready_reactions_cross_as_one_durable_order():
     print("test_ready_reactions_cross_as_one_durable_order")
     from unittest.mock import patch
     from app.industry.orders import _handoff_ready_reactions
+    from app.reactions.orders import linked_manufacturing_reaction_orders
 
     captured = []
     install = {"ready": [
@@ -3221,6 +3222,9 @@ def test_ready_reactions_cross_as_one_durable_order():
         existing = _handoff_ready_reactions(42, {"ready": []}, {9: {7: 10.0}})
     check("the pipeline keeps its link after no new handoff is needed",
           existing["orders"] == [{"order_id": 55, "type_id": 9}])
+    src = inspect.getsource(linked_manufacturing_reaction_orders)
+    check("PostgreSQL can DISTINCT linked orders while sorting them by priority",
+          "o.id AS order_id,o.type_id,o.priority" in src)
 
 
 def test_linked_reaction_lifecycle_keeps_committed_work_safe():
