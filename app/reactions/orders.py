@@ -487,6 +487,7 @@ def linked_manufacturing_reaction_orders(context_id: int, manufacturing_order_id
 def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> dict:
     """Publish ready Manufacturing demand once, then let Reactions own its execution."""
     ensure_reaction_orders_table()
+    live = {k: len(v) for k, v in live_reaction_runs(context_id).items()}
     resolved = []
     for demand in demands:
         type_id = int(demand["type_id"])
@@ -532,12 +533,30 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
                 desired = int(top_runs)
                 committed = _active_linked_top_runs(con, int(existing["id"]))
                 current = int(existing.get("top_level_runs") or 0)
+                # Pending reservations are a plan, not irreversible work. If Manufacturing shrank
+                # or an earlier bug double-counted them, rebuild those rows from the new demand.
+                # Only ESI-running jobs form the safety floor that may require a user decision.
+                if committed > desired or int(existing.get("assigned_runs") or 0) > desired:
+                    assignment_rows = [dict(r) for r in con.execute(
+                        "SELECT character_id,type_id,runs,order_id,created_at,"
+                        "COALESCE(tier_order,0) AS tier_order FROM pp_reaction_assignments "
+                        "WHERE order_id=?", (existing["id"],)).fetchall()]
+                    running = any(live.get((int(r["character_id"]), int(r["type_id"])), 0) > 0
+                                  for r in assignment_rows)
+                    if not running:
+                        _release_order_slots(con, int(existing["id"]), context_id)
+                        con.execute("UPDATE pp_reaction_orders SET assigned_runs=0 WHERE id=?",
+                                    (existing["id"],))
+                        committed = 0
                 decision = _linked_quantity_decision(desired, committed, current)
                 if decision == "resize":
                     historical = min(int(existing.get("assigned_runs") or 0), desired)
                     con.execute("UPDATE pp_reaction_orders SET target_qty=?, top_level_runs=?, "
                                 "assigned_runs=?, source_state=NULL, source_message=NULL WHERE id=?",
                                 (request.target_qty, desired, historical, existing["id"]))
+                elif decision == "keep" and int(existing.get("assigned_runs") or 0) > desired:
+                    con.execute("UPDATE pp_reaction_orders SET assigned_runs=0,source_state=NULL,"
+                                "source_message=NULL WHERE id=?", (existing["id"],))
                 elif decision == "conflict":
                     msg = (f"Manufacturing now needs {desired} runs, but {committed} are already "
                            "committed. Keep the surplus or clear/replan this reaction order.")

@@ -3023,10 +3023,10 @@ function _rxOrderState(o) {
 function _rxManufacturingSourcesHtml(o) {
   const sources = o.manufacturing_sources || [];
   if (!sources.length) return '';
-  return `<div class="pp-card-hint">For ${sources.map(s =>
+  return `<div class="rx-order-source-block"><b>Used by Manufacturing</b><div class="rx-order-source-links">${sources.map(s =>
     `<button class="ind-link-btn" onclick="event.stopPropagation();_rxGoToManufacturingOrder(${s.order_id})"`
       + ` title="Open this Manufacturing build">${_esc(s.label)} · ${s.runs.toLocaleString()} run${s.runs === 1 ? '' : 's'}</button>`
-  ).join(' · ')}</div>`;
+  ).join('')}</div></div>`;
 }
 
 function _rxGoToManufacturingOrder(orderId) {
@@ -3499,15 +3499,25 @@ function _renderRxOrderDetail(data) {
     <div class="rx-reconnect-note" style="margin-top:10px">
       <b>⚠ This order is queued until capacity is available.</b><br>${_esc(o.recurring_error)}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
-        <button onclick="_rxRecurringOrderAction(${o.id}, 'retry')">Retry now</button>
-        <button class="pp-add-btn" onclick="_rxRecurringOrderAction(${o.id}, 'skip')">Skip this cycle</button>
-        <button class="pp-danger-btn" onclick="_rxRecurringOrderAction(${o.id}, 'stop')">Stop recurring</button>
+        <button onclick="${o.recurring_interval_days ? `_rxRecurringOrderAction(${o.id}, 'retry')` : `_rxRetryLinkedOrder(${o.id})`}">Retry now</button>
+        ${o.recurring_interval_days ? `<button class="pp-add-btn" onclick="_rxRecurringOrderAction(${o.id}, 'skip')">Skip this cycle</button><button class="pp-danger-btn" onclick="_rxRecurringOrderAction(${o.id}, 'stop')">Stop recurring</button>` : ''}
       </div>
     </div>` : '';
+  const sourceTitle = o.source_state === 'running_after_finish' ? 'Running reactions were kept safe'
+    : o.source_state === 'quantity_conflict' ? 'Manufacturing changed this requirement'
+    : o.source_state === 'missing_formula' ? 'A required formula is missing'
+    : 'Waiting for reaction capacity';
+  const sourceNext = o.source_state === 'running_after_finish'
+    ? 'EVE still reports these jobs as running. Finish them normally, or cancel this reaction order.'
+    : o.source_state === 'quantity_conflict'
+      ? 'Clear this order’s pending jobs once to rebuild it from the remaining Manufacturing plans.'
+      : o.source_state === 'capacity_blocked'
+        ? 'It remains in the priority queue and will claim capacity when slots become free.' : '';
   const sourceBlocked = o.source_message ? `
     <div class="rx-reconnect-note" style="margin-top:10px">
-      <b>⚠ ${o.source_state === 'running_after_finish' ? 'Running work was kept safe.' : o.source_state === 'quantity_conflict' ? 'Quantity needs a decision.' : o.source_state === 'missing_formula' ? 'A reaction formula or priced recipe is missing.' : 'Waiting for reaction capacity.'}</b><br>${_esc(o.source_message)}
-      ${o.source_state === 'capacity_blocked' ? `<div style="margin-top:7px"><button onclick="_rxRetryLinkedOrder(${o.id})">Retry now</button></div>` : ''}
+      <b>⚠ ${sourceTitle}</b>${sourceNext ? `<div class="pp-card-hint">${sourceNext}</div>` : ''}
+      <details class="rx-order-issue-detail"><summary>Technical details</summary>${_esc(o.source_message)}</details>
+      ${(o.source_state === 'capacity_blocked') ? `<div style="margin-top:7px"><button onclick="_rxRetryLinkedOrder(${o.id})">Retry now</button></div>` : ''}
     </div>` : '';
 
   const actionButtons = o.status === 'open' ? `

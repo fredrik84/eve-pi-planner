@@ -3247,6 +3247,11 @@ def test_linked_reaction_lifecycle_keeps_committed_work_safe():
     heal = inspect.getsource(_heal_stranded_counter)
     check("completed Manufacturing history is not reset and assigned a second time",
           'source_kind") == "manufacturing"' in heal)
+    from app.reactions.orders import sync_manufacturing_reaction_orders
+    sync = inspect.getsource(sync_manufacturing_reaction_orders)
+    check("pending over-allocation is rebuilt while ESI-running work stays protected",
+          "committed > desired" in sync and "if not running" in sync
+          and "_release_order_slots" in sync)
 
 
 def test_aggregated_reaction_ownership_comes_from_the_build_trees():

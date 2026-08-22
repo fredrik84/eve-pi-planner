@@ -513,6 +513,22 @@ def test_an_order_stops_at_the_character_that_is_not_worth_a_login() -> bool:
     return ok
 
 
+def test_customer_orders_only_claim_cadence_worth_of_capacity() -> bool:
+    """A small weekly batch must not occupy every reactor merely because they are free."""
+    import inspect
+    from app.reactions.jobs import _compact_hosts
+    hosts = [{"character_id": i, "free_slots": n}
+             for i, n in enumerate((10, 10, 10, 5, 5, 5, 5))]
+    ok = check([h["character_id"] for h in _compact_hosts(hosts, 2, 1)] == [0],
+               "two cadence-sized jobs stay on one character instead of filling the account")
+    ok &= check(len(_compact_hosts(hosts, 25, 1)) == 3,
+                "a larger batch adds only the characters needed to hold its cadence layout")
+    src = inspect.getsource(__import__('app.reactions.jobs', fromlist=['_allocate_and_insert'])._allocate_and_insert)
+    ok &= check("slots = [1] * len(works)" in src,
+                "allocation starts compact and only the cadence pass may add jobs")
+    return ok
+
+
 def test_a_stage_settles_on_one_run_count_across_its_products() -> bool:
     """Reported: *"I don't want to have to look for Carbon Fibers for each slot every time I start
     it to figure out how many runs. The more similar number of job runs (preferably equal) between
@@ -1358,6 +1374,7 @@ def run_unit_tests() -> bool:
         test_explode_shopping_list(),
         test_a_chain_spreads_over_the_slots_it_has(),
         test_an_order_stops_at_the_character_that_is_not_worth_a_login(),
+        test_customer_orders_only_claim_cadence_worth_of_capacity(),
         test_a_stage_settles_on_one_run_count_across_its_products(),
         test_a_cadence_ceiling_holds_every_job_inside_the_week(),
         test_the_leveller_never_plans_more_jobs_than_formulas_owned(),

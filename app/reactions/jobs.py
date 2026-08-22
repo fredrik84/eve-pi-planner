@@ -3894,6 +3894,16 @@ def _lean_hosts(hosts: list[dict], min_gain: float = _WORTH_A_LOGIN) -> list[dic
     return keep
 
 
+def _compact_hosts(hosts: list[dict], wanted_slots: int, per_chain: int) -> list[dict]:
+    """Smallest roomiest-first host set that can hold a cadence-sized complete chain."""
+    keep: list[dict] = []
+    for host in hosts:
+        keep.append(host)
+        if sum(h["free_slots"] for h in keep) >= wanted_slots + per_chain * (len(keep) - 1):
+            break
+    return keep
+
+
 def _fit_chain_slots(works: list[float], caps: list[int], budget: int) -> list[int]:
     """How many slots each tier of ONE chain gets, out of a character's free slots.
 
@@ -3987,6 +3997,8 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     caps_by_type = formula_concurrency_caps(context_id)
     chain_caps = {t: caps_by_type[t] for t in [tid for tid, _ in ordered_all] + [type_id]
                   if caps_by_type.get(t)}
+    order_cadence_h = _reaction_cadence_hours(context_id)
+    top_cycle_h = (node.get("cycle_time") or 0) / 3600.0
 
     hosts = sorted((c for c in chars if c["free_slots"] >= per_chain),
                     key=lambda c: -c["free_slots"])
@@ -4002,23 +4014,23 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     # scarcest formula in the chain is therefore also the most characters this order can use.
     if chain_caps:
         hosts = hosts[:max(1, min(chain_caps.values()))]
-    # ...and then stop at the character that no longer buys enough speed to be worth the login.
-    # An order's wait is its reactor-hours over the reactors running them, so each extra host cuts
-    # that wait by its own share of the pool — keep taking them while that is worth a trip.
-    # See `_lean_hosts`; the hosts kept still split the runs proportionally, just as before.
-    #
-    # Two earlier attempts at this are worth not repeating. The first packed hosts until their free
-    # slots covered `_useful_slots` — the theoretical most an order could EVER use, which is in the
-    # thousands for any real order, so nothing was ever dropped. The second required a fixed floor
-    # of free slots per host, which fixed the one-job tail but still had no answer for "these three
-    # characters could hold the whole thing". Both asked about the order; the question is about the
-    # character.
-    #
-    # This is not the reverted even-split (docs/reactions.md, "An order's runs follow capacity, not
-    # fairness"): that one changed the JOBS, handing a 2-slot character the same 250 runs as a
-    # 10-slot one. Here the split across the hosts that remain is untouched and still proportional.
-    if _pack_hosts_on(context_id):
-        hosts = _lean_hosts(hosts)
+    # Use the fewest characters that can hold a cadence-sized layout. The old path selected hosts
+    # from all FREE capacity and then spent every slot on marginal speed: after two Manufacturing
+    # plans were deleted, 150 Carbon Polymer runs expanded into 25 seven-run jobs across five
+    # characters. Two jobs already fit the weekly cadence; the other 23 bought minutes at the cost
+    # of blocking the account. Cadence is the user's effort contract, so it is also the capacity
+    # target—not merely a lower bound before opportunistically consuming everything else.
+    all_steps = [t for _, t in ordered_all]
+    all_runs = [int(t["runs"]) for t in all_steps] + [runs_needed]
+    all_cycle_h = [((t.get("cycle_time") or 0) / 3600.0) for t in all_steps] + [top_cycle_h]
+    cadence_jobs = []
+    for tid, run_n, cycle_h in zip([t for t, _ in ordered_all] + [type_id], all_runs, all_cycle_h):
+        cap_runs = int((order_cadence_h + _CADENCE_GRACE) / cycle_h) if cycle_h > 0 else run_n
+        jobs = max(1, -(-run_n // max(1, cap_runs)))
+        cadence_jobs.append(_cap_jobs(chain_caps.get(tid), min(run_n, jobs)))
+    wanted_slots = sum(cadence_jobs)
+    # Every additional host duplicates the chain's one-job-per-tier floor.
+    hosts = _compact_hosts(hosts, wanted_slots, per_chain)
 
     # How the order's runs are split across the characters that will run it: PROPORTIONAL to each
     # host's free slots. The roomiest character does the most work, so every host finishes at
@@ -4032,7 +4044,6 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
 
     now = _time.time()
     unit_cost = node.get("unit_cost", 0.0) + node.get("job_cost", 0.0)
-    top_cycle_h = (node.get("cycle_time") or 0) / 3600.0
     # The window every job of this order should land inside — the same stored setting the dashboard
     # paces against, so the quote the customer is shown and the plan the next page load draws are
     # one answer rather than two.
@@ -4042,7 +4053,6 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     # these are REAL hours and `cadence_h` — also real hours — is compared against them directly.
     # No `_reaction_time_mult` conversion here; that belongs to `level_product_runs`, which works in
     # raw-SDE hours because it reads `_reaction_cycle_times` instead.
-    order_cadence_h = _reaction_cadence_hours(context_id)
     placed: list[dict] = []
     left = dict(chain_caps)             # formulas of each type still unspoken for, account-wide
     con = get_connection()
@@ -4065,7 +4075,10 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
             for i, tid in enumerate([t for t, _ in tiers] + [type_id]):
                 if tid in left:
                     caps[i] = _cap_jobs(max(1, left[tid] - after), caps[i])
-            slots = _fit_chain_slots(works, caps, host["free_slots"])
+            # Begin compact: one job per tier. The cadence pass below adds only the jobs needed to
+            # keep collection inside the configured window. It deliberately does not spend every
+            # otherwise-free reactor on progressively smaller runtime gains.
+            slots = [1] * len(works)
             # `_fit_chain_slots` minimises the SUM of the tier durations, which was the right
             # objective while every tier was its own stage. Now that siblings share one, what gates
             # the stage above is the LAST of them to land — so re-balance within each stage the
