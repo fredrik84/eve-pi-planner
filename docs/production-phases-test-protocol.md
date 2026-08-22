@@ -128,13 +128,17 @@ every control works.
 
 1. Open **Reactions → Overview** with at least one character showing more queued cards than fit in
    its initial row.
-2. Inspect the compact overflow count (for example **+2**) before and after expanding it.
-3. On a pending card, inspect **Mark as done** and **Remove** at desktop width and a narrow/mobile
+2. Under **Work batches**, match a `C…` customer key and an `M…` Manufacturing key to the same keys
+   on their slot cards. For a shared Manufacturing batch, confirm the legend says how many builds
+   own it and its hover text names them.
+3. Inspect the compact overflow count (for example **+2**) before and after expanding it.
+4. On a pending card, inspect **Mark as done** and **Remove** at desktop width and a narrow/mobile
    width. Compare the **More** menu styling with Manufacturing.
 
 Pass when queued work does not create a mostly empty second character row, the overflow count is not
 covered by action buttons, Remove is aligned with its control group rather than floating vertically,
-and Reactions uses the same More-menu pattern as Manufacturing.
+Reactions uses the same More-menu pattern as Manufacturing, and every order-owned card can be mapped
+to its customer or Manufacturing plan from the visible legend without opening cards one by one.
 
 ### P1-R1 — Reactions keeps decisions and capacity visible
 

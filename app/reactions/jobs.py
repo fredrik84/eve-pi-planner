@@ -3265,25 +3265,53 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                 f"FROM pp_reaction_assignments WHERE character_id IN ({placeholders}) ORDER BY tier_order", char_ids,
             ):
                 assignments.setdefault(r["character_id"], []).append(dict(r))
-        # Client-order labels for any pending row committed via a customer order (see
-        # _allocate_and_insert) — so the dashboard can show "Order: <client>" on those slots
-        # instead of just the product name, distinguishing client-committed jobs from
-        # speculative-profit ones at a glance.
+        # Compact, recognisable source keys for every order-owned slot. The square itself has no
+        # room for a Manufacturing plan name, so it carries C14/M22 while one legend resolves that
+        # key once. Manufacturing owners come from the bridge, not from the generic client_name.
         order_ids = list({a["order_id"] for rows in assignments.values() for a in rows if a.get("order_id")})
         order_labels: dict[int, str] = {}
         order_meta: dict[int, dict] = {}
+        manufacturing_sources: dict[int, list[str]] = {}
         if order_ids:
             placeholders_o = ",".join("?" * len(order_ids))
+            try:
+                for src in con.execute(
+                    "SELECT s.reaction_order_id,i.name,i.label FROM pp_reaction_order_sources s "
+                    "JOIN pp_industry_orders i ON i.id=s.manufacturing_order_id "
+                    "AND i.context_id=s.context_id "
+                    f"WHERE s.context_id=? AND s.reaction_order_id IN ({placeholders_o}) "
+                    "ORDER BY i.priority DESC,i.id", (context_id, *order_ids),
+                ):
+                    label = (src["label"] or "").strip() or src["name"]
+                    manufacturing_sources.setdefault(int(src["reaction_order_id"]), []).append(label)
+            except Exception:
+                # Rolling deploy / pre-bridge database: the reaction order is still valid and the
+                # M-key remains useful even when its friendly owner list is temporarily unavailable.
+                manufacturing_sources = {}
             for r in con.execute(
                 f"SELECT id, client_name, client_price, top_level_runs, source_kind FROM pp_reaction_orders "
                 f"WHERE id IN ({placeholders_o})", order_ids,
             ):
-                order_labels[r["id"]] = r["client_name"] or f"Order #{r['id']}"
+                oid = int(r["id"])
+                kind = "manufacturing" if r["source_kind"] == "manufacturing" else "customer"
+                owners = manufacturing_sources.get(oid, [])
+                if kind == "manufacturing":
+                    display = owners[0] if len(owners) == 1 else (
+                        f"{len(owners)} Manufacturing builds" if owners else "Manufacturing work")
+                    detail = " · ".join(owners) if owners else display
+                    key = f"M{oid}"
+                else:
+                    display = r["client_name"] or f"Order #{oid}"
+                    detail = display
+                    key = f"C{oid}"
+                order_labels[oid] = display
                 # ...and what the client pays, so an order's rows can be valued at the agreed price
                 # rather than at a market rate nobody is selling them at. See `_plan_totals`.
-                order_meta[r["id"]] = {"client_price": r["client_price"],
-                                       "top_level_runs": r["top_level_runs"],
-                                       "source_kind": r["source_kind"]}
+                order_meta[oid] = {"client_price": r["client_price"],
+                                   "top_level_runs": r["top_level_runs"],
+                                   "source_kind": r["source_kind"], "source_key": key,
+                                   "source_display": display, "source_detail": detail,
+                                   "source_count": len(owners)}
         # output_type_id -> cycle hours, so a stored assignment (which only keeps `runs`, not its
         # own formula) can be turned into a real duration for the profit/day normalization below —
         # PI's headline number is already a rate (value_per_day), so Reactions' should be too.
@@ -3498,6 +3526,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                     # whether ITS stage below has finished rather than some other plan's.
                     "chain": round(float(a.get("created_at") or 0.0), 3), "input_cost": a["input_cost"], "reward": a["reward"],
                     "order_id": a.get("order_id"), "order_label": order_labels.get(a.get("order_id")),
+                    "order_source": order_meta.get(a.get("order_id")),
                 })
         # What the plan occupies AT ONCE, which for pending rows is the worst tier and not the
         # count: stage 2 is queued behind stage 1, so it is not holding a reactor while stage 1

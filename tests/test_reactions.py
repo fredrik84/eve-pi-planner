@@ -183,6 +183,10 @@ def test_order_lifecycle(api: Api) -> bool:
     if pending_match:
         ok &= check(pending_match.get("order_label") == "Test Client",
                      f"pending assignment carries the client name as its order label (got {pending_match.get('order_label')})")
+        source = pending_match.get("order_source") or {}
+        ok &= check(source.get("source_key") == f"C{order_id}"
+                    and source.get("source_display") == "Test Client",
+                    "the dashboard resolves the compact customer key without another request")
 
     # Can't delete once something's been committed — must cancel instead.
     status, del_data = api.delete(f"/api/reactions/orders/{order_id}")
@@ -540,6 +544,22 @@ def test_customer_orders_only_claim_cadence_worth_of_capacity() -> bool:
     ok &= check('_lean_hosts(hosts) if pace == "fastest"' in src
                 and '_compact_hosts(hosts, wanted_slots, per_chain)' in src,
                 "the allocator has Fastest and compact Balanced branches")
+    return ok
+
+
+def test_order_owned_slots_have_compact_source_keys_and_a_legend() -> bool:
+    """The character board is too small for full owner names, but ownership must not require opening
+    every card. Keys are stable per physical reaction order and the legend resolves them once."""
+    js = open("static/reactions.js").read()
+    jobs = open("app/reactions/jobs.py").read()
+    ok = check('source_key": key' in jobs and 'key = f"C{oid}"' in jobs and 'key = f"M{oid}"' in jobs,
+               "customer and Manufacturing work receive stable compact keys")
+    ok &= check('class="rx-work-batches"' in js and 'Work batches' in js,
+                "the board resolves every key in an always-visible legend")
+    ok &= check("source.source_detail || source.source_display" in js,
+                "the full owner list remains available without occupying the card")
+    ok &= check("(last.a.order_id || null) === (a.order_id || null)" in js,
+                "compact queued cards group by real order identity, never display text")
     return ok
 
 
@@ -1389,6 +1409,7 @@ def run_unit_tests() -> bool:
         test_a_chain_spreads_over_the_slots_it_has(),
         test_an_order_stops_at_the_character_that_is_not_worth_a_login(),
         test_customer_orders_only_claim_cadence_worth_of_capacity(),
+        test_order_owned_slots_have_compact_source_keys_and_a_legend(),
         test_a_stage_settles_on_one_run_count_across_its_products(),
         test_a_cadence_ceiling_holds_every_job_inside_the_week(),
         test_the_leveller_never_plans_more_jobs_than_formulas_owned(),

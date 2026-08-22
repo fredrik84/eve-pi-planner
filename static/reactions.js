@@ -1287,7 +1287,7 @@ function _renderReactionsDashboard(data) {
       const last = pendGroups[pendGroups.length - 1];
       if (queuedJob && last && last.queued
           && last.a.type_id === a.type_id && last.tier === tier && last.a.runs === a.runs
-          && (last.a.order_label || '') === (a.order_label || '')) {
+          && (last.a.order_id || null) === (a.order_id || null)) {
         last.n++;
         continue;
       }
@@ -1298,10 +1298,12 @@ function _renderReactionsDashboard(data) {
       const a = grp.a;
       const tier = grp.tier;
       const pendingIcon = `https://images.evetech.net/types/${a.type_id}/icon?size=32`;
-      // A slot committed to a customer order (see the Customer orders card) carries the
-      // order's client label — lets a player tell client-committed slots apart from
-      // speculative-profit ones without opening the order itself.
-      const orderTag = a.order_label ? `<div class="rx-order-slot-tag" title="Committed to a customer order">Order: ${_esc(a.order_label)}</div>` : '';
+      // The full owner name lives once in the legend below. Repeating it in every 70px square made
+      // the cards cramped; the stable key keeps the association visible without another click.
+      const source = a.order_source || null;
+      const orderTag = source
+        ? `<div class="rx-order-slot-tag rx-order-slot-${source.source_kind === 'manufacturing' ? 'manufacturing' : 'customer'}" title="${_esc(source.source_detail || source.source_display)}">${_esc(source.source_key)}</div>`
+        : '';
       const orderTip = a.order_label ? ` — for order "${a.order_label}"` : '';
       // A later-stage slot is dimmed and dashed, and says why: its inputs come out of the stage
       // below it, so it is not startable yet. Still clickable (edit/cancel) — this is a "not
@@ -1573,8 +1575,21 @@ function _renderReactionsDashboard(data) {
 
   // Tasks remain first, but the character board is operational context rather than an occasional
   // manual escape hatch: it shows who owns each current job and where the remaining capacity is.
+  const workBatches = new Map();
+  (data.characters || []).forEach(c => (c.pending || []).forEach(a => {
+    const source = a.order_source;
+    if (source && source.source_key) workBatches.set(source.source_key, source);
+  }));
+  const batchLegend = !workBatches.size ? '' : `<div class="rx-work-batches">
+    <span class="rx-work-batches-title">Work batches</span>
+    ${[...workBatches.values()].map(source => `<span class="rx-work-batch" title="${_esc(source.source_detail || source.source_display)}">
+      <b class="rx-work-key rx-order-slot-${source.source_kind === 'manufacturing' ? 'manufacturing' : 'customer'}">${_esc(source.source_key)}</b>
+      <span>${_esc(source.source_display)}</span>
+    </span>`).join('')}
+  </div>`;
   const capacityHtml = `<div class="rx-capacity-section">
     <div class="rx-capacity-title">Characters &amp; capacity <span class="pp-card-hint">${usedSlots} of ${totalSlots} slots in use</span></div>
+    ${batchLegend}
     <div class="rx-capacity-body">${rows}</div>
   </div>`;
 

@@ -1012,9 +1012,20 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 }
 .rx-order-bar-fill { height: 100%; background: #3a7ac0; border-radius: 3px 0 0 3px; }
 .rx-order-slot-tag {
-  font-size: 9px; color: #e0c07a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  max-width: 100%;
+  display: inline-block; font-size: 8.5px; line-height: 1; font-weight: 700; color: #e0c07a;
+  background: #241f15; border: 1px solid #665329; border-radius: 3px; padding: 2px 3px;
+  white-space: nowrap; max-width: 100%;
 }
+.rx-order-slot-manufacturing { color: #8fc7a5; background: #14241b; border-color: #2f6b48; }
+.rx-order-slot-customer { color: #e0c07a; background: #241f15; border-color: #665329; }
+.rx-work-batches {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 5px 10px; margin: 7px 0 2px;
+  padding: 6px 8px; border: 1px solid var(--clr-border); border-radius: 6px; background: #121722;
+  font-size: 11px;
+}
+.rx-work-batches-title { color: var(--clr-text-dim); font-weight: 600; margin-right: 2px; }
+.rx-work-batch { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--clr-text-soft); }
+.rx-work-key { display: inline-block; border: 1px solid; border-radius: 3px; padding: 2px 4px; line-height: 1; }
 
 /* Reactions local/alliance market setup card (local_market flag) */
 .rx-mkt-list { margin: 4px 0 12px; }
