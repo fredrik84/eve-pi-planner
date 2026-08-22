@@ -303,15 +303,14 @@ def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(req
                     con.close()
     except HTTPException as exc:
         payload["auto_assign_error"] = exc.detail
-        if recurring_days:
-            con = get_connection()
-            try:
-                con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?",
-                            (str(exc.detail), order_id))
-                con.commit()
-                payload["order"] = _order_row(con, order_id)
-            finally:
-                con.close()
+        con = get_connection()
+        try:
+            con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?",
+                        (str(exc.detail), order_id))
+            con.commit()
+            payload["order"] = _order_row(con, order_id)
+        finally:
+            con.close()
     return payload
 
 
@@ -612,10 +611,10 @@ def sync_manufacturing_reaction_orders(context_id: int, demands: list[dict]) -> 
 def retry_automatic_orders(context_id: int) -> dict:
     """Retry work the application owns after capacity may have changed, in visible priority order.
 
-    One-off customer orders remain manual. Manufacturing hand-offs and due/previously-blocked
-    recurring cycles are automatic by contract. A failure is recorded on the order and does not
-    stop lower-priority rows being inspected, while the allocator itself remains the authority on
-    whether any capacity really exists.
+    Orders which previously failed assignment remain queued, alongside Manufacturing hand-offs and
+    due recurring cycles. Manual clearing removes that queued error, so the user can still pause an
+    order deliberately. A failure does not stop lower-priority rows being inspected: the allocator
+    remains the authority on whether a smaller order can use capacity the first one cannot.
     """
     ensure_reaction_orders_table()
     con = get_connection()
@@ -623,7 +622,7 @@ def retry_automatic_orders(context_id: int) -> dict:
         rows = [dict(r) for r in con.execute(
             "SELECT * FROM pp_reaction_orders WHERE context_id=? AND status='open' "
             "AND assigned_runs<top_level_runs AND (source_kind='manufacturing' OR "
-            "(recurring_interval_days>0 AND (recurring_next_at<=? OR recurring_error IS NOT NULL))) "
+            "recurring_error IS NOT NULL OR (recurring_interval_days>0 AND recurring_next_at<=?)) "
             "ORDER BY priority DESC,id", (context_id, _time.time())).fetchall()]
     finally:
         con.close()
@@ -641,8 +640,11 @@ def retry_automatic_orders(context_id: int) -> dict:
                     nxt = float(nxt or _time.time())
                     while nxt <= _time.time():
                         nxt += days * 86400
+                complete = current["assigned_runs"] >= current["top_level_runs"]
+                error = None if complete else "Not enough free reaction slots to assign the whole order."
                 con.execute("UPDATE pp_reaction_orders SET source_state=NULL,source_message=NULL,"
-                            "recurring_error=NULL,recurring_next_at=? WHERE id=?", (nxt, order["id"]))
+                            "recurring_error=?,recurring_next_at=? WHERE id=?",
+                            (error, nxt, order["id"]))
                 con.commit()
             finally:
                 con.close()
@@ -840,18 +842,23 @@ def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: in
     loaded = _load_goo_and_reached(context_id)
     node = loaded[1].get(order["type_id"]) if loaded else None
     if not node or node.get("via") is None:
+        _queue_order_error(order_id, "This product isn't reachable right now — check priced materials")
         raise HTTPException(status_code=400, detail="This product isn't reachable right now — check priced materials")
     reached, types = loaded[1], loaded[4]
 
     result = _allocate_and_insert(context_id, order["type_id"], order["name"], node, reached, types,
                                    runs_to_assign, order_id)
     if result["runs_assigned"] <= 0:
-        raise HTTPException(status_code=400, detail=result.get("error") or "No free reaction slots right now")
+        detail = result.get("error") or "No free reaction slots right now"
+        _queue_order_error(order_id, detail)
+        raise HTTPException(status_code=400, detail=detail)
 
     con = get_connection()
     try:
-        con.execute("UPDATE pp_reaction_orders SET assigned_runs = assigned_runs + ? WHERE id=?",
-                     (result["runs_assigned"], order_id))
+        remaining_after = runs_to_assign - result["runs_assigned"]
+        error = "Not enough free reaction slots to assign the whole order." if remaining_after > 0 else None
+        con.execute("UPDATE pp_reaction_orders SET assigned_runs = assigned_runs + ?, recurring_error=? WHERE id=?",
+                    (result["runs_assigned"], error, order_id))
         if order.get("source_kind") == "manufacturing":
             con.execute("UPDATE pp_reaction_orders SET source_state=NULL,source_message=NULL WHERE id=?",
                         (order_id,))
@@ -861,6 +868,16 @@ def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: in
         con.close()
     _invalidate_dashboard_cache(context_id)
     return {"order": order, "runs_assigned": result["runs_assigned"], "characters": result["characters"]}
+
+
+def _queue_order_error(order_id: int, detail: str) -> None:
+    """Mark a failed assignment for priority-ordered retry when capacity changes."""
+    con = get_connection()
+    try:
+        con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?", (detail, order_id))
+        con.commit()
+    finally:
+        con.close()
 
 
 @router.delete("/api/reactions/orders/{order_id}/assignments")
@@ -899,6 +916,9 @@ def clear_reaction_order_assignments(order_id: int, context_id: int = Depends(re
                     "running_cleared": 0, "order": _order_row(con, order_id)}
         _release_order_slots(con, order_id, context_id)
         give_back_order_runs(con, rows)
+        # Clearing is the manual pause override. Without this, the queued-error marker would make
+        # the next ESI refresh immediately reclaim the slots the user just deliberately freed.
+        con.execute("UPDATE pp_reaction_orders SET recurring_error=NULL WHERE id=?", (order_id,))
         con.commit()
         after = _order_row(con, order_id)
     finally:
@@ -1065,7 +1085,7 @@ def set_reaction_order_status(order_id: int, req: OrderStatusRequest, context_id
             next_at = float(current.get("recurring_next_at") or _time.time())
             while next_at <= _time.time():
                 next_at += interval
-            con.execute("UPDATE pp_reaction_orders SET assigned_runs=0, recurring_next_at=?, "
+            con.execute("UPDATE pp_reaction_orders SET assigned_runs=0, recurring_next_at=?, recurring_error=NULL, "
                         "status='open' WHERE id=?", (next_at, order_id))
         else:
             con.execute("UPDATE pp_reaction_orders SET status=? WHERE id=?", (req.status, order_id))
@@ -1074,7 +1094,8 @@ def set_reaction_order_status(order_id: int, req: OrderStatusRequest, context_id
     finally:
         con.close()
     _invalidate_dashboard_cache(context_id)
-    return {"order": order, "freed_slots": freed}
+    recovery = retry_automatic_orders(context_id) if freed else {"attempted": 0, "assigned": [], "blocked": []}
+    return {"order": order, "freed_slots": freed, "automatic_recovery": recovery}
 
 
 @router.delete("/api/reactions/orders/{order_id}")

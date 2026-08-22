@@ -2829,6 +2829,10 @@ def unassign_all_reactions(context_id: int = Depends(require_context)):
             con.execute(f"DELETE FROM pp_reaction_assignments WHERE character_id IN ({placeholders})",
                         char_ids)
             orders_reset = give_back_order_runs(con, rows)
+            if orders_reset:
+                marks = ",".join("?" * len(orders_reset))
+                con.execute(f"UPDATE pp_reaction_orders SET recurring_error=NULL WHERE id IN ({marks})",
+                            orders_reset)
             con.commit()
     finally:
         con.close()

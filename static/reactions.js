@@ -3497,7 +3497,7 @@ function _renderRxOrderDetail(data) {
   const remaining = o.top_level_runs - o.assigned_runs;
   const recurringBlocked = o.recurring_error ? `
     <div class="rx-reconnect-note" style="margin-top:10px">
-      <b>⚠ This recurring batch could not be assigned automatically.</b><br>${_esc(o.recurring_error)}
+      <b>⚠ This order is queued until capacity is available.</b><br>${_esc(o.recurring_error)}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
         <button onclick="_rxRecurringOrderAction(${o.id}, 'retry')">Retry now</button>
         <button class="pp-add-btn" onclick="_rxRecurringOrderAction(${o.id}, 'skip')">Skip this cycle</button>

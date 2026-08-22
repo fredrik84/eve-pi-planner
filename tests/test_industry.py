@@ -3152,8 +3152,8 @@ def test_phase5_recovers_and_links_shared_production_work():
     retry = inspect.getsource(reaction_orders.retry_automatic_orders)
     check("automatic recovery is priority ordered",
           "ORDER BY priority DESC" in retry and "assign_reaction_order" in retry)
-    check("one-off customer orders remain manual",
-          "source_kind='manufacturing'" in retry and "recurring_interval_days>0" in retry)
+    check("failed customer orders join automatic priority recovery",
+          "recurring_error IS NOT NULL" in retry and "ORDER BY priority DESC" in retry)
     check("missing formulas and capacity are distinct decisions",
           reaction_orders._automatic_block_state("No free reaction slots right now") == "capacity_blocked"
           and reaction_orders._automatic_block_state("Formula is missing") == "missing_formula")
