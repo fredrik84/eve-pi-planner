@@ -1,12 +1,18 @@
-# Production phases: Phase 5 and manual acceptance protocol
+# Production phases: current dev acceptance protocol
 
 This is the click-by-click acceptance check for the shared Reactions and Manufacturing workflow.
-It tests what a player sees on dev; it is not a substitute for the automated suites.
+It tests what a player sees on dev after the 2026-08-22 repair round. Pure functional behavior is
+owned by the automated suites; the tester should primarily judge flow, clarity, wording, and visual
+design, while recording any visible contradiction the suites failed to catch.
+
+**Current revision:** commit `2f277de` or newer on `dev`.
 
 ## Contents
 
 - [Phase 5 summary](#phase-5-summary) — the proposed final orchestration and cleanup phase
 - [Before testing](#before-testing) — account, ESI, formula, and evidence setup
+- [Start from a clean test state](#start-from-a-clean-test-state) — remove disposable work safely
+- [Settings acceptance](#settings-acceptance) — inventory, structures, markets, and Build Rules
 - [Phase 1 — task-first pages](#phase-1--task-first-pages) — layout and primary flows
 - [Phase 2 — automatic planning](#phase-2--automatic-planning) — cadence, recurring work, warnings, and parity
 - [Phase 3 — Manufacturing hand-off](#phase-3--manufacturing-hand-off) — one build creating and maintaining reaction work
@@ -62,7 +68,73 @@ job and should only be run when that is acceptable. For every failure, record th
 the time, expected result, observed result, and a screenshot. Keep the browser console open only if
 you are comfortable doing so; a visible user-facing failure is enough to report the bug.
 
+### Automated gate already passed
+
+Before this revision was published, the complete Reactions suite and all 1,130 Manufacturing checks
+passed. Those suites cover the arithmetic and state invariants behind this protocol, including:
+
+- preview material cost matching the stock-netted shopping list and total cost composition;
+- PostgreSQL-safe Manufacturing plan loading (the reported HTTP 500 path);
+- automatic first-cycle assignment, capacity warnings, priority recovery, and released-slot reuse;
+- weekly cadence fallback, run preservation, formula caps, and Balanced/Fastest allocation branches;
+- linked-order aggregation, idempotency, demand growth/shrink, deletion cleanup, and protection of
+  ESI-running work;
+- slot arithmetic and the rule that no character is assigned beyond its real capacity.
+
+Do not spend acceptance time recomputing those internals unless the UI presents contradictory
+numbers. The clicks below verify that the proven behavior is actually understandable and reachable.
+
+## Start from a clean test state
+
+Do not clear or delete anything that is running in EVE merely to reset this protocol.
+
+1. Refresh ESI jobs from each Overview page and wait for the result.
+2. In **Manufacturing → Overview**, remove disposable test builds whose work is still pending. Keep
+   any build that owns a running reaction until P3-5, or use a new uniquely named test build.
+3. In **Reactions → Customer orders**, cancel/delete disposable standalone orders. Use **Clear
+   planned work** only on pending work you deliberately want returned to the queue; linked
+   Manufacturing demand may be assigned again automatically while its source build still exists.
+4. Return to **Reactions → Overview** and record total slots and used slots per character. Confirm no
+   character starts above its displayed maximum. If one does, stop and report the order IDs before
+   running the rest—do not repeatedly clear/reassign it.
+5. Use unique labels (`Protocol R`, `Protocol M1`, `Protocol M2`) so new work cannot be confused with
+   old customer or Manufacturing demand.
+
+The protocol does not require an empty production account. It requires a known baseline and enough
+free capacity for the small cases; blocked-capacity tests intentionally use the remaining capacity.
+
+## Settings acceptance
+
+### S1 — Blueprints, structures, markets, and Build Rules are distinct jobs
+
+1. Open **Settings → Blueprints & formulas**. Locate both the ESI inventory action and the paste
+   input without opening another settings page. Paste a small valid EVE inventory sample, review its
+   feedback, then cancel or save intentionally.
+2. Open **Structures & markets**. Confirm structure configuration, rates, and market selection read
+   as separate groups. Change no live value unless intended.
+3. Open **Build rules**. Confirm Materials/formulas inventory is not duplicated here; this page
+   should describe production decisions, including reaction policy, job length, and Production pace.
+4. Reopen each page once to judge whether its purpose and primary action are obvious without reading
+   a wall of helper text.
+
+Pass when ESI and paste inventory are both easy to find, fields are visually separated, Markets
+retains its clear layout, structure rates have an understandable owner, and Build Rules does not
+pretend to be a second inventory page. Record confusing wording/layout as design feedback even if
+every control works.
+
 ## Phase 1 — task-first pages
+
+### P1-R0 — reaction cards stay compact and their controls remain usable
+
+1. Open **Reactions → Overview** with at least one character showing more queued cards than fit in
+   its initial row.
+2. Inspect the compact overflow count (for example **+2**) before and after expanding it.
+3. On a pending card, inspect **Mark as done** and **Remove** at desktop width and a narrow/mobile
+   width. Compare the **More** menu styling with Manufacturing.
+
+Pass when queued work does not create a mostly empty second character row, the overflow count is not
+covered by action buttons, Remove is aligned with its control group rather than floating vertically,
+and Reactions uses the same More-menu pattern as Manufacturing.
 
 ### P1-R1 — Reactions keeps decisions and capacity visible
 
@@ -87,6 +159,16 @@ action and after reload. The More popup must not remain stuck on screen.
 Pass when the modal closes, **Overview** is selected, a success message appears, and the new work is
 visible without another navigation click. The button must not remain on `Creating…`.
 
+### P1-R3 — order review and shopping list tell one cost story
+
+1. Create a preview for R1 while the account has some of its inputs in pasted or ESI inventory.
+2. Record **Cost to produce → Material cost**, **Total**, and the shopping-list material total.
+3. Inspect any stock-covered rows and their quantities; do not submit the order yet.
+
+Pass when the material cost equals the stock-netted shopping-list total. Total may additionally
+include named job costs, but inventory already owned must not appear as unexplained shopping spend.
+If numbers differ, record all three plus whether the stock came from ESI or paste.
+
 ### P1-M1 — Manufacturing keeps decisions and capacity visible
 
 1. Click **Manufacturing → Overview**.
@@ -96,7 +178,9 @@ visible without another navigation click. The button must not remain on `Creatin
 3. Click **More**, then **Refresh ESI jobs** when that action is present.
 4. Reload the browser once.
 
-Pass when the metrics/summary remain at the top and **More** closes after use and reload.
+Pass when the metrics/summary remain at the top and **More** closes after use and reload. Opening
+Manufacturing itself must return normally—an HTTP 500 is an immediate failure with the time and
+account/build label recorded.
 
 ### P1-M2 — adding Manufacturing work returns to Overview
 
@@ -107,6 +191,18 @@ Pass when the metrics/summary remain at the top and **More** closes after use an
 
 Pass when the modal closes, **Overview** is selected, and the new build appears in **Your build**
 without an extra click.
+
+### P1-M3 — the Manufacturing planner is readable and internally consistent
+
+1. Open **Add manufacturing work**, select M1, and enter a small quantity.
+2. Confirm **Materials from** and **Deliver output to** align as one understandable input group.
+3. Open **Worth building instead?**, move its control, and select one offered component if present.
+4. Open **Change** for composites/intermediates, then close Build Rules and return to the planner.
+5. Preview once with margin **0%**, then with **10%**.
+
+Pass when controls react visibly and are clickable; Build Rules appears above—not behind—the Add
+work modal; the return path preserves the planner; and the suggested sell price equals net cost at
+0% and net cost plus 10% at 10%. Record both displayed numbers if it differs.
 
 ## Phase 2 — automatic planning
 
@@ -164,6 +260,19 @@ Pass when More does not remain sticky, the chosen page does not acquire a duplic
 the status refresh does not hide the top metrics/summary. Manufacturing need not expose reaction-only
 controls such as recurring customer cycles.
 
+### P2-R5 — production pace has two predictable modes
+
+1. Open **Settings → Build rules → Production pace**, choose **Balanced**, and save.
+2. Create enough R1 work to benefit from parallelism but remain within the account's capacity.
+3. On **Reactions → Overview**, record characters used, slots used, runs per job, and longest job.
+4. Clear only that order's pending planned work, choose **Fastest**, save, and reassign the same work.
+5. Record the same four values, then restore **Balanced** unless Fastest is your real preference.
+
+Pass when Balanced uses the fewest slots needed to stay within the configured cadence—seven runs
+must not fan out into many one-run slots—while Fastest may use useful spare capacity to shorten
+delivery. Neither mode may exceed any character's displayed slot maximum, duplicate total demand,
+or make a job longer than the configured ceiling without an explicit explanation.
+
 ## Phase 3 — Manufacturing hand-off
 
 ### P3-1 — a ready reaction becomes one linked Reactions order
@@ -206,6 +315,8 @@ floor instead of deleting or pretending to undo the committed runs.
 3. Check **Reactions → Customer orders** and **Overview**.
 
 Pass when the pending linked order is cancelled/closed and its pending slot reservation is released.
+Refresh once more and pass only if the removed demand stays gone; it must not multiply, reappear, or
+push a character above capacity during reconciliation.
 
 ### P3-5 — running work is never silently erased (**LIVE EVE ACTION**)
 
@@ -239,6 +350,15 @@ both owners remain attributable.
 Pass when the same shared order remains for owner B, its target/share decreases correctly, and no
 new duplicate order appears. Remove owner B only after recording this result; the final removal
 should close pending shared work and free its reservations.
+
+### P4-2b — deleting several plans never amplifies reaction work
+
+1. Record total used reaction slots and the linked order's required/assigned runs.
+2. Remove two disposable Manufacturing owners one after the other.
+3. Wait for both pages to refresh, then reload the browser and refresh ESI jobs once.
+
+Pass when used slots stay at or below account capacity, each removed share is subtracted once, and
+remaining linked demand is neither duplicated nor distributed into more work than existed before.
 
 ### P4-3 — priority decides who receives scarce capacity
 
@@ -283,7 +403,34 @@ Copy one row per test into the issue or testing note:
 
 | Test | Pass / fail | Build or order names/IDs | Observed result | Screenshot/time |
 |---|---|---|---|---|
+| S1 |  |  |  |  |
+| P1-R0 |  |  |  |  |
 | P1-R1 |  |  |  |  |
+| P1-R2 |  |  |  |  |
+| P1-R3 |  |  |  |  |
+| P1-M1 |  |  |  |  |
+| P1-M2 |  |  |  |  |
+| P1-M3 |  |  |  |  |
+| P2-R1 |  |  |  |  |
+| P2-R2 |  |  |  |  |
+| P2-R3 |  |  |  |  |
+| P2-R4 |  |  |  |  |
+| P2-R5 |  |  |  |  |
+| P2-M1 |  |  |  |  |
+| P3-1 |  |  |  |  |
+| P3-2 |  |  |  |  |
+| P3-3 |  |  |  |  |
+| P3-4 |  |  |  |  |
+| P3-5 |  |  |  |  |
+| P4-1 |  |  |  |  |
+| P4-2 |  |  |  |  |
+| P4-2b |  |  |  |  |
+| P4-3 |  |  |  |  |
+| P4-4 |  |  |  |  |
+| P5 |  |  |  |  |
+
+Use `NOT RUN` rather than assuming a case passed. A fresh acceptance round is complete only when
+every non-live row has an explicit result; P3-5 may be `SKIPPED — no safe live job`.
 
 When a number differs, record both numbers and where each was shown—for example, `Cost to produce:
 358m; Shopping list: 260.95m`—plus whether pasted/ESI inventory was present. That distinction lets
