@@ -710,9 +710,10 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   color: var(--clr-text-dim); background: #12161f; border: 1px solid var(--clr-border);
   border-radius: 4px; padding: 2px 4px; white-space: nowrap;
 }
-/* Planned cards also have Installed/Complete and Clear in the top-right. Put duration in the free
-   centre instead of underneath those controls; running cards keep their normal right-hand timer. */
-.rx-slot-planned-time { left: 50%; right: auto; transform: translateX(-50%); }
+/* Planned cards also have Installed/Complete and Clear across the top-right. Their top-left is free:
+   the only badge that uses it is queued `+N`, and queued cards deliberately hide runtime. Running
+   imported jobs keep their normal right-hand timer, where they have no competing controls. */
+.rx-slot-planned-time { left: -5px; right: auto; transform: none; }
 .rx-slot-empty { border-style: dashed; opacity: 0.45; cursor: pointer; transition: opacity 0.15s, border-color 0.15s; }
 .rx-slot-empty:hover { opacity: 0.85; border-color: #5aa9e6; }
 .rx-slot-pending {
