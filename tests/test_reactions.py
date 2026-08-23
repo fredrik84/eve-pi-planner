@@ -380,6 +380,8 @@ def test_reactions_phase1_is_task_first() -> bool:
     ok &= check("Valued at <b>buy orders</b>" not in js and "Mixed basis: jobs before" not in js
                 and "Full cost adds <b>" not in js,
                 "Overview metrics do not trail non-actionable accounting prose")
+    ok &= check("Copy all produced units" not in js and "_rxCopyProducedUnits" not in js,
+                "Overview does not offer a misleading export of in-flight reaction outputs")
     return ok
 
 

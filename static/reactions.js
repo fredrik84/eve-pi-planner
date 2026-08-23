@@ -406,26 +406,6 @@ function _rxCopyOrderMaterials(btn) {
   _rxCopyText(_rxLastOrderMaterials.map(m => `${m.name}\t${m.quantity}`).join('\n'), btn);
 }
 
-// "Copy all produced units" — the end result of every currently-running reaction, totalled per
-// product across all characters (Σ runs × output_qty per run), as a "name <tab> quantity" TSV
-// ready to paste into a multibuy/contract. Reads the last-rendered dashboard's running jobs.
-// EXCLUDES intermediate reactions consumed by another running job (`j.consumed`, set server-side):
-// their output feeds the next tier on-site, so pricing them would double-count value already in the
-// final product — this is the "end result", not every work-in-progress unit.
-function _rxCopyProducedUnits(btn) {
-  const running = (_rxLastDashboardData && _rxLastDashboardData.running) || [];
-  const byProduct = new Map();
-  for (const j of running) {
-    if (j.consumed) continue;
-    const qty = (j.runs || 0) * (j.output_qty || 0);
-    if (!qty) continue;
-    const name = j.name || _rxProductName(j.product_type_id);
-    byProduct.set(name, (byProduct.get(name) || 0) + qty);
-  }
-  const rows = [...byProduct.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  _rxCopyText(rows.map(([name, qty]) => `${name}\t${Math.round(qty)}`).join('\n'), btn);
-}
-
 // Best-effort name lookup via whatever the opportunity list has already loaded — falls back to
 // the raw type_id (no dedicated type-name endpoint is worth adding just for this display).
 function _rxProductName(type_id) {
@@ -1499,12 +1479,6 @@ function _renderReactionsDashboard(data) {
   const progressBar = data.running_progress_pct != null
     ? `<div class="rx-prog-wrap" style="margin-top:10px">${_rxProgressBar(data.running_progress_pct, 'Reactions complete')}</div>`
     : '';
-  // "Copy all produced units" — the total end product of everything currently running, ready to
-  // paste into a multibuy/contract. Only shown when something with a valued output is running.
-  const hasProduced = (data.running || []).some(j => !j.consumed && (j.runs || 0) * (j.output_qty || 0) > 0);
-  const producedBtn = hasProduced
-    ? `<div style="margin-top:10px"><button class="pp-add-btn" onclick="_rxCopyProducedUnits(this)" title="Final products only — intermediate reactions consumed by another running job are excluded">Copy all produced units</button></div>`
-    : '';
   // Lifetime ledger row — actual value PRODUCED by finished reactions (turnover) and net profit,
   // accumulated from real completions (forward-only). Distinct from the "Expected" tiles above,
   // which are the committed/in-flight pipeline. Shown once the ledger has anything in it.
@@ -1517,7 +1491,7 @@ function _renderReactionsDashboard(data) {
         ${_dashTile(_rxLifetime.jobs.toLocaleString(), 'Reactions completed')}
       </div>`;
   }
-  if (metricsEl) metricsEl.innerHTML = overviewTiles + progressBar + producedBtn + lifetimeTiles;
+  if (metricsEl) metricsEl.innerHTML = overviewTiles + progressBar + lifetimeTiles;
 
   // Characters whose token lacks the structure-read scope AND have a job running (so an unresolved
   // "Structure #<id>" is actually visible) — one re-authorise adds the scope and resolves the names.
