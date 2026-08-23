@@ -1484,30 +1484,6 @@ function _renderReactionsDashboard(data) {
   const totalSlots = reactionPool ? reactionPool.total : data.total_slots;
   const freeSlots = reactionPool ? reactionPool.available : data.free_slots;
   const usedSlots = totalSlots - freeSlots;
-  // An order with no agreed price costs real ISK but brings in a revenue the tool was never told,
-  // so both value tiles understate. Say so under them rather than let a confident-looking number
-  // stand for a figure nobody has supplied.
-  const unpriced = data.unpriced_orders || 0;
-  const unpricedNote = unpriced
-    ? `${unpriced} order${unpriced === 1 ? '' : 's'} priced at <b>market</b>, not at the invoice —
-       <button type="button" class="stat-footnote-link" onclick="_rxGoToUnpricedOrder()">set
-       ${unpriced === 1 ? 'its price' : 'their prices'}</button> for the real figure.`
-    : '';
-  // Two different costs, and the difference is the point. "Materials committed" is the priced
-  // shopping list — what you go and buy — and it is NOT what profit is netted against; the full
-  // cost adds job install fees, export freight and courier collateral, which are real ISK a
-  // shopping list never shows. Reporting profit against the shopping list alone (what this did
-  // until 2026-08-14) flattered every plan by exactly those three. The extras line says what the
-  // gap is made of rather than leaving a reader to wonder why two cost tiles disagree.
-  const costExtras = (data.pending_total_cost || 0) - (data.pending_isk_committed || 0);
-  const costNote = costExtras > 0
-    ? `Full cost adds <b>${_fmtIsk(data.pending_job_fees)}</b> fees,
-       <b>${_fmtIsk(data.pending_freight)}</b> freight, <b>${_fmtIsk(data.pending_collateral)}</b>
-       collateral.`
-    : '';
-  // Output and profit are quoted at BUY orders (instant sell) — what you can actually get today.
-  // See CLAUDE.md: a reaction good's sell-order price is not achievable profit.
-  const sellCtx = (data.pending_sell_order_value || 0) > (data.pending_output_value || 0);
   const overviewTiles = `<div class="an-stats">
       ${_dashTile(_fmtIsk(data.pending_isk_committed), 'Materials committed')}
       ${_dashTile(_fmtIsk(data.pending_total_cost), 'Full cost (incl. fees, freight, collateral)')}
@@ -1517,10 +1493,7 @@ function _renderReactionsDashboard(data) {
       ${_dashTile(`${usedSlots}<span class="an-of"> / ${totalSlots}</span>`, 'Slots used')}
       ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
       ${_dashTile(timeLeftVal, timeLeftLbl)}
-    </div>${_rxFootnote([
-      `Valued at <b>buy orders</b> — what you get today${sellCtx ? `; ${_fmtIsk(data.pending_sell_order_value)} at sell orders if you list and wait` : ''}.`,
-      costNote, unpricedNote,
-    ])}`;
+    </div>`;
 
   // Overall completion of everything currently running — a "total complete" bar under the tiles.
   const progressBar = data.running_progress_pct != null
@@ -1538,19 +1511,11 @@ function _renderReactionsDashboard(data) {
   let lifetimeTiles = '';
   if (_rxLifetime && _rxLifetime.jobs > 0) {
     const since = _rxLifetime.since ? new Date(_rxLifetime.since * 1000).toLocaleDateString() : null;
-    // The ledger is forward-only — a completion is recorded once and there is no past market price
-    // to re-derive — so jobs finished before 2026-08-14 are still valued at sell orders against
-    // materials and job fees, while everything since is buy-priced against the full cost base.
-    // Both regimes live in one total. Healing as new jobs land is the right behaviour; rendering
-    // the mixture with no disclosure is not, so the tiles say so rather than reading as one number.
     lifetimeTiles = `<div class="an-stats" style="margin-top:10px">
         ${_dashTile(_fmtIsk(_rxLifetime.turnover), 'Lifetime turnover' + (since ? ` · since ${since}` : ''))}
         ${_dashTile(_fmtIsk(_rxLifetime.net_profit), 'Lifetime net profit', 'an-ok')}
         ${_dashTile(_rxLifetime.jobs.toLocaleString(), 'Reactions completed')}
-      </div>
-      ${_rxFootnote(['Mixed basis: jobs before 14 Aug 2026 at sell orders without freight or ' +
-        'collateral, since then at buy orders against full cost. Forward-only, so it settles as ' +
-        'new jobs complete.'])}`;
+      </div>`;
   }
   if (metricsEl) metricsEl.innerHTML = overviewTiles + progressBar + producedBtn + lifetimeTiles;
 
@@ -3005,27 +2970,6 @@ function _rxLoadOrders() {
 // is history, and nagging about it is asking for an edit to a closed record.
 function _rxIsUnpriced(o) {
   return o.status === 'open' && o.source_kind !== 'manufacturing' && !(o.client_price > 0);
-}
-
-// Where "set a price on it" actually goes. One unpriced order is the common case and deserves the
-// direct route — its own detail modal, where the price field is — rather than dropping the reader
-// at a tab to search. Several means there is no single destination, so it switches to the Customer
-// orders tab, where the rows now say which ones.
-//
-// Orders may not be loaded yet (the overview tab renders before Orders' own tab is ever selected),
-// so this fetches first and then decides. Nothing here assumes the count in the footnote and the
-// client-side list agree — the footnote counts orders in the PLAN, this reads every order — so the
-// single-order shortcut is taken only when this list independently finds exactly one.
-function _rxGoToUnpricedOrder() {
-  const go = () => {
-    const unpriced = (_rxOrders || []).filter(_rxIsUnpriced);
-    if (unpriced.length === 1) { _rxOpenOrderDetail(unpriced[0].id); return; }
-    ppSelectTab('rx', 'orders');
-    const panel = document.getElementById('rxOrdersPanel');
-    if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-  if ((_rxOrders || []).length) { go(); return; }
-  _rxLoadOrders().then(go).catch(go);   // a failed load still switches tabs, which then shows the error
 }
 
 function _rxOrderBarHtml(o) {

@@ -377,6 +377,9 @@ def test_reactions_phase1_is_task_first() -> bool:
     ok &= check('capacity_contract(reservation_model="reserved"' in open(
                     "app/reactions/jobs.py", encoding="utf-8").read(),
                 "Reactions publishes the shared capacity contract as reserved capacity")
+    ok &= check("Valued at <b>buy orders</b>" not in js and "Mixed basis: jobs before" not in js
+                and "Full cost adds <b>" not in js,
+                "Overview metrics do not trail non-actionable accounting prose")
     return ok
 
 
