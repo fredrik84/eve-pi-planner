@@ -130,7 +130,7 @@ every control works.
    its initial row.
 2. Under **Work batches**, match a `C…` customer key and an `M…` Manufacturing key to the same keys
    on their slot cards. For a shared Manufacturing batch, confirm the legend says how many builds
-   own it and its hover text names them.
+   own it. Click both kinds of key and confirm the detail modal identifies what each contains.
 3. Inspect the compact overflow count (for example **+2**) before and after expanding it.
 4. On a pending card, inspect **Mark as done** and **Remove** at desktop width and a narrow/mobile
    width. Compare the **More** menu styling with Manufacturing.
@@ -139,6 +139,8 @@ Pass when queued work does not create a mostly empty second character row, the o
 covered by action buttons, Remove is aligned with its control group rather than floating vertically,
 Reactions uses the same More-menu pattern as Manufacturing, and every order-owned card can be mapped
 to its customer or Manufacturing plan from the visible legend without opening cards one by one.
+In Build Pipeline, mixed job sizes must read count-first (for example `5 jobs · 1×107 runs + 4×1
+run`), and marking a card installed must not put its runtime behind Installed/Complete or Clear.
 
 ### P1-R1 — Reactions keeps decisions and capacity visible
 

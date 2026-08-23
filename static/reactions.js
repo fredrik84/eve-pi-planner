@@ -818,17 +818,23 @@ function _rxMarkOfGroup(characterId, typeId, tier) {
   return rows.length ? _rxMarkOf(rows) : 'none';
 }
 
-// "95 runs × 3 jobs" — the number you TYPE, and how many times you type it. Never the group total:
-// "×285  3 jobs" reads as three jobs of 285 runs, i.e. three times the work really being asked for.
-// A group whose jobs are not all the same size says so rather than averaging them away.
+// Plain-language job instructions. Count first, then what to type: `5 jobs · 1×107 runs + 4×1 run`
+// cannot be mistaken for 107 multiplied by one plan plus another plan. A uniform group gets the
+// shorter `5 jobs · 107 runs each` form.
 function _rxPerJobLabel(rows) {
   if (!rows.length) return '';
   const bySize = new Map();
   rows.forEach(r => bySize.set(r.runs, (bySize.get(r.runs) || 0) + 1));
-  const parts = [...bySize.entries()].sort((a, b) => b[0] - a[0])
-    .map(([runs, n]) => `${runs.toLocaleString()}\u00a0×\u00a0${n}`);
   const jobs = rows.length;
-  return `${parts.join(' + ')}\u00a0job${jobs === 1 ? '' : 's'}`;
+  const head = `${jobs}\u00a0job${jobs === 1 ? '' : 's'}`;
+  if (bySize.size === 1) {
+    const runs = [...bySize.keys()][0];
+    return jobs === 1 ? `${head} · ${runs.toLocaleString()}\u00a0runs`
+      : `${head} · ${runs.toLocaleString()}\u00a0runs each`;
+  }
+  const parts = [...bySize.entries()].sort((a, b) => b[0] - a[0])
+    .map(([runs, n]) => `${n}×${runs.toLocaleString()}\u00a0run${runs === 1 ? '' : 's'}`);
+  return `${head} · ${parts.join(' + ')}`;
 }
 
 // The stage list drawn the way Manufacturing draws its build pipeline: columns are stages, rows
@@ -1333,7 +1339,7 @@ function _renderReactionsDashboard(data) {
       // the plan never said. Same corner the running square puts its remaining time in.
       const plannedH = a.hours || 0;
       const durCorner = plannedH > 0
-        ? `<div class="rx-slot-timer-corner" title="Runs for ${_esc(_fmtHours(plannedH))} once installed">${_esc(_fmtHours(plannedH))}</div>`
+        ? `<div class="rx-slot-timer-corner rx-slot-planned-time" title="Runs for ${_esc(_fmtHours(plannedH))} once installed">${_esc(_fmtHours(plannedH))}</div>`
         : '';
       // ...and when it runs PAST the window the player set. The cadence is a stated target, not a
       // hard ceiling: a stage with more work than its free reactors can turn over inside the week
@@ -1582,10 +1588,10 @@ function _renderReactionsDashboard(data) {
   }));
   const batchLegend = !workBatches.size ? '' : `<div class="rx-work-batches">
     <span class="rx-work-batches-title">Work batches</span>
-    ${[...workBatches.values()].map(source => `<span class="rx-work-batch" title="${_esc(source.source_detail || source.source_display)}">
+    ${[...workBatches.values()].map(source => `<button type="button" class="rx-work-batch" title="Open ${_esc(source.source_detail || source.source_display)}" onclick="_rxOpenOrderDetail(${source.order_id})">
       <b class="rx-work-key rx-order-slot-${source.source_kind === 'manufacturing' ? 'manufacturing' : 'customer'}">${_esc(source.source_key)}</b>
       <span>${_esc(source.source_display)}</span>
-    </span>`).join('')}
+    </button>`).join('')}
   </div>`;
   const capacityHtml = `<div class="rx-capacity-section">
     <div class="rx-capacity-title">Characters &amp; capacity <span class="pp-card-hint">${usedSlots} of ${totalSlots} slots in use</span></div>

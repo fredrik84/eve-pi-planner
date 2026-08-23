@@ -710,6 +710,9 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   color: var(--clr-text-dim); background: #12161f; border: 1px solid var(--clr-border);
   border-radius: 4px; padding: 2px 4px; white-space: nowrap;
 }
+/* Planned cards also have Installed/Complete and Clear in the top-right. Put duration in the free
+   centre instead of underneath those controls; running cards keep their normal right-hand timer. */
+.rx-slot-planned-time { left: 50%; right: auto; transform: translateX(-50%); }
 .rx-slot-empty { border-style: dashed; opacity: 0.45; cursor: pointer; transition: opacity 0.15s, border-color 0.15s; }
 .rx-slot-empty:hover { opacity: 0.85; border-color: #5aa9e6; }
 .rx-slot-pending {
@@ -1024,7 +1027,11 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
   font-size: 11px;
 }
 .rx-work-batches-title { color: var(--clr-text-dim); font-weight: 600; margin-right: 2px; }
-.rx-work-batch { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--clr-text-soft); }
+.rx-work-batch {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--clr-text-soft);
+  background: none; border: 0; padding: 1px; font: inherit; cursor: pointer; text-align: left;
+}
+.rx-work-batch:hover span { color: var(--clr-text); text-decoration: underline; }
 .rx-work-key { display: inline-block; border: 1px solid; border-radius: 3px; padding: 2px 4px; line-height: 1; }
 
 /* Reactions local/alliance market setup card (local_market flag) */

@@ -3310,6 +3310,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                 order_meta[oid] = {"client_price": r["client_price"],
                                    "top_level_runs": r["top_level_runs"],
                                    "source_kind": r["source_kind"], "source_key": key,
+                                   "order_id": oid,
                                    "source_display": display, "source_detail": detail,
                                    "source_count": len(owners)}
         # output_type_id -> cycle hours, so a stored assignment (which only keeps `runs`, not its

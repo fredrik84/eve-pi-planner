@@ -560,6 +560,15 @@ def test_order_owned_slots_have_compact_source_keys_and_a_legend() -> bool:
                 "the full owner list remains available without occupying the card")
     ok &= check("(last.a.order_id || null) === (a.order_id || null)" in js,
                 "compact queued cards group by real order identity, never display text")
+    ok &= check('onclick="_rxOpenOrderDetail(${source.order_id})"' in js,
+                "a legend entry opens the existing full order and Manufacturing-owner detail")
+    ok &= check("rx-slot-planned-time" in js and "left: 50%; right: auto" in open(
+        "static/style-layout-admin.css").read(),
+                "planned runtime sits away from the top-right Installed and Clear controls")
+    # Execute the formatting contract through source-level examples: JS is separately syntax-
+    # checked, and these exact phrases pin the unambiguous count-first vocabulary.
+    ok &= check("`${head} · ${parts.join(' + ')}`" in js and "runs each" in js,
+                "pipeline instructions lead with total jobs and describe mixed run sizes plainly")
     return ok
 
 
