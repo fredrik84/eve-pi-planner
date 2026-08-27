@@ -525,7 +525,7 @@ def test_an_order_stops_at_the_character_that_is_not_worth_a_login() -> bool:
 def test_customer_orders_only_claim_cadence_worth_of_capacity() -> bool:
     """A small weekly batch must not occupy every reactor merely because they are free."""
     import inspect
-    from app.reactions.jobs import _compact_hosts, _production_pace
+    from app.reactions.jobs import _compact_hosts, _hosts_for_parallel_jobs, _production_pace
     from app.industry import settings as industry_settings
     hosts = [{"character_id": i, "free_slots": n}
              for i, n in enumerate((10, 10, 10, 5, 5, 5, 5))]
@@ -533,6 +533,10 @@ def test_customer_orders_only_claim_cadence_worth_of_capacity() -> bool:
                "two cadence-sized jobs stay on one character instead of filling the account")
     ok &= check(len(_compact_hosts(hosts, 25, 1)) == 3,
                 "a larger batch adds only the characters needed to hold its cadence layout")
+    ok &= check([h["character_id"] for h in _hosts_for_parallel_jobs(hosts, 7)] == [0],
+                "seven parallel jobs stay together when one ten-slot character can run them")
+    ok &= check([h["character_id"] for h in _hosts_for_parallel_jobs(hosts, 21)] == [0, 1, 2],
+                "another character is added only when the useful jobs exceed current room")
     src = inspect.getsource(__import__('app.reactions.jobs', fromlist=['_allocate_and_insert'])._allocate_and_insert)
     ok &= check('if pace == "fastest" else [1] * len(works)' in src,
                 "Balanced starts compact and only the cadence pass may add jobs")
@@ -546,9 +550,9 @@ def test_customer_orders_only_claim_cadence_worth_of_capacity() -> bool:
                     "unknown or old values fail safe to Balanced")
     finally:
         industry_settings.get_settings = real_get
-    ok &= check('_lean_hosts(hosts) if pace == "fastest"' in src
+    ok &= check('_hosts_for_parallel_jobs(hosts, useful_parallel_jobs)' in src
                 and '_compact_hosts(hosts, wanted_slots, per_chain)' in src,
-                "the allocator has Fastest and compact Balanced branches")
+                "both modes pack their useful job count onto the fewest characters")
     return ok
 
 

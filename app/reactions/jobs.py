@@ -1875,8 +1875,6 @@ def level_product_runs(context_id: int) -> int:
     # is installed, so moving it costs nothing, and a row sitting on a character the packing rule
     # would never have chosen is pure overhead. Rows that are genuinely RUNNING are a different
     # matter and `room` already nets those out.
-    lean_set = {h["character_id"] for h in _lean_hosts(
-        [{"character_id": cid, "free_slots": n} for cid, n in room.items() if n > 0])}
     # Rows per (character, stage) — counted over EVERY row, not just the re-shapeable ones. A
     # frozen row and a customer order's protected top row are excluded from `inner` because this
     # pass may not move them, but they are still lines in the plan holding a reactor. Counting only
@@ -1895,6 +1893,13 @@ def level_product_runs(context_id: int) -> int:
         if int(r["id"]) not in inner_ids:
             excluded_by_char_stage.setdefault(cid, {})[st] = \
                 excluded_by_char_stage.get(cid, {}).get(st, 0) + 1
+
+    planned_stages = {stage for per in rows_by_char_stage.values() for stage in per}
+    planned_peak = max((sum(per.get(stage, 0) for per in rows_by_char_stage.values())
+                        for stage in planned_stages), default=1)
+    lean_set = {h["character_id"] for h in _hosts_for_parallel_jobs(
+        [{"character_id": cid, "free_slots": n} for cid, n in room.items() if n > 0],
+        planned_peak)}
 
     plan: list[tuple] = []          # (product_key, rows, target_runs, [character per job])
     # Jobs this pass has already placed on a character, stage by stage. Reading the ORIGINAL row
@@ -3934,6 +3939,24 @@ def _compact_hosts(hosts: list[dict], wanted_slots: int, per_chain: int) -> list
     return keep
 
 
+def _hosts_for_parallel_jobs(hosts: list[dict], wanted_jobs: int) -> list[dict]:
+    """Roomiest-first hosts needed to hold ``wanted_jobs`` concurrent jobs.
+
+    Character count is not throughput. Once the useful jobs fit on one character, moving the same
+    jobs to more characters buys no time and only adds logins and material moves. Callers must pass
+    the PEAK concurrent load, not the sum of sequential stages: later stages reuse the reactors
+    released by earlier ones.
+    """
+    keep: list[dict] = []
+    room = 0
+    for host in sorted(hosts, key=lambda h: -h["free_slots"]):
+        if room >= max(1, wanted_jobs):
+            break
+        keep.append(host)
+        room += max(0, int(host["free_slots"]))
+    return keep
+
+
 def _production_pace(context_id: int) -> str:
     from app.industry.settings import get_settings
     return "fastest" if get_settings(context_id).get("production_pace") == "fastest" else "balanced"
@@ -4065,9 +4088,23 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
         cadence_jobs.append(_cap_jobs(chain_caps.get(tid), min(run_n, jobs)))
     wanted_slots = sum(cadence_jobs)
     pace = _production_pace(context_id)
-    # Every additional host duplicates the chain's one-job-per-tier floor. Fastest is the explicit
-    # opt-in to the old speed-first behavior; Balanced is intentionally compact.
-    hosts = _lean_hosts(hosts) if pace == "fastest" else _compact_hosts(hosts, wanted_slots, per_chain)
+    # Fastest first decides how many jobs can usefully run AT ONCE, then packs those jobs onto the
+    # fewest characters. Summing the chain here is wrong under the one-slot model: its stages are
+    # sequential and reuse the same reactors. Spreading seven stage-2 jobs over seven characters
+    # is no faster than putting all seven on one 10-slot character.
+    if pace == "fastest":
+        stage_loads: dict[int, int] = {}
+        ranks = tier_ranks(ordered_all)
+        fastest_jobs = [_cap_jobs(chain_caps.get(tid), run_n)
+                        for tid, run_n in zip([t for t, _ in ordered_all] + [type_id], all_runs)]
+        for jobs, stage in zip(fastest_jobs[:-1], ranks):
+            stage_loads[stage] = stage_loads.get(stage, 0) + jobs
+        top_stage = (max(ranks) + 1) if ranks else 0
+        stage_loads[top_stage] = stage_loads.get(top_stage, 0) + fastest_jobs[-1]
+        useful_parallel_jobs = max(stage_loads.values(), default=1)
+        hosts = _hosts_for_parallel_jobs(hosts, useful_parallel_jobs)
+    else:
+        hosts = _compact_hosts(hosts, wanted_slots, per_chain)
 
     # How the order's runs are split across the characters that will run it: PROPORTIONAL to each
     # host's free slots. The roomiest character does the most work, so every host finishes at

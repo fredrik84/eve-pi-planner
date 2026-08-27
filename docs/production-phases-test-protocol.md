@@ -163,7 +163,9 @@ action and after reload. The More popup must not remain stuck on screen.
 6. Click **Create order**.
 
 Pass when the modal closes, **Overview** is selected, a success message appears, and the new work is
-visible without another navigation click. The button must not remain on `Creating…`.
+visible without another navigation click. The button must not remain on `Creating…`. Within each
+stage, the planned jobs must be packed onto the fewest characters whose free slots can run them;
+the same jobs spread across extra characters are not faster.
 
 ### P1-R3 — order review and shopping list tell one cost story
 

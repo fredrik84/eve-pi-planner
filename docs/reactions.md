@@ -350,61 +350,48 @@ two goals genuinely conflict and finishing sooner wins. If it is revisited, the 
 even split but a bound on how far apart hosts may FINISH — pick the hosts whose capacity is
 comparable, split evenly among those, and leave the rest out of the order.
 
-## An order stops at the character not worth a login (`reactions_pack_hosts`)
+## An order uses no more characters than its parallel jobs require
 
 Reported from a live order (#45, 1000 runs of Reinforced Carbon Fiber): stage 1 spread over 5
 characters with two holding ONE job each, stage 2 over **seven** with five holding one each — while
 the characters that already had jobs sat on free reactors. *"To lessen logins we should try and run
 as lean as possible... it's fully possible to not spread the Stage 2 work over all characters."*
 
-**The rule is marginal gain, and it deliberately needs no cadence.** An order's wait is its
-reactor-hours divided by the reactors running them, so a host with `F` free slots added to the `S`
-already committed cuts that wait by `F / (S + F)`. `_lean_hosts` takes hosts roomiest-first while
-that is worth a login (`_WORTH_A_LOGIN`, 20%) and stops at the first one that isn't. It is the same
-reasoning `_fit_chain_slots` already uses to hand slots to tiers, one level up.
+**The rule is useful parallel jobs, not character capacity.** Character identity does not change a
+reaction's duration. The allocator first determines the peak number of jobs that can run at once,
+then `_hosts_for_parallel_jobs` packs those jobs roomiest-first onto the fewest characters. It uses
+the peak stage load rather than adding sequential stages: stage 2 reuses the reactors stage 1
+released. Another character joins only when it provides slots those useful jobs actually need.
 
-On the reported account — three 10-slot characters, four 5-slot ones — the 4th buys 5/35 = 14% and
-the order lands on three:
+On the reported account — three 10-slot characters and four 5-slot ones — seven jobs now land on
+one 10-slot character. Twenty-one genuinely concurrent jobs need all three 10-slot characters:
 
-| chars | reactors | order #45 |
+| useful jobs | characters needed |
 | --- | --- | --- |
-| 7 (before) | 33 | ~12.3 days |
-| **3** | **30** | **~13.5 days** |
-| 1 | 10 | ~41 days |
+| 7 | 1 × 10-slot |
+| 10 | 1 × 10-slot |
+| 21 | 3 × 10-slot |
 
-**Four fewer logins each way for ~1.2 days of a 12-day order.** Note the honest comparison: the
-sprawl over seven was only using 33 of the account's 50 reactors, because the small characters have
-five each — so packing gives up far less speed than the character count suggests.
-
-**Why a relative gain rather than a job-length ceiling.** A duration ceiling needs a number nobody
-has set (`max_reaction_job_days` is `None` by default, deliberately — see TODO 28) and it answers
-the wrong question: "is this job too long" instead of "is this character worth the trip". A relative
-gain needs no unit at all and scales itself — a small order lands on ONE character because the
-second buys nothing, a large one still spreads because every host pulls real weight.
+This packing gives up no speed: the job count and runs per job are unchanged. It only removes
+characters that were hosting work another selected character had slots to run concurrently.
 
 **It also serves "don't buy more formulas".** Every host runs the whole chain and so needs one
 formula of every tier for itself (`formula_concurrency_caps`); fewer hosts is strictly fewer
 formulas the order demands at once.
 
-**The LEVELLER has to obey this too, or the two passes undo each other.** `_lean_hosts` lived only
-in `_allocate_and_insert`, so an order was packed onto three characters at assign time and then
+**The LEVELLER has to obey this too, or the two passes undo each other.** Host packing once lived
+only in `_allocate_and_insert`, so an order was packed at assign time and then
 `level_product_runs` — which re-splits the whole plan on every dashboard load — saw a spare reactor
 on a fourth and put a single job there. Reported while watching the page: *"it did right... but when
 I was looking at it suddenly swapped the 3x7 slots to 3x7 slots + 1x1 slot."*
 
-Step 5b now applies the same test when it places overflow: a character **already in the plan** is a
-login you are making anyway, so its reactors cost nothing extra; a character outside it joins only
-if its room is worth `_WORTH_A_LOGIN` of what the plan can already reach. When the involved
-characters are full that share is 1.0 and it joins immediately — which is the case where spreading
-is genuinely necessary rather than merely available.
+Step 5b now derives the plan's peak concurrent stage load and applies the same roomiest-first
+packing before it places overflow. A new character joins only when the selected characters cannot
+hold that peak.
 
-**Two earlier attempts are recorded because both looked right and did nothing.** The first packed
-hosts until their free slots covered `_useful_slots` — the theoretical most an order could ever use,
-`sum(runs per tier)`, in the thousands for any real order — so every host always cleared it and the
-feature was a no-op on the very order that prompted it. The second required a fixed floor of free
-slots per host, which removed the one-job tail but still had no answer for "these three characters
-could hold the whole thing". Both asked a question about the ORDER; the question is about the
-CHARACTER.
+The important correction is that useful capacity is measured in **jobs in the busiest stage**, not
+`sum(runs per tier)` and not the account's total available reactors. The former is enormous for a
+normal order; the latter mistakes idle capacity for work and recreates the fan-out.
 
 **This is not the reverted even split** (see "An order's runs follow capacity, not fairness"). That
 one changed the JOBS, handing a 2-slot character the same 250 runs as a 10-slot one. Here the split
