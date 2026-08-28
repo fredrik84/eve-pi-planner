@@ -550,9 +550,11 @@ def test_customer_orders_only_claim_cadence_worth_of_capacity() -> bool:
                     "unknown or old values fail safe to Balanced")
     finally:
         industry_settings.get_settings = real_get
-    ok &= check('_hosts_for_parallel_jobs(hosts, useful_parallel_jobs)' in src
-                and '_compact_hosts(hosts, wanted_slots, per_chain)' in src,
-                "both modes pack their useful job count onto the fewest characters")
+    ok &= check('hosts = _hosts_for_parallel_jobs(hosts, useful_parallel_jobs)' in src
+                and 'max(stage_loads.values(), default=1)' in src,
+                "both modes pack the busiest concurrent stage onto the fewest characters")
+    ok &= check('pack_pending_order_tops(context_id)' in open("app/reactions/jobs.py").read(),
+                "the protected customer-order final stage is packed after cadence splitting")
     return ok
 
 
@@ -1071,6 +1073,21 @@ def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
         ok &= check(len(s2) == 9 and all(r["runs"] == 111 for r in s2),
                     "the order's quoted top row is left exactly as it was")
 
+        # The separate final-stage pass may move those exact jobs: nine identical jobs fit on one
+        # ten-slot character, and character identity cannot make them faster. Their total remains
+        # the quoted order total.
+        J.pack_pending_order_tops(CTX)
+        con = get_connection()
+        packed = [dict(r) for r in con.execute(
+            "SELECT a.character_id,a.runs FROM pp_reaction_assignments a "
+            "JOIN pp_characters c ON c.character_id=a.character_id "
+            "WHERE c.context_id=? AND a.tier_order=1", (CTX,))]
+        con.close()
+        ok &= check(len({r["character_id"] for r in packed}) == 1,
+                    "nine final-stage jobs fit on one ten-slot character instead of fan-out")
+        ok &= check(len(packed) == 9 and sum(r["runs"] for r in packed) == 999,
+                    "packing preserves the final stage's exact job count and quoted run total")
+
         # ...and NO character ends up holding more rows than it has reactors. Consolidating by
         # freeing the stage budget instead put 8 stage-1 rows beside 3 stage-2 on a 10-reactor
         # character — 11 rows on 10 reactors, which is the incident the cross-stage subtraction
@@ -1078,13 +1095,14 @@ def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
         # installed yet, and the plan has to fit the reactors.
         con = get_connection()
         per = [dict(r) for r in con.execute(
-            "SELECT c.character_name nm, COUNT(*) n FROM pp_reaction_assignments a "
+            "SELECT c.character_name nm,a.tier_order,COUNT(*) n FROM pp_reaction_assignments a "
             "JOIN pp_characters c ON c.character_id=a.character_id "
-            "WHERE c.context_id=? GROUP BY c.character_name", (CTX,))]
+            "WHERE c.context_id=? GROUP BY c.character_name,a.tier_order", (CTX,))]
         con.close()
         cap = {nm: slots for _cid, nm, slots in CH}
-        over = [(r["nm"], r["n"], cap[r["nm"]]) for r in per if r["n"] > cap[r["nm"]]]
-        ok &= check(not over, f"no character holds more rows than reactors (over: {over})")
+        over = [(r["nm"], r["tier_order"], r["n"], cap[r["nm"]])
+                for r in per if r["n"] > cap[r["nm"]]]
+        ok &= check(not over, f"no concurrent stage exceeds a character's reactors (over: {over})")
         # NOT a fixed row count: consolidating lets the pass re-split 21 jobs of 113 into 20 of
         # 119, which is the same work in one fewer reactor. What must hold is that the work is
         # still covered — a dropped row is silently under-producing the order.

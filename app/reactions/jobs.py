@@ -2436,6 +2436,87 @@ def split_order_tops_to_cadence(context_id: int) -> int:
         con.close()
 
 
+def pack_pending_order_tops(context_id: int) -> int:
+    """Pack each pending customer-order final stage onto the fewest characters that can run it.
+
+    The final stage is excluded from ``level_product_runs`` because its exact total belongs to the
+    order. That must not make its original per-character shares permanent: characters do not make
+    identical reaction jobs faster, and sequential stages reuse the same reactors. Running work is
+    left untouched; a wholly pending group is moved and levelled without changing its row count,
+    total runs, cost, reward, order, or stage.
+    """
+    rows = _plan_rows(context_id, "a.id, a.character_id, a.type_id, a.runs, a.input_cost, a.reward, "
+                      "a.tier_order, a.order_id")
+    order_rows = [r for r in rows if r.get("order_id") is not None]
+    if not order_rows:
+        return 0
+    top = {}
+    for r in order_rows:
+        oid = int(r["order_id"])
+        top[oid] = max(top.get(oid, 0), int(r["tier_order"] or 0))
+    groups: dict[tuple[int, int, int], list[dict]] = {}
+    for r in order_rows:
+        key = (int(r["order_id"]), int(r["type_id"]), int(r["tier_order"] or 0))
+        if key[2] == top[key[0]]:
+            groups.setdefault(key, []).append(r)
+
+    try:
+        live = live_reaction_runs(context_id)
+    except Exception:
+        live = {}
+    capacities = {int(c["character_id"]): int(c.get("slots") or 0)
+                  for c in _character_capacities(context_id)}
+    by_char_stage: dict[tuple[int, int], int] = {}
+    for r in rows:
+        k = (int(r["character_id"]), int(r["tier_order"] or 0))
+        by_char_stage[k] = by_char_stage.get(k, 0) + 1
+
+    changed = 0
+    con = get_connection()
+    try:
+        for (_oid, tid, stage), own in sorted(groups.items()):
+            if any(live.get((int(r["character_id"]), tid)) for r in own):
+                continue                         # installed work is a fact, never a packing input
+            hosts = []
+            for cid, slots in capacities.items():
+                other = by_char_stage.get((cid, stage), 0) - sum(
+                    1 for r in own if int(r["character_id"]) == cid)
+                hosts.append({"character_id": cid, "free_slots": max(0, slots - other)})
+            picked = _hosts_for_parallel_jobs(hosts, len(own))
+            if sum(h["free_slots"] for h in picked) < len(own):
+                continue
+            spots = []
+            for h in picked:
+                spots.extend([h["character_id"]] * min(h["free_slots"], len(own) - len(spots)))
+            total_runs = sum(int(r["runs"] or 0) for r in own)
+            base, rem = divmod(total_runs, len(own))
+            sizes = [base + 1] * rem + [base] * (len(own) - rem)
+            total_cost = sum(float(r["input_cost"] or 0.0) for r in own)
+            total_reward = sum(float(r["reward"] or 0.0) for r in own)
+            ordered = sorted(own, key=lambda r: int(r["id"]))
+            if all(int(r["character_id"]) == cid and int(r["runs"] or 0) == n
+                   for r, cid, n in zip(ordered, spots, sizes)):
+                continue
+            for r, cid, n in zip(ordered, spots, sizes):
+                frac = n / total_runs if total_runs else 0.0
+                con.execute("UPDATE pp_reaction_assignments SET character_id=?, runs=?, "
+                            "input_cost=?, reward=? WHERE id=?",
+                            (cid, n, round(total_cost * frac, 2), round(total_reward * frac, 2),
+                             int(r["id"])))
+            # Keep subsequent groups honest about the stage room this move consumed.
+            for r in own:
+                old = (int(r["character_id"]), stage)
+                by_char_stage[old] = max(0, by_char_stage.get(old, 0) - 1)
+            for cid in spots:
+                by_char_stage[(cid, stage)] = by_char_stage.get((cid, stage), 0) + 1
+            changed += len(own)
+        if changed:
+            con.commit()
+        return changed
+    finally:
+        con.close()
+
+
 def _stage_of_tiers(context_id: int, product_id: int, tiers: list) -> list[int]:
     """A STAGE index per client-supplied chain tier — steps that can run at the same time share one.
 
@@ -3238,6 +3319,10 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         # split here instead, preserving the batch total exactly, so the cadence reaches the whole
         # chain rather than stopping one stage short of the product being sold.
         split_order_tops_to_cadence(context_id)
+        # The split preserves the order total, but its old per-character shares are not a reason to
+        # keep logging into every character. Pending final-stage jobs are packed independently:
+        # sequential stages reuse slots, and character identity does not change job duration.
+        pack_pending_order_tops(context_id)
     except Exception:
         pass
     # What the player has marked running or done by hand. Own connection, so it belongs here with
@@ -4092,9 +4177,9 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     # fewest characters. Summing the chain here is wrong under the one-slot model: its stages are
     # sequential and reuse the same reactors. Spreading seven stage-2 jobs over seven characters
     # is no faster than putting all seven on one 10-slot character.
+    stage_loads: dict[int, int] = {}
+    ranks = tier_ranks(ordered_all)
     if pace == "fastest":
-        stage_loads: dict[int, int] = {}
-        ranks = tier_ranks(ordered_all)
         fastest_jobs = [_cap_jobs(chain_caps.get(tid), run_n)
                         for tid, run_n in zip([t for t, _ in ordered_all] + [type_id], all_runs)]
         for jobs, stage in zip(fastest_jobs[:-1], ranks):
@@ -4102,9 +4187,13 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
         top_stage = (max(ranks) + 1) if ranks else 0
         stage_loads[top_stage] = stage_loads.get(top_stage, 0) + fastest_jobs[-1]
         useful_parallel_jobs = max(stage_loads.values(), default=1)
-        hosts = _hosts_for_parallel_jobs(hosts, useful_parallel_jobs)
     else:
-        hosts = _compact_hosts(hosts, wanted_slots, per_chain)
+        for jobs, stage in zip(cadence_jobs[:-1], ranks):
+            stage_loads[stage] = stage_loads.get(stage, 0) + jobs
+        top_stage = (max(ranks) + 1) if ranks else 0
+        stage_loads[top_stage] = stage_loads.get(top_stage, 0) + cadence_jobs[-1]
+        useful_parallel_jobs = max(stage_loads.values(), default=1)
+    hosts = _hosts_for_parallel_jobs(hosts, useful_parallel_jobs)
 
     # How the order's runs are split across the characters that will run it: PROPORTIONAL to each
     # host's free slots. The roomiest character does the most work, so every host finishes at

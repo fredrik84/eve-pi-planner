@@ -763,9 +763,11 @@ It is split separately, and **the total is preserved exactly**, which is what ma
 batch goes into the fewest jobs that each fit the window, with the remainder riding on one of them
 rather than rounded up across all of them — *"I'd rather we underfill 1 slot to line up the others"*.
 1001 runs over a 119-run ceiling becomes 2 jobs of 112 and 7 of 111, summing to 1001, with the input
-cost split by the same proportions. Same product, same character, same chain timestamp, same total:
-nothing the order's arithmetic reads has changed, only the row COUNT, and every consumer of that
-counts rows rather than assuming one. Held to the formulas owned like everything else.
+cost split by the same proportions. Same product, same order, same total: nothing the order's
+arithmetic reads has changed, only the row count. Once split, wholly pending final-stage jobs are
+packed onto the fewest characters that can run them concurrently; moving identical jobs between
+characters changes no duration. Running work is never moved. Held to the formulas owned like
+everything else.
 
 **One number, two places.** The control sits on the Reactions card as a single row above the
 pipeline it shapes (`_rxCadenceHtml`, "Come back every N days") and reads/writes the same
