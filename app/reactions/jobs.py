@@ -2332,14 +2332,17 @@ def split_order_tops_to_cadence(context_id: int) -> int:
     # Reactors per character, and what the plan already holds on each — this pass may only spend
     # what is genuinely left. Read before the connection below opens: `_character_capacities` and
     # `_plan_rows` open their own, and two at once is the 2026-07-13 pool-exhaustion incident.
-    room: dict[int, int] = {}
+    room: dict[tuple[int, int], int] = {}
     try:
-        room = {c["character_id"]: max(0, int(c.get("slots") or 0))
-                for c in _character_capacities(context_id)}
-        for r in _plan_rows(context_id, "a.id, a.character_id"):
-            cid = r["character_id"]
-            if cid in room:
-                room[cid] -= 1
+        capacities = {c["character_id"]: max(0, int(c.get("slots") or 0))
+                      for c in _character_capacities(context_id)}
+        planned = _plan_rows(context_id, "a.id, a.character_id, COALESCE(a.tier_order,0) AS tier_order")
+        stages = {int(r["tier_order"] or 0) for r in planned}
+        room = {(cid, stage): slots for cid, slots in capacities.items() for stage in stages}
+        for r in planned:
+            key = (int(r["character_id"]), int(r["tier_order"] or 0))
+            if key in room:
+                room[key] -= 1
     except Exception:
         room = {}
     con = get_connection()
@@ -2385,13 +2388,14 @@ def split_order_tops_to_cadence(context_id: int) -> int:
             # of them however well that would fit the cadence. Splitting as far as the room allows
             # is still better than not splitting at all — and when either cap binds the job stays
             # over the window, which the INSERT below measures and records on every row it writes.
-            free = room.get(r["character_id"])
+            room_key = (int(r["character_id"]), int(r["tier_order"] or 0))
+            free = room.get(room_key)
             if free is not None:
                 jobs = min(jobs, max(1, free + 1))
             if jobs <= 1:
                 continue
             if free is not None:
-                room[r["character_id"]] = max(0, free - (jobs - 1))
+                room[room_key] = max(0, free - (jobs - 1))
             base, rem = divmod(runs, jobs)
             if base <= 0:
                 continue

@@ -892,6 +892,12 @@ def test_the_cadence_reaches_an_orders_own_top_row() -> bool:
                 "mass_reactions, advanced_mass_reactions, scopes) VALUES (?,?,?,?,?,?)",
                 (CTX, CID, "Order Top Probe", 5, 5, "x"))
     con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (CID,))
+    # Seven earlier-stage jobs already occupy the character's plan. They are sequential and must
+    # not reduce the ten reactors available when this final stage starts — the live 333-run defect.
+    for _ in range(7):
+        con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,input_cost,"
+                    "reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (CID, 16681, "Earlier Stage", 100, 0.0, 0.0, _t.time(), 0, 999))
     con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,input_cost,"
                 "reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
                 (CID, TID, "Crystalline Carbonide", 1001, 100100.0, 50050.0, _t.time(), 1, 999))
@@ -900,7 +906,8 @@ def test_the_cadence_reaches_an_orders_own_top_row() -> bool:
         wrote = J.split_order_tops_to_cadence(CTX)
         con = get_connection()
         rs = [dict(r) for r in con.execute(
-            "SELECT runs, input_cost FROM pp_reaction_assignments WHERE character_id=?", (CID,))]
+            "SELECT runs, input_cost FROM pp_reaction_assignments WHERE character_id=? "
+            "AND tier_order=1", (CID,))]
         con.close()
         cyc = J._reaction_cycle_times().get(TID, 0.0)
         longest = max(r["runs"] for r in rs) * cyc * 0.4680 / 24.0
