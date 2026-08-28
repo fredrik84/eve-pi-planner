@@ -32,6 +32,8 @@ router = APIRouter()
 log = logging.getLogger(__name__)
 
 _ALLOWED_KINDS = ("structure", "region")
+_STRUCTURE_UNREADABLE = {"__market_unavailable__": True}
+_MARKET_FAILURE_TTL = 60
 
 
 # ── Storage ────────────────────────────────────────────────────────────────────────
@@ -468,8 +470,18 @@ def fetch_structure_market(context_id: int, structure_id: int) -> dict[int, dict
     cached = cache_get_json(key)
     if cached is not None:
         return {int(k): v for k, v in cached.items()}
+    # Failure is per account: one account may lack structure access while another can read the
+    # same book.  Successful books remain safely shared by structure ID.
+    failure_key = f"mkt:struct:fail:{context_id}:{structure_id}"
+    if cache_get_json(failure_key) == _STRUCTURE_UNREADABLE:
+        return {}
     orders = _fetch_structure_orders(context_id, structure_id)
     if orders is None:
+        # Auth/access failures and ESI outages used to be the only outcome not cached here.  Since
+        # order and dashboard pricing both traverse this path, that turned one 20-second failure
+        # into another upstream call on every page load.  Keep the distinction from a readable,
+        # genuinely empty book, but remember the failure briefly before falling through to Jita.
+        cache_set_json(failure_key, _STRUCTURE_UNREADABLE, ttl=_MARKET_FAILURE_TTL)
         return {}
     by_type: dict[int, list] = {}
     for o in orders:

@@ -9,6 +9,7 @@ FUZZWORKS_URL = "https://market.fuzzwork.co.uk/aggregates/"
 JITA_STATION = 60003760
 THE_FORGE_REGION = 10000002  # Jita's region — where market history that matters trades
 CACHE_TTL = 900  # 15 minutes
+FAILURE_CACHE_TTL = 60  # do not hammer upstream while it is unavailable
 HISTORY_CACHE_TTL = 6 * 3600  # market history only updates ~daily, so cache it hard
 HISTORY_DAYS = 7  # average daily traded volume over the last N days
 
@@ -20,6 +21,11 @@ HISTORY_DAYS = 7  # average daily traded volume over the last N days
 # cache-miss lottery independently of whatever warmed the opportunities-table request's worker).
 _cache: dict[int, tuple[float, float]] = {}
 _market_cache: dict[int, tuple[dict, float]] = {}
+_CACHE_MISS = {"__market_unavailable__": True}
+
+
+def _is_cached_miss(value) -> bool:
+    return isinstance(value, dict) and value == _CACHE_MISS
 
 
 def _cached_fetch(type_ids: list[int], local_cache: dict, redis_prefix: str, fuzzworks_fn):
@@ -34,8 +40,12 @@ def _cached_fetch(type_ids: list[int], local_cache: dict, redis_prefix: str, fuz
     missing: list[int] = []
     for tid in type_ids:
         entry = local_cache.get(tid)
-        if entry and now - entry[1] < CACHE_TTL:
-            result[tid] = entry[0]
+        # A failed upstream lookup is cached briefly too.  Without this, a Fuzzwork outage (or a
+        # type omitted from its response) made every page request immediately contact it again.
+        ttl = FAILURE_CACHE_TTL if entry and _is_cached_miss(entry[0]) else CACHE_TTL
+        if entry and now - entry[1] < ttl:
+            if not _is_cached_miss(entry[0]):
+                result[tid] = entry[0]
         else:
             missing.append(tid)
     if not missing:
@@ -48,17 +58,26 @@ def _cached_fetch(type_ids: list[int], local_cache: dict, redis_prefix: str, fuz
         v = redis_hits.get(f"{redis_prefix}{tid}")
         if v is not None:
             local_cache[tid] = (v, now)
-            result[tid] = v
+            if not _is_cached_miss(v):
+                result[tid] = v
         else:
             still_missing.append(tid)
     if still_missing:
         fresh = fuzzworks_fn(still_missing)
         to_cache = {}
+        misses_to_cache = {}
         for tid, val in fresh.items():
             local_cache[tid] = (val, now)
             result[tid] = val
             to_cache[f"{redis_prefix}{tid}"] = val
+        # Cache every missing answer, not only values returned by Fuzzwork.  A short TTL keeps a
+        # transient failure from becoming sticky while preventing request-rate retry storms.
+        for tid in still_missing:
+            if tid not in fresh:
+                local_cache[tid] = (_CACHE_MISS, now)
+                misses_to_cache[f"{redis_prefix}{tid}"] = _CACHE_MISS
         cache_mset_json(to_cache, ttl=CACHE_TTL)
+        cache_mset_json(misses_to_cache, ttl=FAILURE_CACHE_TTL)
     return result
 
 
@@ -102,8 +121,10 @@ def fetch_daily_volume(type_ids: list[int]) -> dict[int, float]:
     missing: list[int] = []
     for tid in type_ids:
         entry = _history_cache.get(tid)
-        if entry and now - entry[1] < HISTORY_CACHE_TTL:
-            result[tid] = entry[0]
+        ttl = FAILURE_CACHE_TTL if entry and _is_cached_miss(entry[0]) else HISTORY_CACHE_TTL
+        if entry and now - entry[1] < ttl:
+            if not _is_cached_miss(entry[0]):
+                result[tid] = entry[0]
         else:
             missing.append(tid)
     if not missing:
@@ -116,21 +137,27 @@ def fetch_daily_volume(type_ids: list[int]) -> dict[int, float]:
         v = redis_hits.get(f"mkt:hist:{tid}")
         if v is not None:
             _history_cache[tid] = (v, now)
-            result[tid] = v
+            if not _is_cached_miss(v):
+                result[tid] = v
         else:
             still_missing.append(tid)
     if still_missing:
         with ThreadPoolExecutor(max_workers=8) as pool:
             fetched = dict(zip(still_missing, pool.map(_fetch_one_history, still_missing)))
         to_cache = {}
+        misses_to_cache = {}
         for tid, vol in fetched.items():
             if vol is None:
+                _history_cache[tid] = (_CACHE_MISS, now)
+                misses_to_cache[f"mkt:hist:{tid}"] = _CACHE_MISS
                 continue
             _history_cache[tid] = (vol, now)
             result[tid] = vol
             to_cache[f"mkt:hist:{tid}"] = vol
         if to_cache:
             cache_mset_json(to_cache, ttl=HISTORY_CACHE_TTL)
+        if misses_to_cache:
+            cache_mset_json(misses_to_cache, ttl=FAILURE_CACHE_TTL)
     return result
 
 
