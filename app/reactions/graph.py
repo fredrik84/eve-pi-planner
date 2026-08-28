@@ -4,6 +4,7 @@ walks the reaction graph to cost every reachable product (_resolve_reachable), v
 batch (_value_reaction_batch — the single source of truth for reaction economics), and builds the
 opportunity ranking + shopping lists. Depends on settings for pricing config; never on jobs/orders,
 so it imports first with no cycle."""
+import json
 import math
 import time as _time
 
@@ -914,6 +915,35 @@ def _plan_materials(assignments: list[dict], reached: dict,
     return out
 
 
+def _rows_still_needing_materials(rows: list[dict], jobs_by_character: dict[int, list[dict]]) -> list[dict]:
+    """Remove plan rows already covered by live ESI jobs, count-aware per character/product.
+
+    Installing a reaction consumes its inputs immediately.  Assignment rows deliberately persist
+    while their jobs run (they are the reusable plan/loadout), but that persistence must not turn
+    consumed inputs into a second shopping request.  N live jobs cover exactly N rows; another row
+    for the same product remains a real uninstalled requirement.
+    """
+    active_counts: dict[tuple[int, int], int] = {}
+    for character_id, jobs in jobs_by_character.items():
+        for job in jobs:
+            if job.get("status") not in ("active", "paused", "ready"):
+                continue
+            type_id = job.get("product_type_id")
+            if type_id is None:
+                continue
+            key = (int(character_id), int(type_id))
+            active_counts[key] = active_counts.get(key, 0) + 1
+
+    pending = []
+    for row in rows:
+        key = (int(row["character_id"]), int(row["type_id"]))
+        if active_counts.get(key, 0) > 0:
+            active_counts[key] -= 1
+        else:
+            pending.append(row)
+    return pending
+
+
 def _explode_chain_tiers(formula_inputs: list[dict], runs: int, reached: dict, tiers: dict[int, dict],
                           stock: dict[int, float] | None = None, covered: dict[int, dict] | None = None):
     """For `runs` cycles of a formula needing `formula_inputs`, finds every INTERMEDIATE reaction
@@ -1165,6 +1195,15 @@ def reactions_shopping_list(include_orders: bool = False,
             f"WHERE character_id IN ({placeholders})",
             char_ids,
         )]
+        jobs_by_character = {}
+        for cached in con.execute(
+            f"SELECT character_id, jobs_json FROM pp_char_industry_jobs "
+            f"WHERE character_id IN ({placeholders})", char_ids,
+        ):
+            try:
+                jobs_by_character[int(cached["character_id"])] = json.loads(cached["jobs_json"] or "[]")
+            except (TypeError, ValueError):
+                jobs_by_character[int(cached["character_id"])] = []
     finally:
         con.close()
 
@@ -1174,7 +1213,8 @@ def reactions_shopping_list(include_orders: bool = False,
     # have is on a customer order" need different answers from the caller, and they are
     # indistinguishable from an empty materials list alone.
     counts = {"speculative_count": len(speculative), "order_count": len(order_linked)}
-    assignments = rows if include_orders else speculative
+    selected = rows if include_orders else speculative
+    assignments = _rows_still_needing_materials(selected, jobs_by_character)
 
     if not assignments:
         return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
@@ -1193,7 +1233,11 @@ def reactions_shopping_list(include_orders: bool = False,
     #
     # One stock pool for the whole list, consumed as it goes, so two rows needing the same
     # unplanned intermediate don't both claim it.
-    totals = _plan_materials(assignments, reached, reaction_stock_pool(context_id))
+    # A running precursor is no longer a shopping requirement, but it still produces an input for
+    # a queued higher stage.  Keep every selected plan product in the in-house set so the queued
+    # stage does not recursively buy the already-running precursor's raw materials again.
+    in_house = {int(r["type_id"]) for r in selected}
+    totals = _plan_materials(assignments, reached, reaction_stock_pool(context_id), in_house)
 
     # ...and the FORMULAS the same plan needs that the account does not hold. A shopping list is
     # where you go to buy things, and a formula you're short of blocks the plan far harder than a
