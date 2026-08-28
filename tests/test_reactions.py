@@ -595,7 +595,8 @@ def test_a_stage_settles_on_one_run_count_across_its_products() -> bool:
     Two things were needed: scoring how many DIFFERENT numbers a stage asks you to type, and
     offering a shared count as a candidate layout. The second matters because the per-product pick
     always takes its own cheapest count first, so a shared number never falls out on its own."""
-    from app.reactions.jobs import _choose_stage_layout, _level_options
+    from app.reactions.jobs import (_choose_stage_layout, _drop_jobs_that_do_not_advance_stage,
+                                    _level_options)
 
     # Stage 1 of the reported order #45 — three products, all 3.00 h/run, real requirements.
     def stage():
@@ -613,6 +614,18 @@ def test_a_stage_settles_on_one_run_count_across_its_products() -> bool:
     ok &= check(len(set(runs.values())) < 3,
                 "the stage asks for fewer numbers than it has products")
     ok &= check(all(o["jobs"] >= 1 for o in pick.values()), "every product still gets a job")
+
+    # A live plan arrived as 120-run bottlenecks beside Oxy-Organic 2×50. One 100-run job lands
+    # before the 120s too, so the second reactor changes no stage boundary and must be removed.
+    waste = {
+        "Carbon": {"cycle": 3.0, "total": 120, "options": _level_options(120, 10, 120)},
+        "Oxy": {"cycle": 3.0, "total": 100, "options": _level_options(100, 10, 120)},
+    }
+    waste_pick = {"Carbon": next(o for o in waste["Carbon"]["options"] if o["jobs"] == 1),
+                  "Oxy": next(o for o in waste["Oxy"]["options"] if o["jobs"] == 2 and o["runs"] == 50)}
+    lean = _drop_jobs_that_do_not_advance_stage(waste, waste_pick)
+    ok &= check((lean["Oxy"]["jobs"], lean["Oxy"]["runs"]) == (1, 100),
+                "2x50 collapses to 1x100 when 120-run stage-mates still gate the login")
 
     # The surplus it spends is real goo, so it stays inside the budget the options already enforce.
     for k, o in pick.items():

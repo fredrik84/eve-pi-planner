@@ -1667,6 +1667,32 @@ def _stage_affordable(products: dict, pick: dict) -> bool:
     return need <= 0 or made - need <= need * _LEVEL_BUDGET
 
 
+def _drop_jobs_that_do_not_advance_stage(products: dict, pick: dict) -> dict:
+    """Remove parallel jobs that finish before the stage bottleneck without helping it land.
+
+    A stage waits for its slowest product. If Oxy-Organic Solvents is planned as 2×50 while its
+    stage-mates run 120 each, replacing it with 1×100 changes neither the stage finish nor the next
+    login. The second job is pure effort and occupies a reactor for no delivery benefit.
+    """
+    if len(pick) < 2:
+        return pick
+    out = dict(pick)
+    for key in list(out):
+        makespan = max(out[k]["runs"] * products[k]["cycle"] for k in out)
+        cur = out[key]
+        candidates = [o for o in products[key].get("options", [])
+                      if o["jobs"] < cur["jobs"]
+                      and o["runs"] * products[key]["cycle"] <= makespan + 1e-9]
+        for alt in sorted(candidates, key=lambda o: (o["jobs"], o["surplus"],
+                                                      0 if o.get("tidy") else 1)):
+            trial = dict(out)
+            trial[key] = alt
+            if _stage_affordable(products, trial):
+                out = trial
+                break
+    return out
+
+
 def _reaction_cycle_times() -> dict[int, float]:
     """{output_type_id: hours per run} straight from the SDE. The structure/skill time bonus is
     deliberately NOT applied: it scales every reaction by the same factor, and everything here
@@ -2075,6 +2101,7 @@ def level_product_runs(context_id: int) -> int:
             # 24h when it has not. Real hours, matching `_collection_slot`'s argument.
             layout = _choose_stage_layout(products, prefer_tidy, time_mult=_tmult,
                                           bucket_h=cadence_h or _CADENCE_H)
+            layout = _drop_jobs_that_do_not_advance_stage(products, layout)
             asked = sum(opt["jobs"] for opt in layout.values())
             if asked <= stage_room:
                 break
