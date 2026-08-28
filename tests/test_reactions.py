@@ -1133,6 +1133,33 @@ def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
         con.close()
         ok &= check(s1 >= 21 * 113,
                     f"the stage-1 work is still fully covered ({s1} runs vs 2373 needed)")
+
+        # Live order #16 after final-stage consolidation: ten queued Stage-2 jobs on A made the
+        # leveller treat A as full during Stage 1, so it preserved an illegal 5/15 split across A/B
+        # even though both characters have ten slots and the stages never run together.
+        con = get_connection()
+        for cid, _nm, _slots in CH:
+            con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (cid,))
+        now2 = _t.time()
+        for cid, n in ((9910001, 5), (9910002, 15)):
+            for _ in range(n):
+                con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,"
+                            "input_cost,reward,created_at,tier_order,order_id) "
+                            "VALUES (?,?,?,?,?,?,?,?,?)",
+                            (cid, S1[0], S1[1], 120, 0, 0, now2, 0, 4243))
+        for _ in range(10):
+            con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,"
+                        "input_cost,reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (9910001, S2[0], S2[1], 100, 0, 0, now2, 1, 4243))
+        con.commit(); con.close()
+        J.level_product_runs(CTX)
+        con = get_connection()
+        counts = [int(r["n"]) for r in con.execute(
+            "SELECT character_id,COUNT(*) n FROM pp_reaction_assignments WHERE tier_order=0 "
+            "AND character_id IN (?,?) GROUP BY character_id", (9910001, 9910002))]
+        con.close()
+        ok &= check(sorted(counts) == [10, 10],
+                    f"queued Stage 2 does not preserve an illegal Stage-1 15/5 split ({counts})")
         return ok
     finally:
         (J._level_runs_on, J._tidy_runs_on, J._parallel_stages_on,

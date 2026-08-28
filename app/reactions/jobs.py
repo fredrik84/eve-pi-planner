@@ -1989,9 +1989,18 @@ def level_product_runs(context_id: int) -> int:
         # protected top row, and anything frozen because its job is already installed. They hold a
         # reactor exactly as a re-shapeable row does, and leaving them out is what let a stage be
         # sized against reactors an order's own rows were holding.
-        budget = {cid: max(0, n - committed.get(cid, 0) - later.get(cid, 0)
-                           - excluded_by_char_stage.get(cid, {}).get(stage, 0))
-                  for cid, n in room.items()}
+        if peak_only:
+            # Sequential stages reuse the same reactors. Charging queued Stage 2 rows against
+            # Stage 1 made a character with ten later jobs appear to have zero room now; the
+            # placement then gave up and preserved a live 15/5 split across two ten-slot
+            # characters. Under the one-slot model only immovable rows in THIS stage consume this
+            # stage's budget. Other stages are checked independently against the same capacity.
+            budget = {cid: max(0, n - excluded_by_char_stage.get(cid, {}).get(stage, 0))
+                      for cid, n in room.items()}
+        else:
+            budget = {cid: max(0, n - committed.get(cid, 0) - later.get(cid, 0)
+                               - excluded_by_char_stage.get(cid, {}).get(stage, 0))
+                      for cid, n in room.items()}
 
         # The shortest this stage can possibly run: all of its work, divided by every reactor it may
         # use. Nothing shorter is installable however the run counts are chosen, so it seeds the
