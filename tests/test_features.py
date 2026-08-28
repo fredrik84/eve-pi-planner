@@ -15,6 +15,8 @@ import sys
 import urllib.request
 import urllib.error
 
+sys.path.insert(0, ".")
+
 # Every key the frontend relies on must exist in the registry. We do NOT assert each flag's
 # state VALUE: an admin can change visibility at runtime, so the live state legitimately
 # diverges from the code default. The durable invariant is "the key exists and state is one of
@@ -59,6 +61,26 @@ def get_status(url: str) -> int:
 def check(cond: bool, msg: str) -> bool:
     print(f"  {'PASS' if cond else 'FAIL'}: {msg}")
     return cond
+
+
+def test_role_status_is_one_read_per_request() -> bool:
+    """Seven feature gates on a 14-character account still need one role read."""
+    import app.esi as E
+    from app.cache import begin_request_memo
+    calls = {"chars": 0, "admins": 0, "testers": 0}
+    saved = E._context_character_names, E._db_admin_names, E._db_tester_names
+    try:
+        E._context_character_names = lambda _ctx: (calls.__setitem__("chars", calls["chars"] + 1)
+                                                    or [f"pilot{i}" for i in range(14)])
+        E._db_admin_names = lambda: (calls.__setitem__("admins", calls["admins"] + 1) or set())
+        E._db_tester_names = lambda: (calls.__setitem__("testers", calls["testers"] + 1) or set())
+        begin_request_memo()
+        for _ in range(7):
+            E.admin_and_tester_status_for_context(987654)
+        return check(calls == {"chars": 1, "admins": 1, "testers": 1},
+                     f"role tables are read once per request ({calls})")
+    finally:
+        E._context_character_names, E._db_admin_names, E._db_tester_names = saved
 
 
 def test_features(base: str) -> bool:
@@ -413,6 +435,7 @@ def main():
     base = args.url.rstrip("/")
 
     results = [
+        test_role_status_is_one_read_per_request(),
         test_features(base),
         test_feature_toggle_gated(base),
         test_feature_group_toggle_gated(base),

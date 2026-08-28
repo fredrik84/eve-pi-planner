@@ -1474,11 +1474,20 @@ def admin_and_tester_status_for_context(context_id: int | None) -> tuple[bool, b
     context_id from its own session lookup (e.g. list_characters) — skips repeating it."""
     if not context_id:
         return False, False
+    from app.cache import request_memo
+    return request_memo(("admin_tester_status", int(context_id)),
+                        lambda: _admin_and_tester_status_for_context_uncached(int(context_id)))
+
+
+def _admin_and_tester_status_for_context_uncached(context_id: int) -> tuple[bool, bool]:
+    """Read each role table once; character count must not multiply identical queries."""
     names = _context_character_names(context_id)
-    admin = any(n in (ADMIN_CHARACTERS | _db_admin_names()) for n in names)
+    admin_names = ADMIN_CHARACTERS | _db_admin_names()
+    admin = any(n in admin_names for n in names)
     if admin:
         return True, True
-    tester = any(n in _db_tester_names() for n in names)
+    tester_names = _db_tester_names()
+    tester = any(n in tester_names for n in names)
     return False, tester
 
 
@@ -1624,4 +1633,3 @@ def _refresh_token(character_id: int, refresh_token: str) -> str | None:
         return new_access
     except Exception:
         return None
-
