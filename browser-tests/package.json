@@ -5,7 +5,7 @@
   "description": "Browser acceptance harness for eve-pi-planner",
   "scripts": {
     "test": "playwright test --project=desktop",
-    "test:all": "playwright test",
+    "test:all": "playwright test --project=desktop --project=mobile",
     "test:protocol": "playwright test --project=protocol",
     "report": "playwright show-report artifacts/report --host 0.0.0.0"
   },

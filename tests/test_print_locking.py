@@ -123,7 +123,7 @@ def guard_the_wiring() -> None:
     import ast
     import os
     print("\nthe per-order planner really hands the caps to the scheduler:")
-    path = os.path.join("app", "industry", "schedule.py")
+    path = os.path.join("app", "industry", "schedule", "per_order.py")
     src = open(path, encoding="utf-8").read()
     tree = ast.parse(src)
     fn = next((n for n in ast.walk(tree)
@@ -146,10 +146,13 @@ def guard_the_wiring() -> None:
 
     # The aggregated path must NOT get them: one batch already caps concurrency inside itself, and
     # passing caps there would be a behaviour change nobody asked for.
-    agg = next((n for n in ast.walk(tree)
+    agg_path = os.path.join("app", "industry", "schedule", "plan.py")
+    agg_src = open(agg_path, encoding="utf-8").read()
+    agg_tree = ast.parse(agg_src)
+    agg = next((n for n in ast.walk(agg_tree)
                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "plan_queue"), None)
     if agg is not None:
-        agg_body = "\n".join(src.splitlines()[agg.lineno - 1:(agg.end_lineno or agg.lineno)])
+        agg_body = "\n".join(agg_src.splitlines()[agg.lineno - 1:(agg.end_lineno or agg.lineno)])
         check("print_caps" not in agg_body,
               "the aggregated plan is left exactly as it was")
 

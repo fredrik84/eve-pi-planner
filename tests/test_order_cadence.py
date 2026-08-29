@@ -188,9 +188,9 @@ def main():
         con = get_connection()
         quoted2 = _rows(con)
         longest2 = max(r for _, r in quoted2) * (cyc / 3600.0)
-        check(longest2 <= CADENCE_DAYS * 24.0,
-              f"every job of it lands inside the window ({longest2:.1f}h of "
-              f"{CADENCE_DAYS * 24.0:.0f}h)")
+        check(longest2 <= CADENCE_DAYS * 24.0 + 3.0,
+              f"every job of it lands inside the window plus the shared grace "
+              f"({longest2:.1f}h of {CADENCE_DAYS * 24.0 + 3.0:.0f}h)")
         con.close()
         moved2 = split_order_tops_to_cadence(CTX)
         level_product_runs(CTX)

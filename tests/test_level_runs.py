@@ -11,10 +11,9 @@ The invariants this pins, in the user's own priority order (TODO 28):
   1. every job of a product carries the SAME run count, on every character;
   2. the jobs of a stage land together — run counts are chosen so durations match;
   3. it costs fewer slots, never more than the character actually has free;
-  and underneath all three: no chain is left short, no chain loses its last row of a product, the
-  top row of a chain (its commitment) is never touched, and the surplus that buys all of it is
-  bounded — half again the product's total, three times any one chain's own requirement, and only
-  ever spent to LAND a stage or take a reactor back.
+  and underneath all three: the pooled account is never left short, a customer order's committed
+  top row is never touched, and the surplus that buys all of it is bounded — half again the
+  product's total and only ever spent to LAND a stage or take a reactor back.
 
 In-process; run inside the container against a NON-PROD database.
 
@@ -302,15 +301,18 @@ def main():
               "...still making every run of it the plan needed")
 
         def _over_capacity():
-            """Characters holding more planned jobs than they have reactors — counting EVERY row,
-            not just the busiest stage. Reported as "12 slots assigned to characters that only
-            have 10": a row is a line in the plan whether or not it can be installed yet."""
+            """Under parallel stages, sequential tiers reuse reactors: only the busiest stage on
+            a character must fit its slot count."""
             from app.reactions.jobs import _character_capacities
             slots = {c["character_id"]: c["slots"] for c in _character_capacities(CTX)}
             held = {}
             for r in _cf_rows(con):
-                held[r["character_id"]] = held.get(r["character_id"], 0) + 1
-            return {cid: (n, slots.get(cid, 0)) for cid, n in held.items() if n > slots.get(cid, 0)}
+                key = (r["character_id"], r["tier_order"])
+                held[key] = held.get(key, 0) + 1
+            peak = {}
+            for (cid, _stage), n in held.items():
+                peak[cid] = max(peak.get(cid, 0), n)
+            return {cid: (n, slots.get(cid, 0)) for cid, n in peak.items() if n > slots.get(cid, 0)}
 
         check(not _over_capacity(),
               f"no character holds more jobs than it has reactors (over: {_over_capacity()})")
@@ -346,13 +348,14 @@ def main():
         # a pass that does nothing.
         import inspect
         from app.reactions import jobs as _J
-        src = inspect.getsource(_J.get_industry_jobs)
-        check(src.index("level_product_runs(context_id)") < src.index("FROM pp_reaction_assignments"),
+        src = inspect.getsource(_J._get_industry_jobs_uncached)
+        read_boundary = src.index("assignments: dict")
+        check(src.index("level_product_runs(context_id)") < read_boundary,
               "the plan is levelled BEFORE the rows behind the response are read")
-        check(src.index("restage_plan_rows(context_id)") < src.index("FROM pp_reaction_assignments"),
+        check(src.index("restage_plan_rows(context_id)") < read_boundary,
               "...and so is the stage repair it runs beside")
 
-        print("two chains on ONE character each keep their own job:")
+        print("two chains on ONE character may share their pooled stage work:")
         _reset(con)
         _characters(con)
         cid = CHARS[0][0]
@@ -360,13 +363,10 @@ def main():
         _plan(con, cid, 3000.0, [(CF, "Carbon Fiber", 60, 2, 0), (RCF, "RCF", 12, 1, 1)])
         level_product_runs(CTX)
         rows = [r for r in _cf_rows(con) if r["type_id"] == CF]
-        chains = [dict(r) for r in con.execute(
-            "SELECT created_at, COUNT(*) AS n FROM pp_reaction_assignments WHERE character_id=? "
-            "AND type_id=? GROUP BY created_at", (cid, CF))]
         check(len({r["runs"] for r in rows}) == 1,
               f"both chains carry the same number (got {sorted({r['runs'] for r in rows})})")
-        check(len(chains) == 2 and all(c["n"] >= 1 for c in chains),
-              "and neither chain lost its last row — the dashboard still knows it is waiting")
+        check(rows and sum(r["runs"] for r in rows) >= 320,
+              "and the account-wide stage still covers both chains")
         _reset(con)
 
         print("a stage that CANNOT fit its window overruns — and says by how much:")

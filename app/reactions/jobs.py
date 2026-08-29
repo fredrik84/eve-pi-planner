@@ -1920,13 +1920,6 @@ def level_product_runs(context_id: int) -> int:
             excluded_by_char_stage.setdefault(cid, {})[st] = \
                 excluded_by_char_stage.get(cid, {}).get(st, 0) + 1
 
-    planned_stages = {stage for per in rows_by_char_stage.values() for stage in per}
-    planned_peak = max((sum(per.get(stage, 0) for per in rows_by_char_stage.values())
-                        for stage in planned_stages), default=1)
-    lean_set = {h["character_id"] for h in _hosts_for_parallel_jobs(
-        [{"character_id": cid, "free_slots": n} for cid, n in room.items() if n > 0],
-        planned_peak)}
-
     plan: list[tuple] = []          # (product_key, rows, target_runs, [character per job])
     # Jobs this pass has already placed on a character, stage by stage. Reading the ORIGINAL row
     # counts for every stage instead let stage 0 fill a character up and stage 1 then fill it again
@@ -2166,10 +2159,16 @@ def level_product_runs(context_id: int) -> int:
                 "jobs_saved": max(0, int(cheapest.get("jobs") or 0) - int(opt.get("jobs") or 0)),
             }
 
-        # ── Step 5b: place the jobs (stable: who already runs it keeps it) ──────────────────────
-        # WHERE the jobs go. A character that already runs the product keeps it (no move for its
-        # own sake), then whoever has the most room — so consolidating a product onto fewer
-        # reactors moves as few rows as it can.
+        # ── Step 5b: place pending jobs deterministically; running groups are already frozen ───
+        # Pick the worthwhile logins from the FINAL number of jobs this stage needs. Deriving this
+        # from the pre-levelled row count made the set change after pass one, so pass two moved an
+        # otherwise identical plan again.
+        stage_jobs = sum(max(1, int(opt["jobs"])) for opt in layout.values())
+        lean_set = {h["character_id"] for h in _hosts_for_parallel_jobs(
+            [{"character_id": cid, "free_slots": n} for cid, n in budget.items() if n > 0],
+            stage_jobs)}
+        # WHERE the pending jobs go. Use the fewest worthwhile logins and fill their remaining
+        # capacity deterministically; installed work was removed from this pool in Step 1b.
         room_left = dict(budget)
         for tid, opt in sorted(layout.items(), key=lambda kv: -kv[1]["jobs"]):
             rs_all = sorted(by_product[tid], key=lambda r: r["id"])
@@ -2177,21 +2176,19 @@ def level_product_runs(context_id: int) -> int:
             have: dict[int, int] = {}
             for r in rs_all:
                 have[r["character_id"]] = have.get(r["character_id"], 0) + 1
-            # Who runs it: the characters already running it keep as much of it as their room
-            # allows, and only what is left over goes anywhere new. Placing purely by "most room
-            # first" was not STABLE — the next pass saw the new distribution, re-sorted, and moved
-            # twelve rows again for an identical layout, on every dashboard load.
+            # Who runs it: place against the remaining capacity in one deterministic order. Using
+            # this product's CURRENT distribution as the first sort key made products compete in
+            # a circular way: the first pass changed `have`, the second pass therefore chose
+            # different hosts, and merely opening the dashboard redistributed the plan again.
+            # Running groups are frozen above, so pending rows are safe to pack by capacity alone.
             quota: dict[int, int] = {}
             left = want
-            # The characters worth a login go first, even where a lesser one already holds rows of
-            # this product: with nothing installed there is no churn to avoid, and consolidating is
-            # the whole point. *"No one is running any products right now, so there's no reason why
-            # it should give it to that character."*
-            for cid in sorted(have, key=lambda c: (0 if c in lean_set else 1,
-                                                    -have[c], -room_left.get(c, 0), c)):
+            # The characters worth a login go first. Capacity and character id are stable inputs;
+            # the rows a previous pass happened to leave behind are deliberately not.
+            for cid in sorted(room_left, key=lambda c: (-room_left[c], c)):
                 if cid not in lean_set:
-                    continue                # ...only if the worthwhile ones cannot absorb it
-                take = min(have[cid], max(0, room_left.get(cid, 0)), left)
+                    continue
+                take = min(max(0, room_left.get(cid, 0)), left)
                 if take:
                     quota[cid] = take
                     room_left[cid] -= take

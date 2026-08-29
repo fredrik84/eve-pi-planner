@@ -28,7 +28,9 @@ async function addBuild(page, label, quantity = 1) {
 
 async function planQueue(page, extra = {}) {
   const response = await page.request.post('/api/industry/queue-plan', { data: {
-    force_build: true, prioritize_speed: false, ...extra,
+    // Market prices move. Force the manufactured parent of M1's reaction tree so these hand-off
+    // invariants cannot disappear merely because buying it became cheaper today.
+    force_build: true, force_build_ids: [57479], prioritize_speed: false, ...extra,
   }});
   expect(response.ok(), await response.text()).toBeTruthy();
   return response.json();
