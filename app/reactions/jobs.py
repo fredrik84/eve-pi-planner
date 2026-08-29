@@ -257,6 +257,9 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
     # from the same Redis-cached charlist payload — so a refresh that actually pulled new jobs must
     # bust that cache or the tab keeps showing stale/absent jobs until the next colony rescan.
     if refreshed:
+        # Give every newly seen ESI job first refusal on the existing recurring plan, in priority
+        # order, before any allocator mistakes its occupied reactor for free capacity.
+        bind_reaction_jobs_to_plan(context_id)
         cache_invalidate(charlist_key(context_id))
         _invalidate_dashboard_cache(context_id)
     # Capacity may just have been freed by a completed ESI job. Reactions owns assignment, so the
@@ -332,6 +335,7 @@ def refresh_character_jobs(character_id: int) -> bool:
         con.commit()
     finally:
         con.close()
+    bind_reaction_jobs_to_plan(row["context_id"])
     cache_invalidate(charlist_key(row["context_id"]))
     return True
 
@@ -427,9 +431,87 @@ def ensure_reaction_assignments_table():
                     "cadence_over_h REAL NOT NULL DEFAULT 0",
                     "surplus_runs INTEGER NOT NULL DEFAULT 0",
                     "jobs_saved INTEGER NOT NULL DEFAULT 0",
-                    "recover_runs INTEGER NOT NULL DEFAULT 0")
+                    "recover_runs INTEGER NOT NULL DEFAULT 0",
+                    # Exact ESI identity of the currently executing instance of this recurring
+                    # slot. Cleared when that job leaves the active snapshot; the slot remains.
+                    "esi_job_id INTEGER")
+        con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rx_assign_esi_job "
+                    "ON pp_reaction_assignments (esi_job_id)")
+        con.commit()
     finally:
         con.close()
+
+
+def bind_reaction_jobs_to_plan(context_id: int) -> int:
+    """Attach each newly observed ESI job to the first compatible unbound slot in plan priority.
+
+    `job_id` is the identity; product/run counts are only compatibility data. A binding relocates
+    the slot to the installer because that is where it is physically executing. When a job is no
+    longer active its binding is cleared, leaving the recurring assignment ready for the next
+    cycle. Returns the number of writes, for cache invalidation/testing.
+    """
+    ensure_industry_jobs_table()
+    ensure_reaction_assignments_table()
+    ensure_reaction_orders_table()
+    con = get_connection()
+    changed = 0
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        cached = con.execute(
+            "SELECT j.character_id,j.jobs_json FROM pp_char_industry_jobs j "
+            "JOIN pp_characters c ON c.character_id=j.character_id WHERE c.context_id=?",
+            (context_id,),
+        ).fetchall()
+        active: list[dict] = []
+        for snapshot in cached:
+            for job in _json.loads(snapshot["jobs_json"] or "[]"):
+                if (job.get("status") or "").lower() not in ("active", "paused", "ready"):
+                    continue
+                jid = int(job.get("job_id") or 0)
+                tid = int(job.get("product_type_id") or 0)
+                if jid and tid:
+                    active.append({"job_id": jid, "type_id": tid,
+                                   "character_id": int(snapshot["character_id"]),
+                                   "runs": int(job.get("runs") or 0),
+                                   "start_date": job.get("start_date") or ""})
+        active_ids = {j["job_id"] for j in active}
+        bound = [dict(r) for r in con.execute(
+            "SELECT a.id,a.esi_job_id FROM pp_reaction_assignments a JOIN pp_characters c "
+            "ON c.character_id=a.character_id WHERE c.context_id=? AND a.esi_job_id IS NOT NULL",
+            (context_id,),
+        )]
+        stale = [r["id"] for r in bound if int(r["esi_job_id"]) not in active_ids]
+        if stale:
+            marks = ",".join("?" * len(stale))
+            con.execute(f"UPDATE pp_reaction_assignments SET esi_job_id=NULL WHERE id IN ({marks})", stale)
+            changed += len(stale)
+        bound_ids = {int(r["esi_job_id"]) for r in bound if int(r["esi_job_id"]) in active_ids}
+
+        # Oldest first is deterministic and mirrors the order jobs entered ESI. For each job the
+        # order's explicit priority wins, then stable plan creation/id order.
+        for job in sorted(active, key=lambda j: (j["start_date"], j["job_id"])):
+            if job["job_id"] in bound_ids:
+                continue
+            slot = con.execute(
+                "SELECT a.id FROM pp_reaction_assignments a "
+                "JOIN pp_characters c ON c.character_id=a.character_id "
+                "LEFT JOIN pp_reaction_orders o ON o.id=a.order_id "
+                "WHERE c.context_id=? AND a.type_id=? AND a.esi_job_id IS NULL "
+                "ORDER BY COALESCE(o.priority,-1) DESC,a.created_at,a.id LIMIT 1",
+                (context_id, job["type_id"]),
+            ).fetchone()
+            if not slot:
+                continue
+            con.execute("UPDATE pp_reaction_assignments SET esi_job_id=?,character_id=? WHERE id=?",
+                        (job["job_id"], job["character_id"], slot["id"]))
+            bound_ids.add(job["job_id"])
+            changed += 1
+        con.commit()
+    finally:
+        con.close()
+    if changed:
+        _invalidate_dashboard_cache(context_id)
+    return changed
 
 
 # ── Fixed-unit customer orders ──────────────────────────────────────────────────────────────
@@ -3403,6 +3485,9 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
     ensure_industry_jobs_table()
     ensure_reaction_assignments_table()
     ensure_reaction_orders_table()
+    # Also performs the additive backfill for snapshots fetched before persistent job bindings
+    # existed. Idempotent after the first read; subsequent dashboard loads write nothing.
+    bind_reaction_jobs_to_plan(context_id)
     # Fetched BEFORE opening the main connection below, not inside that try block — this opens
     # its OWN connection internally (member_group/get_reaction_settings/account override), and
     # holding two connections open at once per request is exactly what exhausted the pool under
@@ -3464,7 +3549,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                 # rather than recomputed because the pass that knows the counterfactual has already
                 # run and closed its connection by the time these rows are read.
                 f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order, "
-                f"created_at, order_id, COALESCE(cadence_over_h,0) AS cadence_over_h, "
+                f"created_at, order_id, esi_job_id, COALESCE(cadence_over_h,0) AS cadence_over_h, "
                 f"COALESCE(surplus_runs,0) AS surplus_runs, COALESCE(jobs_saved,0) AS jobs_saved, "
                 f"COALESCE(recover_runs,0) AS recover_runs "
                 f"FROM pp_reaction_assignments WHERE character_id IN ({placeholders}) ORDER BY tier_order", char_ids,
@@ -3582,6 +3667,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
     # Which planned products another planned row consumes — the structural read of "this is an
     # intermediate", replacing the old `input_cost == 0 and reward == 0` proxy.
     all_rows = [a for rows_ in assignments.values() for a in rows_]
+    bound_job_ids = {int(a["esi_job_id"]) for a in all_rows if a.get("esi_job_id") is not None}
     consumed_by_plan = _plan_intermediates(context_id, all_rows)
     plan_totals = _plan_totals(context_id, all_rows, order_meta,
                                 cycle_hours_by_type, output_qty_by_type, market_by_type)
@@ -3614,22 +3700,8 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         row = cached.get(c["character_id"])
         jobs = _json.loads(row["jobs_json"]) if row else []
         active = [j for j in jobs if j.get("status") in ("active", "paused", "ready")]
+        active_by_id = {int(j.get("job_id") or 0): j for j in active if j.get("job_id")}
         used_slots += len(active)
-        # Count-aware, not just a set of type_ids present — a big batch can be split into
-        # several separate pending assignment rows for the SAME product (one per job slot), so
-        # only as many of them may be cleared as there are actually-running jobs of that type;
-        # naive set-membership would wrongly clear every pending row for a product the moment
-        # just ONE of its several intended jobs gets installed.
-        running_type_counts: dict[int, int] = {}
-        # ...and the RUN COUNT each of those jobs really carries, oldest first, so a row can be
-        # credited with what was actually installed rather than what the plan proposed. The two
-        # differ whenever the industry window's default is accepted instead of the planned number.
-        running_runs: dict[int, list[int]] = {}
-        for j in active:
-            tid = j.get("product_type_id")
-            running_type_counts[tid] = running_type_counts.get(tid, 0) + 1
-            running_runs.setdefault(tid, []).append(int(j.get("runs") or 0))
-
         # How many rows of each (product, stage) group the player has marked by hand, spent row by
         # row below so marking 2 of a group's 4 jobs leaves the other 2 alone. A marked row STAYS in
         # `pending` and carries the mark instead of vanishing: the page has to be able to draw it
@@ -3654,14 +3726,13 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
             # NOT deleted — the plan is a persistent loadout, so when the job finishes and drops
             # out of ESI this row reappears as "to install". Count-aware, so N running jobs cover
             # exactly N of this product's planned rows.
-            is_running = running_type_counts.get(a["type_id"], 0) > 0
+            bound_job = active_by_id.get(int(a.get("esi_job_id") or 0))
+            is_running = bool(bound_job and int(bound_job.get("product_type_id") or 0) == int(a["type_id"]))
             if is_running:
-                running_type_counts[a["type_id"]] -= 1
                 # What this row is really going to make. A job installed at 120 runs where the plan
                 # said 113 covers MORE than the row promised; one installed at 100 covers less, and
                 # that is the case worth telling the player about.
-                got = running_runs.get(a["type_id"]) or []
-                made = got.pop(0) if got else int(a["runs"] or 0)
+                made = int(bound_job.get("runs") or a["runs"] or 0)
                 _cover[a["type_id"]] = _cover.get(a["type_id"], 0) + made
             else:
                 _cover[a["type_id"]] = _cover.get(a["type_id"], 0) + int(a["runs"] or 0)
@@ -3766,16 +3837,14 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                       if cid == c["character_id"]],
         })
         # ── Step 4a: orphan jobs (running in-game with no plan slot) and running-job rows ───────
-        # Whatever remains in running_type_counts after plan-row matching is ORPHAN jobs: running
-        # in-game with no plan slot (installed outside the tool's assign flow — e.g. a corp job).
+        # A running ESI job with no persistent slot binding is an ORPHAN (installed outside the
+        # tool's plan — e.g. a corp job). Product counts no longer infer this relationship.
         # Flag each running job as orphan/planned here, collect orphans for SDE-recipe valuation
         # after the loop, and carry character_id so the UI can offer "add to plan" on an orphan.
-        orphan_remaining = dict(running_type_counts)
         for j in active:
             tid = j.get("product_type_id")
-            is_orphan = orphan_remaining.get(tid, 0) > 0
+            is_orphan = int(j.get("job_id") or 0) not in bound_job_ids
             if is_orphan:
-                orphan_remaining[tid] -= 1
                 unplanned_running.append((tid, j.get("runs") or 0))
             end = j.get("end_date")
             start = j.get("start_date")
@@ -3795,6 +3864,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                 except Exception:
                     pass
             running.append({
+                "job_id": j.get("job_id"),
                 "character_id": c["character_id"],
                 "character_name": c["character_name"],
                 "product_type_id": tid,

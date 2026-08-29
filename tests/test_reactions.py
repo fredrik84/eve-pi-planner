@@ -1201,8 +1201,10 @@ def test_it_warns_when_installed_jobs_will_come_up_short() -> bool:
             con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,"
                         "input_cost,reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
                         (CID, TID, "Crystalline Carbonide", 113, 0, 0, now, 0, None))
-        jobs = [{"product_type_id": TID, "runs": r, "status": "active", "duration": r * 3 * 3600}
-                for r in job_runs]
+        jobs = [{"job_id": 990000 + i, "product_type_id": TID, "runs": r,
+                 "status": "active", "start_date": "2026-08-29T00:00:00Z",
+                 "duration": r * 3 * 3600}
+                for i, r in enumerate(job_runs)]
         con.execute("INSERT INTO pp_char_industry_jobs (character_id,jobs_json,fetched_at) "
                     "VALUES (?,?,?)", (CID, _json.dumps(jobs), now))
         con.commit(); con.close()
@@ -1211,6 +1213,13 @@ def test_it_warns_when_installed_jobs_will_come_up_short() -> bool:
         setup([113, 113])
         ok = check(not (J.get_industry_jobs(context_id=CTX).get("under_production") or []),
                    "installing exactly what was planned says nothing")
+        con = get_connection()
+        attached = [r["esi_job_id"] for r in con.execute(
+            "SELECT esi_job_id FROM pp_reaction_assignments WHERE character_id=? "
+            "AND esi_job_id IS NOT NULL ORDER BY esi_job_id", (CID,))]
+        con.close()
+        ok &= check(attached == [990000, 990001],
+                    "first sight of each ESI job_id persistently attaches it to one plan slot")
 
         setup([120, 120])
         ok &= check(not (J.get_industry_jobs(context_id=CTX).get("under_production") or []),
