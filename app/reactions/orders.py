@@ -19,7 +19,8 @@ from app.reactions.graph import (
 from app.reactions.jobs import (
     _character_capacities, ensure_reaction_orders_table, ensure_reaction_assignments_table,
     _allocate_and_insert, formula_concurrency_caps, _cap_jobs, give_back_order_runs,
-    live_reaction_runs, _invalidate_dashboard_cache,
+    live_reaction_runs, reaction_manual_marks, manual_jobs, _RX_RUNNING,
+    _invalidate_dashboard_cache,
 )
 
 
@@ -967,11 +968,24 @@ def _running_rows_among(context_id: int, rows: list[dict]) -> int:
     count-aware matching the dashboard uses, so N running jobs cover exactly N rows."""
     try:
         live = {k: len(v) for k, v in live_reaction_runs(context_id).items()}
+        marks = reaction_manual_marks(context_id)
+        group_sizes: dict[tuple[int, int, int], int] = {}
+        for r in rows:
+            key = (int(r["character_id"]), int(r["type_id"]), int(r.get("tier_order") or 0))
+            group_sizes[key] = group_sizes.get(key, 0) + 1
+        hand_running = {
+            key: manual_jobs(marks, key[0], key[1], key[2], steps, _RX_RUNNING)
+            for key, steps in group_sizes.items()
+        }
         n = 0
         for r in rows:
-            key = (int(r["character_id"]), int(r["type_id"]))
-            if live.get(key, 0) > 0:
-                live[key] -= 1
+            live_key = (int(r["character_id"]), int(r["type_id"]))
+            mark_key = (live_key[0], live_key[1], int(r.get("tier_order") or 0))
+            if live.get(live_key, 0) > 0:
+                live[live_key] -= 1
+                n += 1
+            elif hand_running.get(mark_key, 0) > 0:
+                hand_running[mark_key] -= 1
                 n += 1
         return n
     except Exception:

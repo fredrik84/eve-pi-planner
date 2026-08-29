@@ -1,0 +1,15 @@
+{
+  "name": "eve-pi-planner-browser-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Browser acceptance harness for eve-pi-planner",
+  "scripts": {
+    "test": "playwright test --project=desktop",
+    "test:all": "playwright test",
+    "test:protocol": "playwright test --project=protocol",
+    "report": "playwright show-report artifacts/report --host 0.0.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0"
+  }
+}

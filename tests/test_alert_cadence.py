@@ -1,6 +1,7 @@
 """Tests for TODO §37 and §37b: alerts that check before they nag, and nag less each time.
 
-Two behaviours, both in app/notifications.py, both behind `alert_rescan_backoff`:
+Two behaviours in app/notifications.py. Rescanning is an unconditional send-safety boundary;
+repeat cooldown backoff is independently controlled by `alert_rescan_backoff`:
 
   1. **Backoff.** A repeat of an alert nobody has acted on waits twice as long as the last one,
      capped. The FIRST send is never delayed — that property is the whole reason the change is
@@ -421,10 +422,10 @@ def test_the_budget_is_for_the_whole_tick_not_each_account() -> bool:
     return ok
 
 
-def test_the_flag_off_path_is_the_old_behaviour() -> bool:
-    """The rollback path. With the flag off there must be NO ESI call, no suppression, and the
-    kind's own cooldown — otherwise turning the flag off does not undo anything."""
-    print(f"\n{'='*60}\n  with the flag off, nothing about this feature happens\n{'='*60}")
+def test_the_flag_off_path_is_the_base_cooldown() -> bool:
+    """The backoff rollback path: computing due alerts uses the base cooldown. Rescanning belongs
+    to `_process_context`, after this computation, and is deliberately unaffected by this flag."""
+    print(f"\n{'='*60}\n  with backoff off, due alerts use their base cooldown\n{'='*60}")
     ok = True
     import app.notifications as N
     con = get_connection()
@@ -477,19 +478,25 @@ def _seed_due_expired_alert():
     con.close()
 
 
-def _run_process_context(flag_on, scan_result):
+def _run_process_context(flag_on, scan_result, events=None):
     """Run the REAL _process_context with the flag and the scan outcome forced. Returns
     (sent_titles, scan_calls)."""
     import app.notifications as N
     sent, scans = [], []
+    events = events if events is not None else []
 
     class _FakeNotifier:
         def send(self, title, body, **kw):
+            events.append("send")
             sent.append(title)
 
     real_flag, real_scan, real_notifier = N.feature_enabled_for, N._default_scan, N.make_notifier
     N.feature_enabled_for = lambda key, ctx: flag_on
-    N._default_scan = lambda c, p: (scans.append((c, p)), scan_result)[1]
+    def _scan(c, p):
+        events.append("scan-finished")
+        scans.append((c, p))
+        return scan_result
+    N._default_scan = _scan
     N.make_notifier = lambda ch, cfg: _FakeNotifier()
     N._scan_budget_left = _SCAN_BUDGET_PER_TICK
     con = get_connection()
@@ -503,16 +510,19 @@ def _run_process_context(flag_on, scan_result):
 
 
 def test_the_whole_path_end_to_end() -> bool:
-    """The integration point the unit tests could not see: with the feature OFF nothing changes,
-    and with it ON a colony we failed to read produces NO notification. Both of these could be
-    deleted from `_process_context` without any other test noticing."""
-    print(f"\n{'='*60}\n  _process_context: the flag gate and the suppression, for real\n{'='*60}")
+    """The send boundary: colony verification completes before notification regardless of whether
+    repeat backoff is enabled. A failed read can never fall through to a stale send."""
+    print(f"\n{'='*60}\n  _process_context: rescan completes before every colony send\n{'='*60}")
     ok = True
 
     _seed_due_expired_alert()
-    sent, scans = _run_process_context(flag_on=False, scan_result=True)
-    ok &= check(scans == [], "flag OFF: no ESI read is attempted")
-    ok &= check(len(sent) == 1, f"flag OFF: the alert is sent exactly as before (sent {len(sent)})")
+    events = []
+    sent, scans = _run_process_context(flag_on=False, scan_result=True, events=events)
+    ok &= check(scans == [(FAKE_CID, PLANET_A)],
+                "backoff OFF: the colony is still verified before sending")
+    ok &= check(len(sent) == 1, f"a verified alert is sent exactly once (sent {len(sent)})")
+    ok &= check(events == ["scan-finished", "send"],
+                f"the rescan completes before the notifier is called (events {events})")
 
     _seed_due_expired_alert()
     sent, scans = _run_process_context(flag_on=True, scan_result=True)
@@ -525,6 +535,11 @@ def test_the_whole_path_end_to_end() -> bool:
     ok &= check(scans == [(FAKE_CID, PLANET_A)], "flag ON: the read is attempted")
     ok &= check(sent == [],
                 f"flag ON: a colony we could NOT read produces no notification (sent {sent})")
+
+    _seed_due_expired_alert()
+    sent, scans = _run_process_context(flag_on=False, scan_result=False)
+    ok &= check(scans == [(FAKE_CID, PLANET_A)], "backoff OFF: a read is still attempted")
+    ok &= check(sent == [], "backoff OFF: a failed verification still cannot send stale data")
 
     con = get_connection()
     row = con.execute("SELECT COUNT(*) AS c FROM pp_notification_log "
@@ -1018,7 +1033,7 @@ def main() -> int:
             test_a_resolved_alert_starts_over(),
             test_the_first_alert_is_never_delayed(),
             test_channels_do_not_inflate_the_rung(),
-            test_the_flag_off_path_is_the_old_behaviour(),
+            test_the_flag_off_path_is_the_base_cooldown(),
             test_a_dead_token_can_actually_be_recorded_as_dead(),
             test_only_colonies_worth_a_call_are_scanned(),
             test_a_colony_we_could_not_read_is_not_reported(),

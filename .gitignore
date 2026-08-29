@@ -21,3 +21,4 @@ request.json
 
 # Recovery artifacts — data, not code. See TODO.md §20.
 restore/
+browser-tests/artifacts/

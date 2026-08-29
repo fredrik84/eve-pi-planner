@@ -20,6 +20,35 @@ services:
       traefik.http.routers.eve-pi-dev.tls.certresolver: myresolver
       traefik.docker.network: docker_default
 
+  browser-tests:
+    profiles: ["test"]
+    build:
+      context: ./browser-tests
+    init: true
+    ipc: host
+    depends_on:
+      - web
+    environment:
+      BASE_URL: ${BROWSER_BASE_URL:-http://web:8000}
+      PP_SESSION: ${PP_SESSION:-}
+    volumes:
+      - ./browser-tests/playwright.config.js:/work/playwright.config.js:ro
+      - ./browser-tests/tests:/work/tests:ro
+      - ./browser-tests/artifacts:/work/artifacts
+      - ./docs:/work/docs:ro
+
+  test-report:
+    profiles: ["test"]
+    build:
+      context: ./browser-tests
+    init: true
+    restart: unless-stopped
+    command: npx playwright show-report artifacts/report --host 0.0.0.0 --port 9323
+    ports:
+      - "${BROWSER_REPORT_PORT:-9323}:9323"
+    volumes:
+      - ./browser-tests/artifacts:/work/artifacts:ro
+
 volumes:
   sde_data:
 

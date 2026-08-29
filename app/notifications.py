@@ -10,10 +10,10 @@ module is purely a consumer (kind/severity filtering, cooldown, batching, sendin
 implement its own detection, so a push notification and what's shown on the Dashboard can never
 drift apart.
 
-The scheduler runs check_and_send_notifications() every 15 minutes. With `alert_rescan_backoff`
-off it uses only data already in the DB and adds no EVE API load; with it on, a due alert first
-triggers a re-read of the one colony it is about, bounded by a whole-tick budget — see
-docs/platform.md, "Check before nagging".
+The scheduler runs check_and_send_notifications() every 15 minutes. A due colony alert first
+triggers a re-read of the colony it is about, bounded by a whole-tick budget. The independent
+`alert_rescan_backoff` flag makes repeated alerts wait progressively longer — see docs/platform.md,
+"Check before nagging".
 """
 import json as _json
 import logging
@@ -345,9 +345,9 @@ def _consecutive_cooldown_h(con, context_id: int, event: str, planet_id, base_h:
 def check_and_send_notifications():
     """Run every 15 minutes.
 
-    NOT pure DB math since `alert_rescan_backoff`: a due alert triggers a bounded re-read of the one
-    colony it is about (see `_rescan_for_due_alerts`). With the flag off it makes no ESI calls at
-    all, which is what it always did.
+    NOT pure DB math: a due colony alert triggers a bounded re-read of the colony it is about (see
+    `_rescan_for_due_alerts`) and that read completes before a notifier is called. The
+    `alert_rescan_backoff` flag controls only the progressively longer repeat cooldown.
 
     Guarded by a Postgres advisory lock (same pattern as scripts/build_sde.py /
     populate_geo.py). Every uvicorn worker in every pod replica runs its own APScheduler on its
@@ -712,10 +712,15 @@ def _process_context(con, context_id: int):
     if not settings:
         return
 
+    # Checking current colony state is a correctness boundary, not a rollout preference: a push
+    # computed before its targeted rescan finishes tells users to fix work they already fixed.
+    # Keep the flag for the independent repeat-backoff policy, but always finish the bounded
+    # colony verification pass before any notifier is called. Reaction-job reads remain behind
+    # their own flag because they use a second ESI endpoint and scope.
     smart = feature_enabled_for("alert_rescan_backoff", context_id)
     by_kind = _due_alerts(con, context_id, notify_kinds, min_severity, smart)
 
-    if smart and by_kind:
+    if by_kind:
         # Everything above is a judgement about data the user may already have made stale by fixing
         # the problem in-game. Refresh what the due alerts are about, then ask again — an alert that
         # does not survive a fresh read was never worth sending.

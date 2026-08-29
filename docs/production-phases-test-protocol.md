@@ -1,23 +1,19 @@
 # Production phases: current dev acceptance protocol
 
-This is the click-by-click acceptance check for the shared Reactions and Manufacturing workflow.
-It tests what a player sees on dev after the 2026-08-22 repair round. Pure functional behavior is
-owned by the automated suites; the tester should primarily judge flow, clarity, wording, and visual
-design, while recording any visible contradiction the suites failed to catch.
+This document has two deliberately separate tracks for the shared Reactions and Manufacturing
+workflow: a fully automated functional gate, followed by a short human review of design and user
+flow. Do not manually reproduce database arithmetic that the automated gate already proves.
 
 **Current revision:** commit `2f277de` or newer on `dev`.
 
 ## Contents
 
 - [Phase 5 summary](#phase-5-summary) — the proposed final orchestration and cleanup phase
-- [Before testing](#before-testing) — account, ESI, formula, and evidence setup
+- [Automated testing](#automated-testing) — command, web report, and coverage ownership
+- [Manual review setup](#manual-review-setup) — account, ESI, formula, and evidence setup
+- [Manual design and user-flow review](#manual-design-and-user-flow-review) — the short, sorted human list
 - [Start from a clean test state](#start-from-a-clean-test-state) — remove disposable work safely
-- [Settings acceptance](#settings-acceptance) — inventory, structures, markets, and Build Rules
-- [Phase 1 — task-first pages](#phase-1--task-first-pages) — layout and primary flows
-- [Phase 2 — automatic planning](#phase-2--automatic-planning) — cadence, recurring work, warnings, and parity
-- [Phase 3 — Manufacturing hand-off](#phase-3--manufacturing-hand-off) — one build creating and maintaining reaction work
-- [Phase 4 — shared work and ownership](#phase-4--shared-work-and-ownership) — aggregation, priority, and safe removal
-- [Phase 5 acceptance](#phase-5-acceptance) — recovery, attention, and cross-navigation checks
+- [Reference scenarios](#reference-scenarios) — detailed steps for changed or failed areas
 - [Result sheet](#result-sheet) — what to record when something differs
 
 ## Phase 5 summary
@@ -47,7 +43,38 @@ Intentional difference: Manufacturing may show later dependent stages, while Rea
 slots only for work that is ready. Alignment must not make Manufacturing reserve future reaction
 work early.
 
-## Before testing
+## Automated testing
+
+Run the deterministic gate before opening dev for human review:
+
+```bash
+./scripts/run_browser_protocol.sh
+```
+
+The command runs every documented case in an isolated local tenant, publishes the latest Playwright
+HTML report, and exits non-zero if any case fails. From another computer, browse to:
+
+```text
+http://SERVER_HOST_OR_IP:9323
+```
+
+The report contains pass/fail status, duration, failure screenshots, video, traces, and error
+context. Port 9323 must be reachable through the server firewall. Override it with
+`BROWSER_REPORT_PORT=9400 ./scripts/run_browser_protocol.sh` if needed.
+
+| Automated group | Cases | What automation proves |
+|---|---|---|
+| Settings and task-first pages | S1, P1-R0–P1-R3, P1-M1–P1-M3 | Controls are reachable, layouts do not overflow, primary flows return to Overview, and displayed cost arithmetic agrees. |
+| Automatic planning | P2-R1–P2-R5, P2-M1 | Cadence defaults, recurrence, capacity warnings, production modes, and toolbar stability behave correctly. |
+| Manufacturing hand-off | P3-1–P3-5 | Linked work is created, resized, released, or preserved according to its committed state. P3-5 uses a deterministic running mark; the real ESI presentation remains a human spot-check. |
+| Shared ownership | P4-1–P4-4 | Aggregation, owner removal, priority, capacity safety, and per-build isolation preserve the intended state. |
+| Attention and navigation | P5 | Attention states are singular and ownership links resolve in both directions. |
+| Documentation coverage | coverage guard | Every ID in the result sheet has a Playwright case, so adding a documented case without automation fails the suite. |
+
+Screenshots and traces are stored in `browser-tests/artifacts/`. A failed automated case blocks the
+merge regardless of subjective manual impressions.
+
+## Manual review setup
 
 Use `https://dev.eveindustry.net` and a tester account with:
 
@@ -68,21 +95,24 @@ job and should only be run when that is acceptable. For every failure, record th
 the time, expected result, observed result, and a screenshot. Keep the browser console open only if
 you are comfortable doing so; a visible user-facing failure is enough to report the bug.
 
-### Automated gate already passed
+## Manual design and user-flow review
 
-Before this revision was published, the complete Reactions suite and all 1,130 Manufacturing checks
-passed. Those suites cover the arithmetic and state invariants behind this protocol, including:
+After the automated gate is green, verify only what a deterministic local browser cannot establish.
+Work through this list in order:
 
-- preview material cost matching the stock-netted shopping list and total cost composition;
-- PostgreSQL-safe Manufacturing plan loading (the reported HTTP 500 path);
-- automatic first-cycle assignment, capacity warnings, priority recovery, and released-slot reuse;
-- weekly cadence fallback, run preservation, formula caps, and Balanced/Fastest allocation branches;
-- linked-order aggregation, idempotency, demand growth/shrink, deletion cleanup, and protection of
-  ESI-running work;
-- slot arithmetic and the rule that no character is assigned beyond its real capacity.
+| Order | Cases | What you need to verify |
+|---|---|---|
+| 1 | S1, P1-R0, P1-R1, P1-M1, P1-M3 | Desktop visual hierarchy, readable wording, compact cards, no clipping, and an obvious primary action. |
+| 2 | P1-R2, P1-M2, P2-R4, P2-R5, P2-M1 | The flow feels predictable: menus close, feedback is understandable, warnings offer useful next actions, and Balanced/Fastest descriptions match their intent. |
+| 3 | P3-1–P3-4, P4-1–P4-4 | Linked ownership and shared-work labels make sense to a player. Spot-check IDs and quantities shown on both pages; automation owns the underlying arithmetic. |
+| 4 | P5 | Attention language is consistent across waiting, ready, running, blocked, and done, and two-way navigation does not disorient the user. |
+| 5 | P3-5 | **Only required live-EVE check:** refresh an actually installed linked job, remove its source build, and verify the running work remains tracked without a duplicate. Skip with a reason if no safe live job exists. |
 
-Do not spend acceptance time recomputing those internals unless the UI presents contradictory
-numbers. The clicks below verify that the proven behavior is actually understandable and reachable.
+The human result is about whether the experience is clear—not whether an API returned the expected
+integer. P1-R3 and P2-R1–P2-R3 need no routine manual repetition after a green automated run. Re-run
+their reference steps only when their UI changed materially or their automated case failed. On
+mobile, do one navigation and overflow-menu smoke pass for pages touched by the change; full
+protocol repetition on mobile is not required.
 
 ## Start from a clean test state
 
@@ -102,6 +132,11 @@ Do not clear or delete anything that is running in EVE merely to reset this prot
 
 The protocol does not require an empty production account. It requires a known baseline and enough
 free capacity for the small cases; blocked-capacity tests intentionally use the remaining capacity.
+
+## Reference scenarios
+
+Use the detailed scenarios below only for the manual-review cases listed above, or to reproduce a
+specific automated failure. They are not a second mandatory execution of the automated suite.
 
 ## Settings acceptance
 
@@ -258,16 +293,6 @@ Pass when the user gets a visible warning that capacity is insufficient, the ord
 and the UI offers meaningful choices such as retry, skip this cycle, or stop recurring. Existing
 assignments must not disappear. If the test unexpectedly fits, increase the quantity and repeat.
 
-### P2-M1 — equivalent transient controls behave alike
-
-1. On **Manufacturing → Overview**, open **More** and choose **Refresh ESI jobs**.
-2. While the page refreshes, change to **Materials & blueprints**, then return to **Overview**.
-3. Reload the browser.
-
-Pass when More does not remain sticky, the chosen page does not acquire a duplicated toolbar, and
-the status refresh does not hide the top metrics/summary. Manufacturing need not expose reaction-only
-controls such as recurring customer cycles.
-
 ### P2-R5 — production pace has two predictable modes
 
 1. Open **Settings → Build rules → Production pace**, choose **Balanced**, and save.
@@ -280,6 +305,16 @@ Pass when Balanced uses the fewest slots needed to stay within the configured ca
 must not fan out into many one-run slots—while Fastest may use useful spare capacity to shorten
 delivery. Neither mode may exceed any character's displayed slot maximum, duplicate total demand,
 or make a job longer than the configured ceiling without an explicit explanation.
+
+### P2-M1 — equivalent transient controls behave alike
+
+1. On **Manufacturing → Overview**, open **More** and choose **Refresh ESI jobs**.
+2. While the page refreshes, change to **Materials & blueprints**, then return to **Overview**.
+3. Reload the browser.
+
+Pass when More does not remain sticky, the chosen page does not acquire a duplicated toolbar, and
+the status refresh does not hide the top metrics/summary. Manufacturing need not expose reaction-only
+controls such as recurring customer cycles.
 
 ## Phase 3 — Manufacturing hand-off
 
@@ -407,9 +442,11 @@ Run these against dev before removing the compatibility paths:
 
 ## Result sheet
 
-Copy one row per test into the issue or testing note:
+Copy one row per test into the issue or testing note. “Automated” comes from the local Playwright
+run; “Human verification” records only the visual/live checks listed above. Use `N/A — automated`
+where no routine human repetition is required.
 
-| Test | Pass / fail | Build or order names/IDs | Observed result | Screenshot/time |
+| Test | Automated | Human verification | Build or order names/IDs | Observed result / evidence |
 |---|---|---|---|---|
 | S1 |  |  |  |  |
 | P1-R0 |  |  |  |  |
