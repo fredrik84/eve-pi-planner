@@ -161,6 +161,8 @@ def test_all_eight_kinds_detected() -> bool:
     _insert_planet(3, 3, True, issues=json.dumps(["ext_unrouted"]))
     _insert_planet(4, 4, False, issues=json.dumps(["fac_unfed"]),
                    scanned_at=now - (48 - 1) * 3600)                                           # due in 1h -> high
+    _insert_planet(11, 11, False,
+                   scanned_at=now - (48 + 72) * 3600)   # ran dry 3d ago: stopped, not due soon
     _insert_planet(5, 5, True, issues=json.dumps(["fac_output"]))
     _insert_planet(6, 6, True, issues=json.dumps(["p0_mismatch"]))
     # schedule_sync: a fleet's program-length norm needs >=3 extractors carrying program_days;
@@ -180,6 +182,8 @@ def test_all_eight_kinds_detected() -> bool:
     for kind in expected_high:
         ok &= check(kind in by_kind and by_kind[kind][0]["severity"] == "high",
                     f"{kind} detected with high severity (got {by_kind.get(kind)})")
+    ok &= check(len(by_kind.get("factory_refill", [])) == 1,
+                "a factory that ran dry days ago no longer remains 'due within 1h'")
     ok &= check("expiring" in by_kind and by_kind["expiring"][0]["severity"] == "warn",
                 f"expiring detected with warn severity (got {by_kind.get('expiring')})")
     ok &= check("storage_full" in by_kind and by_kind["storage_full"][0]["pct"] == 90

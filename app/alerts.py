@@ -423,8 +423,11 @@ def compute_alerts(context_id: int, rows=None, now: float | None = None) -> list
             hours_left = _factory_runs_dry_hours(r, now)
             if hours_left is None and refill_hours and r["scanned_at"]:
                 hours_left = (r["scanned_at"] + refill_hours * 3600.0 - now) / 3600.0
-            if hours_left is not None and hours_left <= _alert["expiring_hours"]:
-                sev = "high" if (hours_left < 0 or hours_left < _alert["storage_high_ttf_hours"]) else "warn"
+            # Upcoming-refill warning, not an "empty forever" state. Once the binding input hits
+            # zero the factories stop, so a negative countdown must clear instead of remaining
+            # "due within 1h" for every subsequent day.
+            if hours_left is not None and 0 <= hours_left <= _alert["expiring_hours"]:
+                sev = "high" if hours_left < _alert["storage_high_ttf_hours"] else "warn"
                 alerts.append({
                     "kind": "factory_refill", "severity": sev,
                     "character_id": cid, "character_name": ch,

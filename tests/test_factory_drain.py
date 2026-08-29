@@ -203,11 +203,31 @@ def test_alert_uses_observed_stock():
     check(_factory_runs_dry_hours(row_half, now) < h,
           "half the stock reports a sooner deadline than a full one")
 
-    # Already dry reports a NEGATIVE number, so the alert can escalate it rather than read 'due'.
+    # Already dry reports a NEGATIVE number, so consumers can distinguish it from "due now".
     # (Note the row's own `checkpoint_at` is deliberately NOT what moves this — a drain state
     # carries the checkpoint it was read at, so only the passage of time can make it overdue.)
     check(close(_factory_runs_dry_hours(row, now + 50 * HOUR), 10.0 - 52.0, 1e-6),
           "a colony that already ran dry reports negative hours left")
+
+    # The arithmetic remains signed, but the ALERT is only an approaching deadline. Otherwise a
+    # factory that stopped days ago remains described as "due within 1h" forever.
+    from app import alerts as A
+    old_settings, old_fallback = A.get_alert_settings, A._fetch_factory_refill_hours
+    try:
+        A.get_alert_settings = lambda _ctx: {
+            "muted_kinds": ["reaction_refill", "reaction_completed", "reaction_stage_ready"],
+            "expiring_hours": 1, "reaction_refill_hours": 1,
+            "storage_high_ttf_hours": 1, "storage_warn_pct": 80, "storage_high_pct": 95,
+        }
+        A._fetch_factory_refill_hours = lambda _ctx: None
+        alert_row = {**row, "cid": 1, "ch": "Idle", "planet_id": 2, "pn": 1,
+                     "system": "Test", "is_ext": 0, "issues": "[]", "sim_state": "null",
+                     "storage": "null"}
+        got = A.compute_alerts(1, rows=[alert_row], now=now + 50 * HOUR)
+        check(not any(a["kind"] == "factory_refill" for a in got),
+              "an observed factory that has been dry for days raises no refill alert")
+    finally:
+        A.get_alert_settings, A._fetch_factory_refill_hours = old_settings, old_fallback
 
 
 # ── Part 5: no drain state (pre-rescan rows) still answers, from the model ────────────────────
