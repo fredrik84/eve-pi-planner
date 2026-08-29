@@ -2821,6 +2821,39 @@ class AdoptOrphanRequest(BaseModel):
     runs: int
 
 
+def _pending_plan_row_for_orphan(rows: list[dict], live: dict[tuple[int, int], list[int]],
+                                 character_id: int, type_id: int, runs: int) -> dict | None:
+    """Find an account-owned plan row that the reported orphan can execute instead of cloning.
+
+    Matching on the dashboard is deliberately character-local: a job installed on B cannot cover
+    a row still assigned to A.  Adoption is the explicit request to reconcile that situation, so
+    it may relocate one *uncovered* row account-wide.  Rows already covered by a live job are never
+    candidates.  Prefer the closest run count and order-owned work, preserving the row itself (and
+    therefore its chain/order identity) rather than manufacturing a second recurring chain.
+    """
+    wanted = [r for r in rows if int(r["type_id"]) == int(type_id)]
+    target_planned = sum(1 for r in wanted if int(r["character_id"]) == int(character_id))
+    target_live = len(live.get((int(character_id), int(type_id)), []))
+    if target_planned >= target_live:
+        return None                    # already reconciled (also makes repeated bulk clicks safe)
+
+    pending: list[dict] = []
+    by_character: dict[int, list[dict]] = {}
+    for row in sorted(wanted, key=lambda r: int(r["id"])):
+        by_character.setdefault(int(row["character_id"]), []).append(row)
+    for cid, planned in by_character.items():
+        covered = len(live.get((cid, int(type_id)), []))
+        pending.extend(planned[covered:])
+    pending = [r for r in pending if int(r["character_id"]) != int(character_id)]
+    if not pending:
+        return None
+    return min(pending, key=lambda r: (
+        abs(int(r.get("runs") or 0) - int(runs)),
+        0 if r.get("order_id") is not None else 1,
+        int(r["id"]),
+    ))
+
+
 @router.post("/api/reactions/adopt-orphan")
 def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_context)):
     """Adopt an ORPHAN running job (one installed in-game with no plan slot — see get_industry_jobs'
@@ -2832,6 +2865,43 @@ def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_
     materials join the next-cycle shopping list. An orphan left un-adopted stays a one-off and never
     becomes recurring."""
     ensure_reaction_assignments_table()
+    # An "orphan" can simply be recurring work installed on a different character from the one
+    # the planner chose.  Reconcile that pending row first.  The old path always inserted a fresh
+    # chain, so Adopt All left the original planned stage behind and doubled the next cycle.
+    live = live_reaction_runs(context_id)
+    con = get_connection()
+    try:
+        con.execute("BEGIN IMMEDIATE")  # serialises parallel requests made by the Adopt All button
+        owner = con.execute(
+            "SELECT 1 FROM pp_characters WHERE character_id=? AND context_id=?",
+            (req.character_id, context_id),
+        ).fetchone()
+        if not owner:
+            raise HTTPException(status_code=403, detail="Not your character")
+        rows = [dict(r) for r in con.execute(
+            "SELECT a.id,a.character_id,a.type_id,a.runs,a.order_id "
+            "FROM pp_reaction_assignments a JOIN pp_characters c "
+            "ON c.character_id=a.character_id WHERE c.context_id=? AND a.type_id=? ORDER BY a.id",
+            (context_id, req.type_id),
+        )]
+        target_planned = sum(1 for r in rows if int(r["character_id"]) == req.character_id)
+        target_live = len(live.get((req.character_id, req.type_id), []))
+        if target_planned >= target_live:
+            # The optimistic UI can submit the same badge twice, and Adopt All issues requests in
+            # parallel.  Once every observed job has a row, a retry is a no-op—not a new chain.
+            con.commit()
+            return {"ok": True, "reconciled": True, "already_planned": True}
+        candidate = _pending_plan_row_for_orphan(
+            rows, live, req.character_id, req.type_id, req.runs)
+        if candidate is not None:
+            con.execute("UPDATE pp_reaction_assignments SET character_id=? WHERE id=?",
+                        (req.character_id, candidate["id"]))
+            con.commit()
+            _invalidate_dashboard_cache(context_id)
+            return {"ok": True, "reconciled": True, "assignment_id": candidate["id"]}
+        con.commit()
+    finally:
+        con.close()
     # All own-connection helpers below run BEFORE the write connection is opened — never hold two at
     # once (the 2026-07-13 pool-exhaustion incident).
     loaded = _load_goo_and_reached(context_id)
