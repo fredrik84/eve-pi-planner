@@ -118,6 +118,8 @@ def refresh_manufacturing_jobs(context_id: int = Depends(require_context)):
         out = {**out, "reaction_recovery": retry_automatic_orders(context_id)}
     except Exception:
         pass
+    from app.industry.status_cache import invalidate_status
+    invalidate_status(context_id)
     return out
 
 

@@ -49,8 +49,12 @@ def clear_account_snapshot(context_id: int | None = None):
     just changed and can see are wrong, so this errs towards dropping too much."""
     if context_id is None:
         _ACCOUNT_CACHE.clear()
+        from app.industry.status_cache import invalidate_status
+        invalidate_status()
     else:
         _ACCOUNT_CACHE.pop(int(context_id), None)
+        from app.industry.status_cache import invalidate_status
+        invalidate_status(context_id)
 
 
 def _account_snapshot(context_id: int) -> dict:

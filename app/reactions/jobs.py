@@ -3297,6 +3297,14 @@ def _dashboard_cache_key(context_id: int) -> str:
 
 def _invalidate_dashboard_cache(context_id: int) -> None:
     cache_invalidate(_dashboard_cache_key(context_id))
+    # Manufacturing's status includes reaction handoff and reaction-job progress. A reaction write
+    # therefore changes both dashboards; leaving the Manufacturing copy warm made the two pages
+    # disagree until its TTL elapsed.
+    try:
+        from app.industry.status_cache import invalidate_status
+        invalidate_status(context_id)
+    except Exception:
+        pass
 
 
 @router.get("/api/reactions/jobs")

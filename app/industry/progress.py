@@ -620,4 +620,6 @@ def industry_mark_done(req: MarkDone, ctx: int = Depends(require_context)):
         invalidate_context_shares(ctx)
     except Exception:
         pass                      # a stale customer page for a minute must not fail the mark
+    from app.industry.status_cache import invalidate_status
+    invalidate_status(ctx)
     return queue_progress(ctx)

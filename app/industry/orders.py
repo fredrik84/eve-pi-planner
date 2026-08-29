@@ -291,6 +291,8 @@ def create_order(req: OrderCreate, ctx: int = Depends(require_context)):
             remember_source_default(ctx, keys)
         else:
             enable_bound_sources(ctx, keys)
+        from app.industry.status_cache import invalidate_status
+        invalidate_status(ctx)
         return _order_row(con, oid, ctx)
     finally:
         con.close()
@@ -332,6 +334,8 @@ def reorder_orders(req: OrderReorder, ctx: int = Depends(require_context)):
                 (n - i, oid, ctx),
             )
         con.commit()
+        from app.industry.status_cache import invalidate_status
+        invalidate_status(ctx)
     finally:
         con.close()
     return {"ok": True}
@@ -404,6 +408,8 @@ def update_order(order_id: int, req: OrderUpdate, ctx: int = Depends(require_con
             # The customer's link is cached; an edit to the quote has to reach it now, not in a minute.
             from app.industry.shares import invalidate_order_shares
             invalidate_order_shares(order_id)
+            from app.industry.status_cache import invalidate_status
+            invalidate_status(ctx)
         if bound:
             from app.industry.sourcing import enable_bound_sources, remember_source_default
             (remember_source_default if owned else enable_bound_sources)(ctx, bound)
@@ -435,6 +441,8 @@ def delete_order(order_id: int, ctx: int = Depends(require_context)):
         # another's.
         from app.industry.sourcing import clear_order_sourcing
         clear_order_sourcing(ctx, order_id)
+        from app.industry.status_cache import invalidate_status
+        invalidate_status(ctx)
         return {"deleted": order_id, "reaction_lifecycle": reaction_lifecycle}
     finally:
         con.close()
@@ -822,6 +830,11 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
     was fetching it separately, which planned the entire queue a second time to answer a question the
     plan it already had could answer.
     """
+    from app.industry.status_cache import get_status, set_status
+    cache_options = req.model_dump(mode="json")
+    cached = get_status(ctx, cache_options)
+    if cached is not None:
+        return cached
     res = _run_queue_plan(ctx, req, want_full=True)
     full = res.pop("_full", None)
     if not res.get("empty"):
@@ -839,6 +852,7 @@ def queue_plan(req: QueuePlanRequest, ctx: int = Depends(require_context)):
     # and are nobody's business but the planner's. Popped after `install_block`, its one consumer.
     res.pop("_eligibility", None)
     res.pop("_reaction_owner_weights", None)
+    set_status(ctx, cache_options, res)
     return res
 
 

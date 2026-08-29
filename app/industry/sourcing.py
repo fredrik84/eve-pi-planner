@@ -365,6 +365,8 @@ def industry_order_sourcing_set(order_id: int, req: SourcedEdit,
             raise HTTPException(status_code=400, detail="that material isn't in this order")
         qty = item["required"]
     set_sourced(ctx, order_id, int(req.type_id), float(qty))
+    from app.industry.status_cache import invalidate_status
+    invalidate_status(ctx)
     return order_sourcing(ctx, order_id)
 
 
@@ -380,6 +382,8 @@ def industry_order_sourcing_paste(order_id: int, req: SourcedPaste,
     many to confirm one at a time."""
     cur = order_sourcing(ctx, order_id)           # 404s if the order isn't the caller's
     res = apply_paste(ctx, order_id, req.text, {i["type_id"] for i in cur["items"]})
+    from app.industry.status_cache import invalidate_status
+    invalidate_status(ctx)
     out = order_sourcing(ctx, order_id)
     out["paste"] = res
     return out
