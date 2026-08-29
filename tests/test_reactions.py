@@ -1515,6 +1515,7 @@ def run_unit_tests() -> bool:
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
         test_adopt_relocates_pending_recurring_work_instead_of_cloning_it(),
+        test_reaction_transactions_are_postgres_compatible(),
         test_explode_chain_tiers(),
         test_value_reaction_batch(),
         test_local_sell_hint(),
@@ -1546,6 +1547,13 @@ def test_adopt_relocates_pending_recurring_work_instead_of_cloning_it() -> bool:
     ok &= check(again is None, "the same Adopt request is idempotent after reconciliation")
     ok &= check(len(moved) == len(rows), "reconciliation does not increase planned slot count")
     return ok
+
+
+def test_reaction_transactions_are_postgres_compatible() -> bool:
+    """Production is PostgreSQL; SQLite-only BEGIN IMMEDIATE broke the whole Reactions page."""
+    source = open("app/reactions/jobs.py", encoding="utf-8").read()
+    return check("BEGIN IMMEDIATE" not in source,
+                 "reaction request transactions use syntax shared by SQLite and PostgreSQL")
 
 
 def test_pricing_endpoints_live(api: "Api") -> bool:

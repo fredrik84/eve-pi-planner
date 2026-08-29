@@ -456,7 +456,9 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
     con = get_connection()
     changed = 0
     try:
-        con.execute("BEGIN IMMEDIATE")
+        # Plain BEGIN is valid on both SQLite (local/test) and PostgreSQL (production). The unique
+        # job-id index is the final concurrency guard if two replicas refresh the same snapshot.
+        con.execute("BEGIN")
         cached = con.execute(
             "SELECT j.character_id,j.jobs_json FROM pp_char_industry_jobs j "
             "JOIN pp_characters c ON c.character_id=j.character_id WHERE c.context_id=?",
@@ -2953,7 +2955,7 @@ def adopt_orphan_job(req: AdoptOrphanRequest, context_id: int = Depends(require_
     live = live_reaction_runs(context_id)
     con = get_connection()
     try:
-        con.execute("BEGIN IMMEDIATE")  # serialises parallel requests made by the Adopt All button
+        con.execute("BEGIN")            # portable across SQLite and production PostgreSQL
         owner = con.execute(
             "SELECT 1 FROM pp_characters WHERE character_id=? AND context_id=?",
             (req.character_id, context_id),
