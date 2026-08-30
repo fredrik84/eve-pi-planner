@@ -383,7 +383,7 @@ def add_tester(req: AdminAdd, _: int = Depends(require_admin),
 # the exact figures don't need to be second-fresh, so a plain TTL cache fits better here than the
 # write-invalidated caches elsewhere (app/cache.py): there's no single "the stats changed" event to
 # hook into (nearly every table write affects some counter), so TTL is the natural fit.
-_ADMIN_STATS_CACHE_KEY = "admin:stats"
+_ADMIN_STATS_CACHE_KEY = "admin:stats:v2"  # v2 adds durable site-wide PI ledger totals
 _ADMIN_STATS_TTL = 300
 
 
@@ -510,13 +510,18 @@ def admin_stats(_: int = Depends(require_admin)):
         s["manufacturing_turnover_total"] = s["manufacturing_net_profit_total"] = 0
         s["manufacturing_completions_total"] = s["manufacturing_users_total"] = 0
     con.close()
-    # Service-wide estimated PI produced value (all accounts) — recent extraction history refined to P1.
+    # Service-wide estimated PI produced value from every account's durable program ledger.
     # Opens its OWN connection, so run it only AFTER con.close() (never hold two at once — pool rule).
     try:
         from app.planner import pi_lifetime_estimate
-        s["pi_produced_value_total"] = pi_lifetime_estimate(None).get("value", 0)
+        _pi_total = pi_lifetime_estimate(None)
+        s["pi_produced_value_total"] = _pi_total.get("value", 0)
+        s["pi_programs_total"] = _pi_total.get("programs", 0)
+        s["pi_tracking_since"] = _pi_total.get("since")
     except Exception:
         s["pi_produced_value_total"] = 0
+        s["pi_programs_total"] = 0
+        s["pi_tracking_since"] = None
     cache_set_json(_ADMIN_STATS_CACHE_KEY, s, ttl=_ADMIN_STATS_TTL)
     return s
 

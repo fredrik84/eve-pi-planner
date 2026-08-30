@@ -703,7 +703,14 @@ function renderAdminStats(s) {
         tile(s.systems_covered.toLocaleString(), 'systems'),
         tile(s.constellations_covered, 'constellations'),
         tile(s.pending_submissions, 'pending submissions'),
-        tile(_fmtIsk(s.pi_produced_value_total ?? 0), 'PI produced (est., all)'),
+      ],
+    },
+    {
+      heading: 'Planetary industry · entire site',
+      tiles: [
+        tile(_fmtIsk(s.pi_produced_value_total ?? 0), 'estimated PI produced value'),
+        tile((s.pi_programs_total ?? 0).toLocaleString(), 'extractor programs recorded'),
+        tile(s.pi_tracking_since ? new Date(Number(s.pi_tracking_since) * 1000).toLocaleDateString() : '—', 'tracking since'),
       ],
     },
     {

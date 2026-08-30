@@ -393,6 +393,11 @@ def test_reactions_phase1_is_task_first() -> bool:
     ok &= check("produced value—not proof that the goods were sold" in planetary
                 and "retained permanently" in planetary and "Forward-only" in planetary,
                 "the page distinguishes estimated production from recorded job ledgers")
+    admin_js = open("static/admin.js", encoding="utf-8").read()
+    ok &= check("Planetary industry · entire site" in admin_js
+                and "pi_produced_value_total" in admin_js
+                and "pi_programs_total" in admin_js and "pi_tracking_since" in admin_js,
+                "System Stats presents the entire site's PI estimate with its tracking scope")
     return ok
 
 
