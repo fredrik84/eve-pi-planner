@@ -406,6 +406,18 @@ def ensure_char_tables():
          WHERE c.context_id IS NOT NULL
         ON CONFLICT (character_id, planet_id, install_ts) DO NOTHING
     """)
+    # The original recorder tried to find P0 among simulated *outputs*. Refined colonies expose P1
+    # there, so their seeded rows had no resource and therefore valued to zero. The live colony row
+    # retains that extractor's P0; recover it for existing single-resource colonies.
+    con.execute("""
+        UPDATE pp_pi_program_ledger
+           SET p0_type_id=(SELECT p.p0_type_id FROM pp_char_planets p
+                            WHERE p.character_id=pp_pi_program_ledger.character_id
+                              AND p.planet_id=pp_pi_program_ledger.planet_id)
+         WHERE p0_type_id IS NULL AND EXISTS
+               (SELECT 1 FROM pp_char_planets p WHERE p.character_id=pp_pi_program_ledger.character_id
+                  AND p.planet_id=pp_pi_program_ledger.planet_id AND p.p0_type_id IS NOT NULL)
+    """)
     con.execute("""
         CREATE TABLE IF NOT EXISTS pp_sessions (
             token        TEXT    PRIMARY KEY,
@@ -598,10 +610,16 @@ def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | Non
         peak = sim.get("peak_p0_day")
         if not install or not peak:
             return
-        p0 = None
-        for o in (sim.get("outputs") or []):
-            if (o.get("tier") or 0) == 0:    # pure P0 output identifies the extracted resource
-                p0 = o.get("type_id"); break
+        # Refined colonies output P1, so their output list cannot identify the extracted P0.
+        # colony_sim_state carries the ECU input explicitly. Legacy pure-extractor payloads retain
+        # the output fallback. Multiple-resource colonies cannot honestly fit this one-resource
+        # ledger row and stay unvalued rather than assigning all extraction to the wrong material.
+        p0s = sim.get("p0_type_ids") or []
+        p0 = p0s[0] if len(p0s) == 1 else None
+        if p0 is None and not p0s:
+            for o in (sim.get("outputs") or []):
+                if (o.get("tier") or 0) == 0:
+                    p0 = o.get("type_id"); break
         con.execute(
             "INSERT INTO pp_colony_yield "
             "(character_id, planet_id, install_ts, p0_type_id, peak_day, prog_days, scanned_ts, head_centroid) "

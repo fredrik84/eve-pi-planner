@@ -205,7 +205,7 @@ def colony_sim_state(detail: dict, pi_data: dict) -> dict | None:
     # tool can show the MEASURED yield trend across reseats (a single snapshot can't).
     peak_p0_day = sum(ext_rate.values()) * 86400.0
     return {"t0": t0, "expiry": expiry, "install": install, "program_days": program_days,
-            "peak_p0_day": peak_p0_day, "outputs": outputs}
+            "peak_p0_day": peak_p0_day, "p0_type_ids": sorted(ext_rate), "outputs": outputs}
 
 
 def colony_drain_state(detail: dict, pi_data: dict) -> dict | None:

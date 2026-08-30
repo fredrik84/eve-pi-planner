@@ -383,7 +383,7 @@ def add_tester(req: AdminAdd, _: int = Depends(require_admin),
 # the exact figures don't need to be second-fresh, so a plain TTL cache fits better here than the
 # write-invalidated caches elsewhere (app/cache.py): there's no single "the stats changed" event to
 # hook into (nearly every table write affects some counter), so TTL is the natural fit.
-_ADMIN_STATS_CACHE_KEY = "admin:stats:v2"  # v2 adds durable site-wide PI ledger totals
+_ADMIN_STATS_CACHE_KEY = "admin:stats:v3"  # v3 fixes PI valuation + recorded tracking date
 _ADMIN_STATS_TTL = 300
 
 

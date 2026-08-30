@@ -24,8 +24,9 @@ def test_pi_program_ledger_is_durable_and_deduplicated():
         INSERT INTO pp_characters VALUES (7, 42);
     """)
     for install in range(1, 13):
+        # A normal refined extractor exposes P1 in outputs; the ECU's P0 is explicit metadata.
         sim = {"install": install, "peak_p0_day": 1000, "program_days": 1,
-               "outputs": [{"tier": 0, "type_id": 1}]}
+               "p0_type_ids": [1], "outputs": [{"tier": 1, "type_id": 2}]}
         esi._record_yield_sample(con, 7, 99, sim, 100 + install)
     # Seeing the current program again updates its checkpoint; it does not add earnings twice.
     esi._record_yield_sample(con, 7, 99, sim, 999)
@@ -44,6 +45,7 @@ def test_pi_program_ledger_is_durable_and_deduplicated():
         total = planner.pi_lifetime_estimate(42)
         assert total["programs"] == 12
         assert total["value"] > 0
+        assert total["since"] == 101  # first observation, not the program's install timestamp
     finally:
         planner.get_connection, planner.load_pi_data, planner.fetch_prices = old_con, old_pi, old_prices
         con.close()

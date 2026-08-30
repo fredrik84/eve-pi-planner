@@ -324,12 +324,12 @@ def pi_lifetime_estimate(context_id: int | None = None) -> dict:
     try:
         if context_id is not None:
             rows = con.execute(
-                "SELECT p0_type_id, peak_day, prog_days, install_ts FROM pp_pi_program_ledger "
+                "SELECT p0_type_id, peak_day, prog_days, install_ts, recorded_at FROM pp_pi_program_ledger "
                 "WHERE context_id=?",
                 (context_id,)).fetchall()
         else:
             rows = con.execute(
-                "SELECT p0_type_id, peak_day, prog_days, install_ts FROM pp_pi_program_ledger"
+                "SELECT p0_type_id, peak_day, prog_days, install_ts, recorded_at FROM pp_pi_program_ledger"
             ).fetchall()
     except Exception:
         return {"value": 0.0, "programs": 0, "since": None}
@@ -351,9 +351,9 @@ def pi_lifetime_estimate(context_id: int | None = None) -> dict:
     for r in rows:
         d = r["prog_days"] or 0
         p0_totals[r["p0_type_id"]] = p0_totals.get(r["p0_type_id"], 0.0) + (r["peak_day"] or 0) * d * _pi_ext_eff(d)
-        its = r["install_ts"]
-        if its and (since is None or its < since):
-            since = its
+        recorded = r["recorded_at"]
+        if recorded and (since is None or recorded < since):
+            since = recorded
     p1_ids = list({p0_to_p1[p0][0] for p0 in p0_totals if p0 in p0_to_p1})
     prices = fetch_prices(p1_ids) if p1_ids else {}
     value = 0.0
