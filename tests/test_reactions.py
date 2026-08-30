@@ -382,6 +382,17 @@ def test_reactions_phase1_is_task_first() -> bool:
                 "Overview metrics do not trail non-actionable accounting prose")
     ok &= check("Copy all produced units" not in js and "_rxCopyProducedUnits" not in js,
                 "Overview does not offer a misleading export of in-flight reaction outputs")
+    planetary = open("static/planetary.js", encoding="utf-8").read()
+    ok &= check('id="settingsNavTotals"' in html and 'id="settingsSecTotals"' in html
+                and "if (name === 'totals') _loadMyTotals()" in planetary,
+                "Settings exposes a dedicated My totals page")
+    ok &= check("api('/api/pi-lifetime')" in planetary
+                and "api('/api/reactions/lifetime')" in planetary
+                and "api('/api/industry/lifetime')" in planetary,
+                "My totals combines PI, Reactions, and Manufacturing accounting sources")
+    ok &= check("produced value—not proof that the goods were sold" in planetary
+                and "Forward-only" in planetary,
+                "the page distinguishes estimated production from recorded job ledgers")
     return ok
 
 

@@ -2906,6 +2906,8 @@ function openSettingsModal(section) {
   // Show/hide nav items based on current login/feature state.
   const plansNav = document.getElementById('settingsNavPlans');
   if (plansNav) plansNav.style.display = _loggedIn ? '' : 'none';
+  const totalsNav = document.getElementById('settingsNavTotals');
+  if (totalsNav) totalsNav.style.display = _loggedIn ? '' : 'none';
   const notifNav = document.getElementById('settingsNavNotifications');
   if (notifNav) notifNav.style.display = _loggedIn ? '' : 'none';
   const alertsNav = document.getElementById('settingsNavAlerts');
@@ -2932,6 +2934,7 @@ function openSettingsModal(section) {
   if (section === 'blueprints' && !_loggedIn) section = 'characters';
   // If the requested section is gated and not available, fall back to characters.
   if (section === 'plans' && !_loggedIn) section = 'characters';
+  if (section === 'totals' && !_loggedIn) section = 'characters';
   if (section === 'notifications' && !_loggedIn) section = 'characters';
   if (section === 'alerts' && !_loggedIn) section = 'characters';
   if (section === 'account' && !_loggedIn) section = 'characters';
@@ -2961,6 +2964,7 @@ function settingsSection(name, doLoad) {
   // Computed only on reveal, never during background renders — see _renderMoveCharacterSection.
   if (name === 'characters') _renderMoveCharacterSection();
   if (name === 'plans' && doLoad !== false) { loadProfiles(); renderSavedPlansBar(); }
+  if (name === 'totals') _loadMyTotals();
   if (name === 'alerts' && doLoad !== false) loadAlertSettings();
   // Always load — openSettingsModal(section) passes doLoad=false, and every jump-to-markets button
   // (industry gate, Reactions redirect, recommendation) goes through it; without this the market
@@ -2977,6 +2981,51 @@ function settingsSection(name, doLoad) {
   if (name === 'buildrules') _loadBuildRulesSettings();
   // Always load, same reasoning as the sections above: every jump-in passes doLoad=false.
   if (name === 'backup' && typeof _loadBackupSettings === 'function') _loadBackupSettings();
+}
+
+async function _loadMyTotals() {
+  const body = document.getElementById('settingsTotalsBody');
+  if (!body) return;
+  body.innerHTML = '<div class="pp-empty">Loading…</div>';
+  try {
+    const [pi, rx, mfg] = await Promise.all([
+      api('/api/pi-lifetime'), api('/api/reactions/lifetime'), api('/api/industry/lifetime'),
+    ]);
+    const since = value => value
+      ? new Date(Number(value) * 1000).toLocaleDateString()
+      : 'No recorded activity yet';
+    const tile = (value, label, note) => `<div class="an-stat" title="${_esc(note || '')}">
+      <div class="an-stat-val">${value}</div><div class="an-stat-lbl">${_esc(label)}</div></div>`;
+    body.innerHTML = `
+      <section class="settings-panel settings-panel-wide">
+        <div class="settings-panel-head"><div><div class="settings-panel-kicker">Planetary interaction</div><h4>Estimated production value</h4></div></div>
+        <div class="an-stats">
+          ${tile(_fmtIsk(pi.value || 0), 'PI produced (estimate)', 'Estimated P1 market value; this is not wallet income.')}
+          ${tile((pi.programs || 0).toLocaleString(), 'extractor programs retained', 'The yield history is bounded per colony, so this is not a true all-time count.')}
+        </div>
+        <div class="settings-subsec-hint">Since ${_esc(since(pi.since))}. Estimated from the recent extractor-program history retained for your colonies and valued as refined P1. PI has no purchased material input, but this is produced value—not proof that the goods were sold.</div>
+      </section>
+      <section class="settings-panel settings-panel-wide">
+        <div class="settings-panel-head"><div><div class="settings-panel-kicker">Reactions</div><h4>Recorded completed jobs</h4></div></div>
+        <div class="an-stats">
+          ${tile(_fmtIsk(rx.turnover || 0), 'turnover', 'Output value recorded when each reaction completed.')}
+          ${tile(_fmtIsk(rx.net_profit || 0), 'net profit', 'Output value minus the recorded materials and operating costs.')}
+          ${tile((rx.jobs || 0).toLocaleString(), 'jobs completed', 'Forward-only ESI completion ledger.')}
+        </div>
+        <div class="settings-subsec-hint">${rx.jobs ? `Recorded since ${_esc(since(rx.since))}.` : 'No completed reactions recorded yet.'} Forward-only: jobs completed before tracking began are not reconstructed.</div>
+      </section>
+      <section class="settings-panel settings-panel-wide">
+        <div class="settings-panel-head"><div><div class="settings-panel-kicker">Manufacturing</div><h4>Recorded completed jobs</h4></div></div>
+        <div class="an-stats">
+          ${tile(_fmtIsk(mfg.turnover || 0), 'turnover', 'Output value recorded when each manufacturing job completed.')}
+          ${tile(_fmtIsk(mfg.net_profit || 0), 'net profit', 'Output value minus the recorded materials and job cost.')}
+          ${tile((mfg.jobs || 0).toLocaleString(), 'jobs completed', 'Forward-only ESI completion ledger.')}
+        </div>
+        <div class="settings-subsec-hint">${mfg.jobs ? `Recorded since ${_esc(since(mfg.since))}.` : 'No completed manufacturing jobs recorded yet.'} Forward-only: jobs completed before tracking began are not reconstructed.</div>
+      </section>`;
+  } catch (err) {
+    body.innerHTML = `<div class="pp-empty">Could not load totals: ${_esc(err.message)}</div>`;
+  }
 }
 
 // Structures & Markets settings — the shared build-structure list, market-follow list and
