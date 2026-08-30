@@ -565,8 +565,12 @@ def test_order_owned_slots_have_compact_source_keys_and_a_legend() -> bool:
     jobs = open("app/reactions/jobs.py").read()
     ok = check('source_key": key' in jobs and 'key = f"C{oid}"' in jobs and 'key = f"M{oid}"' in jobs,
                "customer and Manufacturing work receive stable compact keys")
-    ok &= check('class="rx-work-batches"' in js and 'Work batches' in js,
-                "the board resolves every key in an always-visible legend")
+    ok &= check('<details class="rx-work-batches">' in js and 'Work batches <span>' in js,
+                "the board keeps a long batch legend collapsed behind a counted summary")
+    css = open("static/style-layout-admin.css").read()
+    ok &= check("rx-work-batches-grid" in css and "max-height: 190px" in css
+                and "text-overflow: ellipsis" in css,
+                "the expanded legend is a bounded grid with readable truncated rows")
     ok &= check("source.source_detail || source.source_display" in js,
                 "the full owner list remains available without occupying the card")
     ok &= check("(last.a.order_id || null) === (a.order_id || null)" in js,

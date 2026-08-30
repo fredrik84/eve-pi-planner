@@ -1525,13 +1525,15 @@ function _renderReactionsDashboard(data) {
     const source = a.order_source;
     if (source && source.source_key) workBatches.set(source.source_key, source);
   }));
-  const batchLegend = !workBatches.size ? '' : `<div class="rx-work-batches">
-    <span class="rx-work-batches-title">Work batches</span>
-    ${[...workBatches.values()].map(source => `<button type="button" class="rx-work-batch" title="Open ${_esc(source.source_detail || source.source_display)}" onclick="_rxOpenOrderDetail(${source.order_id})">
+  const batchLegend = !workBatches.size ? '' : `<details class="rx-work-batches">
+    <summary class="rx-work-batches-title">Work batches <span>${workBatches.size}</span></summary>
+    <div class="rx-work-batches-grid">
+    ${[...workBatches.values()].sort((a, b) => a.source_key.localeCompare(b.source_key, undefined, { numeric: true })).map(source => `<button type="button" class="rx-work-batch" title="Open ${_esc(source.source_detail || source.source_display)}" onclick="_rxOpenOrderDetail(${source.order_id})">
       <b class="rx-work-key rx-order-slot-${source.source_kind === 'manufacturing' ? 'manufacturing' : 'customer'}">${_esc(source.source_key)}</b>
       <span>${_esc(source.source_display)}</span>
     </button>`).join('')}
-  </div>`;
+    </div>
+  </details>`;
   const capacityHtml = `<div class="rx-capacity-section">
     <div class="rx-capacity-title">Characters &amp; capacity <span class="pp-card-hint">${usedSlots} of ${totalSlots} slots in use</span></div>
     ${batchLegend}

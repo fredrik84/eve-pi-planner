@@ -1023,15 +1023,29 @@ details[open] > .rx-fold-summary .rx-fold-caret { transform: rotate(90deg); }
 .rx-order-slot-manufacturing { color: #8fc7a5; background: #14241b; border-color: #2f6b48; }
 .rx-order-slot-customer { color: #e0c07a; background: #241f15; border-color: #665329; }
 .rx-work-batches {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 5px 10px; margin: 7px 0 2px;
-  padding: 6px 8px; border: 1px solid var(--clr-border); border-radius: 6px; background: #121722;
+  margin: 7px 0 2px; padding: 0; border: 1px solid var(--clr-border);
+  border-radius: 6px; background: #121722;
   font-size: 11px;
 }
-.rx-work-batches-title { color: var(--clr-text-dim); font-weight: 600; margin-right: 2px; }
-.rx-work-batch {
-  display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--clr-text-soft);
-  background: none; border: 0; padding: 1px; font: inherit; cursor: pointer; text-align: left;
+.rx-work-batches-title {
+  color: var(--clr-text-dim); font-weight: 600; padding: 6px 8px; cursor: pointer;
+  list-style-position: inside; user-select: none;
 }
+.rx-work-batches-title span {
+  display: inline-block; min-width: 17px; margin-left: 4px; padding: 0 5px; border-radius: 9px;
+  background: var(--clr-surface-raised); color: var(--clr-text-soft); text-align: center;
+}
+.rx-work-batches-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 3px 10px;
+  max-height: 190px; overflow-y: auto; padding: 4px 8px 8px;
+  border-top: 1px solid var(--clr-border);
+}
+.rx-work-batch {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 5px;
+  min-width: 0; color: var(--clr-text-soft); background: none; border: 0; padding: 2px;
+  font: inherit; cursor: pointer; text-align: left;
+}
+.rx-work-batch span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rx-work-batch:hover span { color: var(--clr-text); text-decoration: underline; }
 .rx-work-key { display: inline-block; border: 1px solid; border-radius: 3px; padding: 2px 4px; line-height: 1; }
 
