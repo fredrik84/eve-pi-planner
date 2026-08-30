@@ -1080,12 +1080,16 @@ def chain_stage_state(rows: list[dict], jobs: list[dict], now: float,
             done = running = 0
             for r in steps:
                 tid = int(r["type_id"])
-                if done_types.get(tid, 0) > 0:
-                    done_types[tid] -= 1
-                    done += 1
-                elif live_types.get(tid, 0) > 0:
+                # Recurring work can have a finished PRIOR cycle and an active CURRENT cycle of
+                # the same product in the ESI snapshot together. Current work wins: spending the
+                # historical finished job first made every row look done and released Stage 2
+                # while the replacement Stage 1 batch was still running.
+                if live_types.get(tid, 0) > 0:
                     live_types[tid] -= 1
                     running += 1
+                elif done_types.get(tid, 0) > 0:
+                    done_types[tid] -= 1
+                    done += 1
             # A hand mark is a FLOOR under what ESI showed, per (character, product, stage), never a
             # replacement for it: the higher of the two wins, exactly as `resolve_done` does on the
             # Industry side. So a tick can bring a stage forward when the job cache is stale or the

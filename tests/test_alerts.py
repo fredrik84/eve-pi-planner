@@ -307,6 +307,14 @@ def test_reaction_stage_ready() -> bool:
     ok &= check(not mid, f"nothing fires while a stage-1 job is still running (got {mid})")
 
     _jobs([{"status": "ready", "product_type_id": 101},
+           {"status": "delivered", "product_type_id": 102},
+           {"status": "active", "end_date": far, "product_type_id": 101},
+           {"status": "active", "end_date": far, "product_type_id": 102}])
+    recurring = [a for a in compute_alerts(FAKE_CTX) if a["kind"] == "reaction_stage_ready"]
+    ok &= check(not recurring,
+                f"a finished prior cycle cannot release stage 2 over an active replacement cycle (got {recurring})")
+
+    _jobs([{"status": "ready", "product_type_id": 101},
            {"status": "delivered", "product_type_id": 102}])
     fired = [a for a in compute_alerts(FAKE_CTX) if a["kind"] == "reaction_stage_ready"]
     ok &= check(len(fired) == 1, f"one alert once every stage-1 job is finished (got {fired})")

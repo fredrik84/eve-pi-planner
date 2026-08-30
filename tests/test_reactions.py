@@ -1355,6 +1355,29 @@ def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
                 "a 'running' mark cannot downgrade a job ESI already reports as delivered")
     ok &= check(seen[0]["running"] == 1, "(and with no ESI job the same mark still reads running)")
 
+    # Recurring cycle: ESI may expose the finished previous batch alongside its active replacement.
+    # The active cycle is the state of the persistent plan row now; history cannot release stage 2.
+    recurring_rows = [
+        {"character_id": 1, "type_id": 11, "tier_order": 0, "runs": 5,
+         "created_at": 200.0, "name": "Carbon Fiber"},
+        {"character_id": 1, "type_id": 11, "tier_order": 0, "runs": 5,
+         "created_at": 200.0, "name": "Carbon Fiber"},
+        {"character_id": 1, "type_id": 12, "tier_order": 1, "runs": 5,
+         "created_at": 200.0, "name": "Reinforced Carbon Fibers"},
+    ]
+    recurring_jobs = [
+        {"product_type_id": 11, "status": "delivered"},
+        {"product_type_id": 11, "status": "delivered"},
+        {"product_type_id": 11, "status": "active"},
+        {"product_type_id": 11, "status": "active"},
+    ]
+    recurring = {s["stage"]: s for s in chain_stage_state(
+        recurring_rows, recurring_jobs, 0.0, None)}
+    ok &= check(recurring[0]["running"] == 2 and recurring[0]["done"] == 0,
+                "an active recurring cycle takes precedence over its finished previous cycle")
+    ok &= check(not recurring[1]["ready"],
+                "stage 2 stays blocked while the replacement stage-1 batch is running")
+
     # Partial marks resolve against the plan, and the states are alternatives rather than a ladder.
     marks = {(1, 11, 0): (2, _RX_DONE)}
     ok &= check(manual_jobs(marks, 1, 11, 0, 4, _RX_DONE) == 2, "2 of 4 jobs marked done is 2")
