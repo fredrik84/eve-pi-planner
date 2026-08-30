@@ -1516,6 +1516,7 @@ def run_unit_tests() -> bool:
         test_assigning_twice_does_not_book_it_twice(),
         test_adopt_relocates_pending_recurring_work_instead_of_cloning_it(),
         test_reaction_transactions_are_postgres_compatible(),
+        test_binding_never_overfills_a_characters_stage(),
         test_explode_chain_tiers(),
         test_value_reaction_batch(),
         test_local_sell_hint(),
@@ -1554,6 +1555,62 @@ def test_reaction_transactions_are_postgres_compatible() -> bool:
     source = open("app/reactions/jobs.py", encoding="utf-8").read()
     return check("BEGIN IMMEDIATE" not in source,
                  "reaction request transactions use syntax shared by SQLite and PostgreSQL")
+
+
+def test_binding_never_overfills_a_characters_stage() -> bool:
+    """Production regression: ten running jobs + ten old Adopt-All rows became twenty rows on a
+    ten-slot character when prioritized recurring rows were relocated without displacement."""
+    import json as _json
+    from app.db import get_connection
+    import app.reactions.jobs as J
+
+    ctx, source, target, tid = 777097, 9940010, 9940011, 57453
+    J.ensure_industry_jobs_table(); J.ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        for cid in (source, target):
+            con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (cid,))
+            con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (cid,))
+            con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
+            con.execute("INSERT INTO pp_characters (context_id,character_id,character_name,"
+                        "mass_reactions,advanced_mass_reactions,scopes) VALUES (?,?,?,?,?,?)",
+                        (ctx, cid, str(cid), 5, 4, "esi-industry.read_character_jobs.v1"))
+        # Ten older rows are the prioritized recurring plan elsewhere; ten newer rows already
+        # occupy the running character (the exact legacy Adopt-All shape seen in production).
+        for cid, created in ((source, 1.0), (target, 2.0)):
+            for _ in range(10):
+                con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,"
+                            "input_cost,reward,created_at,tier_order,order_id) "
+                            "VALUES (?,?,?,?,?,?,?,?,?)",
+                            (cid, tid, "Carbon Fiber", 120, 0, 0, created, 0, None))
+        jobs = [{"job_id": 880000 + i, "product_type_id": tid, "runs": 120,
+                 "activity_id": 9, "status": "active",
+                 "start_date": f"2026-08-30T00:00:{i:02d}Z"} for i in range(10)]
+        con.execute("INSERT INTO pp_char_industry_jobs (character_id,jobs_json,fetched_at) "
+                    "VALUES (?,?,?)", (target, _json.dumps(jobs), 1.0))
+        con.commit()
+    finally:
+        con.close()
+    try:
+        J.bind_reaction_jobs_to_plan(ctx)
+        con = get_connection()
+        counts = {r["character_id"]: (r["n"], r["bound"]) for r in con.execute(
+            "SELECT character_id,COUNT(*) AS n,COUNT(esi_job_id) AS bound "
+            "FROM pp_reaction_assignments WHERE character_id IN (?,?) GROUP BY character_id",
+            (source, target,))}
+        con.close()
+        ok = check(counts[target] == (10, 10),
+                   f"ten observed jobs bind without exceeding ten slots (got {counts[target]})")
+        ok &= check(counts[source] == (10, 0),
+                    "displaced lower-priority rows replace, rather than add to, moved rows")
+        return ok
+    finally:
+        con = get_connection()
+        for cid in (source, target):
+            con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (cid,))
+            con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (cid,))
+            con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
+        con.commit(); con.close()
 
 
 def test_pricing_endpoints_live(api: "Api") -> bool:

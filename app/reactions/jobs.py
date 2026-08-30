@@ -495,7 +495,8 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
             if job["job_id"] in bound_ids:
                 continue
             slot = con.execute(
-                "SELECT a.id FROM pp_reaction_assignments a "
+                "SELECT a.id,a.character_id,COALESCE(a.tier_order,0) AS tier_order "
+                "FROM pp_reaction_assignments a "
                 "JOIN pp_characters c ON c.character_id=a.character_id "
                 "LEFT JOIN pp_reaction_orders o ON o.id=a.order_id "
                 "WHERE c.context_id=? AND a.type_id=? AND a.esi_job_id IS NULL "
@@ -504,8 +505,39 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
             ).fetchone()
             if not slot:
                 continue
+            source_cid = int(slot["character_id"])
+            target_cid = int(job["character_id"])
+            tier = int(slot["tier_order"])
+            if source_cid != target_cid:
+                target = con.execute(
+                    "SELECT mass_reactions,advanced_mass_reactions FROM pp_characters "
+                    "WHERE character_id=? AND context_id=?", (target_cid, context_id),
+                ).fetchone()
+                capacity = reaction_slots(dict(target)) if target else 0
+                occupied = con.execute(
+                    "SELECT COUNT(*) AS n FROM pp_reaction_assignments "
+                    "WHERE character_id=? AND COALESCE(tier_order,0)=?", (target_cid, tier),
+                ).fetchone()["n"]
+                if int(occupied) >= capacity:
+                    # Relocation may not turn a ten-slot character into twenty assignments. Swap
+                    # out its lowest-priority UNBOUND row into the selected row's old position;
+                    # both characters keep the same stage load while the real job gets the first
+                    # compatible slot in account priority. If everything there is already bound,
+                    # the snapshot itself is over capacity and no safe automatic move exists.
+                    displaced = con.execute(
+                        "SELECT a.id FROM pp_reaction_assignments a "
+                        "LEFT JOIN pp_reaction_orders o ON o.id=a.order_id "
+                        "WHERE a.character_id=? AND COALESCE(a.tier_order,0)=? "
+                        "AND a.esi_job_id IS NULL "
+                        "ORDER BY COALESCE(o.priority,-1),a.created_at DESC,a.id DESC LIMIT 1",
+                        (target_cid, tier),
+                    ).fetchone()
+                    if not displaced:
+                        continue
+                    con.execute("UPDATE pp_reaction_assignments SET character_id=? WHERE id=?",
+                                (source_cid, displaced["id"]))
             con.execute("UPDATE pp_reaction_assignments SET esi_job_id=?,character_id=? WHERE id=?",
-                        (job["job_id"], job["character_id"], slot["id"]))
+                        (job["job_id"], target_cid, slot["id"]))
             bound_ids.add(job["job_id"])
             changed += 1
         con.commit()
