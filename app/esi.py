@@ -385,6 +385,27 @@ def ensure_char_tables():
     # just restarting in place. Lets Setup Analysis tell "reseated repeatedly, still marginal → the
     # planet's tapped, redeploy" from "hasn't really tried a fresh spot yet". NULL on pre-existing rows.
     _add_col("pp_colony_yield", "head_centroid TEXT")
+    # Durable, forward-only PI accounting. The trend table above is intentionally pruned, but
+    # account totals must not shrink when its oldest samples roll off. A program is immutable and
+    # naturally identified by character + planet + install time, so repeated rescans are harmless.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pp_pi_program_ledger (
+            context_id INTEGER NOT NULL, character_id INTEGER NOT NULL, planet_id INTEGER NOT NULL,
+            install_ts DOUBLE PRECISION NOT NULL, p0_type_id INTEGER, peak_day REAL, prog_days REAL,
+            recorded_at DOUBLE PRECISION,
+            PRIMARY KEY (character_id, planet_id, install_ts)
+        )
+    """)
+    # Seed it with the bounded history still available at rollout; it never prunes after this.
+    con.execute("""
+        INSERT INTO pp_pi_program_ledger
+            (context_id, character_id, planet_id, install_ts, p0_type_id, peak_day, prog_days, recorded_at)
+        SELECT c.context_id, y.character_id, y.planet_id, y.install_ts,
+               y.p0_type_id, y.peak_day, y.prog_days, y.scanned_ts
+          FROM pp_colony_yield y JOIN pp_characters c ON c.character_id=y.character_id
+         WHERE c.context_id IS NOT NULL
+        ON CONFLICT (character_id, planet_id, install_ts) DO NOTHING
+    """)
     con.execute("""
         CREATE TABLE IF NOT EXISTS pp_sessions (
             token        TEXT    PRIMARY KEY,
@@ -591,6 +612,15 @@ def _record_yield_sample(con, character_id: int, planet_id: int, sim: dict | Non
             " head_centroid=COALESCE(EXCLUDED.head_centroid, pp_colony_yield.head_centroid)",
             (character_id, planet_id, float(install), p0, float(peak),
              sim.get("program_days"), scan_ts, head_centroid))
+        con.execute(
+            "INSERT INTO pp_pi_program_ledger "
+            "(context_id, character_id, planet_id, install_ts, p0_type_id, peak_day, prog_days, recorded_at) "
+            "SELECT context_id, ?,?,?,?,?,?,? FROM pp_characters WHERE character_id=?"
+            " ON CONFLICT (character_id, planet_id, install_ts) DO UPDATE SET"
+            " p0_type_id=EXCLUDED.p0_type_id, peak_day=EXCLUDED.peak_day,"
+            " prog_days=EXCLUDED.prog_days, recorded_at=EXCLUDED.recorded_at",
+            (character_id, planet_id, float(install), p0, float(peak),
+             sim.get("program_days"), scan_ts, character_id))
         # prune older programs beyond the cap (keep the newest _YIELD_KEEP by install_ts)
         con.execute(
             "DELETE FROM pp_colony_yield WHERE character_id=? AND planet_id=? AND install_ts NOT IN "
@@ -1248,7 +1278,7 @@ _CHAR_OWNED_TABLES = [
 #                              denormalises character_name, so it stays readable once the row is gone.
 #   pp_industry_completions  — the ACCOUNT's earnings ledger. character_id is provenance, not
 #   pp_reaction_completions    ownership; deleting these would silently rewrite the account's
-#                              historical profit, which is not what "disconnect a character" asks for.
+#   pp_pi_program_ledger       historical production/profit, which is not what disconnect asks for.
 # Deleting the whole ACCOUNT is the opposite case — see delete_account() below, where the account
 # they belong to is itself going away and all three ARE cleared.
 
@@ -1257,7 +1287,7 @@ _CHAR_OWNED_TABLES = [
 # deliberate decision about whether an account deletion should take it — a reflective sweep would
 # silently start deleting a future table nobody considered.
 _CONTEXT_OWNED_TABLES = [
-    "pp_plan_snapshots", "pp_plan_baseline", "pp_profiles",
+    "pp_plan_snapshots", "pp_plan_baseline", "pp_profiles", "pp_pi_program_ledger",
     "pp_alert_settings", "pp_notification_prefs", "pp_notification_settings", "pp_notification_log",
     "pp_market_config", "pp_asset_sources", "pp_asset_stock", "pp_source_sets",
     "pp_industry_settings", "pp_industry_orders", "pp_industry_shares", "pp_industry_completions",

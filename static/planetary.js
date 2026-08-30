@@ -3001,9 +3001,9 @@ async function _loadMyTotals() {
         <div class="settings-panel-head"><div><div class="settings-panel-kicker">Planetary interaction</div><h4>Estimated production value</h4></div></div>
         <div class="an-stats">
           ${tile(_fmtIsk(pi.value || 0), 'PI produced (estimate)', 'Estimated P1 market value; this is not wallet income.')}
-          ${tile((pi.programs || 0).toLocaleString(), 'extractor programs retained', 'The yield history is bounded per colony, so this is not a true all-time count.')}
+          ${tile((pi.programs || 0).toLocaleString(), 'extractor programs recorded', 'Each newly observed program is permanently recorded and repeated rescans are deduplicated.')}
         </div>
-        <div class="settings-subsec-hint">Since ${_esc(since(pi.since))}. Estimated from the recent extractor-program history retained for your colonies and valued as refined P1. PI has no purchased material input, but this is produced value—not proof that the goods were sold.</div>
+        <div class="settings-subsec-hint">Tracked since ${_esc(since(pi.since))}. Estimated by simulating each observed extractor program and valuing its refined P1. New programs are recorded on rescan and retained permanently; programs completed before tracking began cannot be reconstructed. This is produced value—not proof that the goods were sold.</div>
       </section>
       <section class="settings-panel settings-panel-wide">
         <div class="settings-panel-head"><div><div class="settings-panel-kicker">Reactions</div><h4>Recorded completed jobs</h4></div></div>

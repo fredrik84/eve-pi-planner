@@ -391,7 +391,7 @@ def test_reactions_phase1_is_task_first() -> bool:
                 and "api('/api/industry/lifetime')" in planetary,
                 "My totals combines PI, Reactions, and Manufacturing accounting sources")
     ok &= check("produced value—not proof that the goods were sold" in planetary
-                and "Forward-only" in planetary,
+                and "retained permanently" in planetary and "Forward-only" in planetary,
                 "the page distinguishes estimated production from recorded job ledgers")
     return ok
 

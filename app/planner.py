@@ -314,21 +314,23 @@ def _pi_ext_eff(days: float) -> float:
 
 
 def pi_lifetime_estimate(context_id: int | None = None) -> dict:
-    """Estimated value of the P1 you refined from measured extraction, summed over the recorded
-    programs. NOTE pp_colony_yield keeps only the last ~10 programs per colony (bounded storage), so
-    this is a recent-history ESTIMATE, not a true all-time total. Per-account when context_id is set;
-    service-wide across every account when None. Each program's estimated total P0 = peak_p0_day ×
-    program-days × decay-average; valued at the P0's refined P1 (Jita sell). PI has no ISK input cost,
-    so this is both 'turnover' and 'net'."""
+    """Estimated P1 produced value from the durable, forward-only extraction-program ledger.
+
+    Programs still retained when the ledger shipped were backfilled; every newly observed install
+    timestamp is then kept permanently and repeated rescans dedupe it. This remains simulated
+    produced value, not proof of sale or wallet income.
+    """
     con = get_connection()
     try:
         if context_id is not None:
             rows = con.execute(
-                "SELECT y.p0_type_id, y.peak_day, y.prog_days, y.install_ts FROM pp_colony_yield y "
-                "JOIN pp_characters c ON c.character_id = y.character_id WHERE c.context_id=?",
+                "SELECT p0_type_id, peak_day, prog_days, install_ts FROM pp_pi_program_ledger "
+                "WHERE context_id=?",
                 (context_id,)).fetchall()
         else:
-            rows = con.execute("SELECT p0_type_id, peak_day, prog_days, install_ts FROM pp_colony_yield").fetchall()
+            rows = con.execute(
+                "SELECT p0_type_id, peak_day, prog_days, install_ts FROM pp_pi_program_ledger"
+            ).fetchall()
     except Exception:
         return {"value": 0.0, "programs": 0, "since": None}
     finally:
@@ -364,8 +366,7 @@ def pi_lifetime_estimate(context_id: int | None = None) -> dict:
 
 @router.get("/api/pi-lifetime")
 def pi_lifetime(context_id: int = Depends(require_context)):
-    """This account's estimated PI produced value (see pi_lifetime_estimate) — recent-history
-    estimate, PI has no ISK input cost so value ≈ turnover ≈ net."""
+    """This account's estimated PI produced value from its durable forward-only program ledger."""
     return pi_lifetime_estimate(context_id)
 
 

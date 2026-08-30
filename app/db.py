@@ -82,6 +82,7 @@ _EPOCH_COLUMNS = [
     ("pp_characters", "skills_expires"), ("pp_characters", "scan_failed_at"),
     ("pp_colony_flags", "created_at"),
     ("pp_colony_yield", "install_ts"), ("pp_colony_yield", "scanned_ts"),
+    ("pp_pi_program_ledger", "install_ts"), ("pp_pi_program_ledger", "recorded_at"),
     ("pp_asset_sources", "updated_at"),
     ("pp_industry_completions", "completed_at"),
     ("pp_industry_manual_done", "marked_at"),
