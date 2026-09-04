@@ -366,6 +366,12 @@ def test_reactions_phase1_is_task_first() -> bool:
                 "character and slot capacity stays visible under the task list")
     ok &= check('class="pp-card rx-metrics-card"' in page and 'rx-metrics-fold' not in page,
                 "current-task metrics stay visible on Overview")
+    ok &= check('is still waiting for ${jobs} Stage ${tier} job' in js
+                and 'Remaining: ${detail}' in js,
+                "a partly marked cross-character stage names the jobs still blocking promotion")
+    ok &= check('"output_qty": output_qty_by_type.get' in open("app/reactions/jobs.py").read()
+                and 'units.toLocaleString()} units total' in js,
+                "a queued reaction shows its total output units, not only per-job runs")
     create_start = js.index('function _rxCreateOrder()')
     create_end = js.index('// What the order EARNS', create_start)
     create_flow = js[create_start:create_end]

@@ -3875,6 +3875,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
             if not is_running:
                 pending.append({
                     "assignment_id": a["id"], "type_id": a["type_id"], "name": a["name"], "runs": a["runs"],
+                    "output_qty": output_qty_by_type.get(a["type_id"], 0.0),
                     "tier_order": a["tier_order"],
                     "hours": row_hours,
                     # Real hours this job runs PAST the player's window, 0 when it fits. The cadence

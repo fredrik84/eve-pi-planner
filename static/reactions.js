@@ -869,6 +869,7 @@ function _rxPipelineHtml(todoRows, readyStages) {
         const mark = markable ? _rxMarkOf(g.rows || []) : 'none';
         const jobs = (g.count || 0) + (g.markedCount || 0);
         const runs = g.totalRuns || (g.rows || []).reduce((s, r) => s + (r.runs || 0), 0);
+        const units = runs * (g.outputQty || 0);
         // A hand mark is the card's state when there is one — it is the more specific statement,
         // and it is the player's own. Otherwise the card says what the stage gate says.
         let state = '', cls = '';
@@ -891,7 +892,8 @@ function _rxPipelineHtml(todoRows, readyStages) {
         // jobs of 285 runs, which is three times the work actually being asked for; the number
         // that gets typed into the industry window is the per-job one.
         const perJob = _rxPerJobLabel(g.rows || []);
-        const tip = `${g.name} — ${perJob} on ${c.name} (${runs.toLocaleString()} runs in total)`
+        const outputTotal = units > 0 ? ` · ${units.toLocaleString()} units total` : '';
+        const tip = `${g.name} — ${perJob}${outputTotal} on ${c.name} (${runs.toLocaleString()} runs in total)`
           + `${tier > 0 ? ' — ' + _rxStageLabel(tier, isReady) : ''}`
           + (markable ? nextTip : '');
         const onclick = markable
@@ -900,6 +902,7 @@ function _rxPipelineHtml(todoRows, readyStages) {
           + `${onclick} data-tid="${g.type_id}" title="${_esc(tip)}">`
           + `<span class="ind-pipe-name">${_esc(g.name)}</span>`
           + `<span class="ind-pipe-meta"><span class="ind-pipe-runs">${_esc(perJob)}</span>`
+          + `${units > 0 ? `<span class="ind-pipe-total">${units.toLocaleString()} units total</span>` : ''}`
           + `${state}</span></div>`;
       }).join('');
       html += `<div class="ind-pipe-cell ind-row-rx${last ? ' ind-pipe-final' : ''}">${cards}</div>`;
@@ -1248,7 +1251,7 @@ function _renderReactionsDashboard(data) {
       if (!todoGroups.has(key)) {
         todoGroups.set(key, {
           character_id: c.character_id, character_name: c.character_name,
-          type_id: a.type_id, name: a.name, tier,
+          type_id: a.type_id, name: a.name, tier, outputQty: a.output_qty || 0,
           count: 0, totalRuns: 0, jobRuns: new Map(), ids: [],
           rows: [], markedCount: 0,
         });
@@ -1533,6 +1536,25 @@ function _renderReactionsDashboard(data) {
   const readyBanner = !readyNow.length ? '' : `
     <div class="rx-stage-ready">✅ <b>Stage ${readyNow[0].stage} is ready to start${readyNow.length > 1 ? ' on several characters' : ` on ${_esc(readyNow[0].character)}`}</b>
       — everything it waits on has finished. Install ${readyNow.map(r => r.names.map(_esc).join(', ')).join(' · ')}.</div>`;
+  // A cross-character stage is easy to mark only halfway: every product card is independently
+  // truthful, but "I marked S1" feels complete when another S1 product lives on the next row.
+  // Name the exact remainder beside the stage gate instead of leaving a silent "after stage 1".
+  const laterTiers = [...new Set(pipeRows.filter(g => g.tier > 0).map(g => g.tier))].sort((a, b) => a - b);
+  let waitingBanner = '';
+  for (const tier of laterTiers) {
+    const waiting = [];
+    (data.characters || []).forEach(c => (c.stages || []).forEach(s => {
+      if (s.stage < tier && ((s.todo || 0) + (s.running || 0)) > 0) {
+        waiting.push({ character: c.character_name, jobs: (s.todo || 0) + (s.running || 0), names: s.names || [] });
+      }
+    }));
+    if (waiting.length) {
+      const jobs = waiting.reduce((n, w) => n + w.jobs, 0);
+      const detail = waiting.map(w => `${w.names.map(_esc).join(', ')} on ${_esc(w.character)}`).join(' · ');
+      waitingBanner = `<div class="rx-reconnect-note"><b>Stage ${tier + 1} is still waiting for ${jobs} Stage ${tier} job${jobs === 1 ? '' : 's'}.</b> Remaining: ${detail}.</div>`;
+      break;
+    }
+  }
 
   // Tasks remain first, but the character board is operational context rather than an occasional
   // manual escape hatch: it shows who owns each current job and where the remaining capacity is.
@@ -1561,7 +1583,7 @@ function _renderReactionsDashboard(data) {
   // section it actually blocks) with a count badge on the fold's own <summary>, so it's still
   // never silently hidden, just no longer competing with "Do this now" for the top of the page.
   _rxUpdateShopMissingBadge(data.missing_formulas);
-  el.innerHTML = scopeLostNote + reconnectNote + _rxUnderProductionWarn(data.under_production) + readyBanner
+  el.innerHTML = scopeLostNote + reconnectNote + _rxUnderProductionWarn(data.under_production) + waitingBanner + readyBanner
     // Under the cadence row it is about, and above the checklist it would change — the remedy is
     // "type more numbers", so it belongs where the numbers are about to be read.
     + _rxEaseCostLine(data) + todoListHtml + capacityHtml + untrackedNote;
