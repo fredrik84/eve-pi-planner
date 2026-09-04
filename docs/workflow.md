@@ -9,7 +9,7 @@ How to test, deploy, release and debug. The rules themselves are stated in
 | Section | Read it when |
 | --- | --- |
 | [Test suites](#test-suites) | adding a test, or wondering what already covers something |
-| [Local test runs](#local-test-runs-docker-compose-not-prod) | a test fails locally — check here before calling it a regression |
+| [Choosing a test environment](#choosing-a-test-environment) | deciding between the local Docker stack and local k3s |
 | [Debug endpoint](#debug-endpoint) | exercising the planner end to end |
 | [Inspecting the database](#inspecting-the-database) | reading profiles/config out of a container |
 | [Reading bug reports](#reading-bug-reports) | a user filed one, or you are triaging the backlog |
@@ -57,7 +57,26 @@ enabled value equals its code default — admins toggle it).
 | `tests/test_setup_page.py` | the PI planner setup page's sections: that the Character Roles card is never shipped hidden and is never hidden again by an unresolved product (bug 3), and which cards MAY hide and why. Pure string matching over `static/index.html` + `static/planetary.js`; runs on the host |
 | `tests/test_routing_client.js` | **the one test that RUNS client code.** The routing region of `app.js` is executed in a `vm` context with stubbed `location`/`history`/`localStorage`, so history entries, back/forward and the multi-tab bug are checked behaviourally rather than by string match. Node is on the host but not in the web image, so this one runs **outside** the container: `node tests/test_routing_client.js` |
 
-### Local test runs (docker compose, not prod)
+### Choosing a test environment
+
+Both runtimes live on `server02`:
+
+- **Docker Compose** remains the fastest isolated path for uncommitted code. Its image does not
+  bind-mount the repository, so copy changed application/test files into `web` as described below.
+- **k3s `dev` namespace** is preferred after a `dev` image has deployed when a test needs the real
+  Postgres/Redis services, Kubernetes environment, ingress, secrets wiring, or deployed-image
+  behavior. Find the pod with `sudo k3s kubectl -n dev get pods -l app=eve-pi-planner`; run a suite
+  with `sudo k3s kubectl -n dev exec deploy/eve-pi-planner -- python3 tests/test_x.py` when that
+  test is present in the image.
+- **k3s `production` namespace** is appropriate for read-only diagnosis and narrowly scoped smoke
+  verification against live behavior. Do not seed fixtures, mutate user data, or run destructive
+  suites there. A request to test does not by itself authorize production writes.
+
+Choose based on what the test must prove, not by habit: Docker proves the current working tree;
+k3s dev proves the artifact and cluster integration. A passing deployed test cannot validate
+uncommitted files that are not in its image.
+
+#### Docker Compose caveats
 
 These failures are *not* regressions:
 
@@ -153,16 +172,15 @@ for r in con.execute("SELECT id, title, description, created_at FROM pp_bugs "
     print(r["description"])
 EOF
 
-POD=$(ssh -o BatchMode=yes node03.failed.name \
-  "sudo k3s kubectl -n production get pods -l app=eve-pi-planner -o name | head -1 | cut -d/ -f2")
-ssh -o BatchMode=yes node03.failed.name \
-  "sudo k3s kubectl -n production exec -i $POD -- python3" < /tmp/readbugs.py
+POD=$(sudo k3s kubectl -n production get pods -l app=eve-pi-planner \
+  -o name | head -1 | cut -d/ -f2)
+sudo k3s kubectl -n production exec -i "$POD" -- python3 < /tmp/readbugs.py
 ```
 
 Notes that will otherwise cost you a few minutes:
 
-* **Use `node03`.** `node01` has always warned about a changed host key, and `node02` now does too.
-  Do not edit `known_hosts` to silence it.
+* The cluster is local on `server02`; run `sudo k3s kubectl` directly. The old
+  `node01`–`node03.failed.name` SSH targets are retired and are not cluster entry points.
 * The pod has two containers (`web` + a `wait-postgres` init); `kubectl exec` defaults to `web`,
   which is the one you want. The "Defaulted container" line on stderr is not an error.
 * Status is one of `open` / `complete` / `ignored`. Triage from the Admin tab, or
@@ -200,8 +218,7 @@ When a user reports the planner doing something odd, stop reconstructing their d
 descriptions and go read it — run the real code inside the prod pod:
 
 ```
-ssh -o BatchMode=yes node02.failed.name \
-  "sudo k3s kubectl -n production exec -i <pod> -- python3 -" < /path/to/script.py
+sudo k3s kubectl -n production exec -i <pod> -- python3 < /path/to/script.py
 ```
 
 Get the pod with `sudo k3s kubectl -n production get pods -l app=eve-pi-planner --no-headers`
@@ -247,8 +264,9 @@ correlated with image size), the ArgoCD image updater detects the new digest (po
 and commits to evpi-gitops, then ArgoCD syncs and rolls the pod (its own git-poll runs ~every
 60-110s, separate from the image updater's poll — the two stack). Real measured end-to-end
 push-to-running time is in the low single-digit minutes, not a fixed number — see `evpi-gitops`'s
-deploy-latency notes if this needs re-tuning. Runs on the 3-node k3s HA cluster
-(`node01-03.failed.name`).
+deploy-latency notes if this needs re-tuning. Since 2026-09-04, k3s runs locally on `server02` as a
+single-node cluster. It is no longer the three-node `node01`–`node03.failed.name` HA cluster; use
+local `sudo k3s kubectl` commands for all cluster operations.
 
 ### Namespace layout (since 2026-07-04)
 

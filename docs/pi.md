@@ -542,17 +542,18 @@ Expected **0 calls in preview, non-zero with `chosen_systems`**. A non-zero prev
 second identical one:
 
 ```
-ssh node01.failed.name "sudo k3s kubectl -n production rollout restart deploy/eve-pi-planner"
-ssh node01.failed.name "sudo k3s kubectl -n production logs -l app=eve-pi-planner --tail=200 \
-  | grep -E 'fuelblock\.(fetch_planets_and_recs|extractor_pipeline)'"
+sudo k3s kubectl -n production rollout restart deploy/eve-pi-planner
+sudo k3s kubectl -n production logs -l app=eve-pi-planner --tail=200 \
+  | grep -E 'fuelblock\.(fetch_planets_and_recs|extractor_pipeline)'
 ```
 
 The first call after a restart should be close to the warm one — that is the whole point of the L2
 Redis cache. A large cold/warm gap means it degraded to in-process only.
 
-**C. Cross-replica sharing.** With 2 replicas, a plan computed on one pod should leave the other
-warm: issue the same request repeatedly and confirm the timings don't alternate fast/slow.
-Alternation means the Redis layer isn't being hit and each pod is caching alone.
+**C. Cross-replica sharing (when the deployment has 2+ replicas).** The cluster is single-node,
+but a deployment may still run multiple pods on that node. A plan computed on one pod should leave
+the other warm: issue the same request repeatedly and confirm the timings don't alternate
+fast/slow. Alternation means the Redis layer isn't being hit and each pod is caching alone.
 
 **Regression threshold:** the original user-visible symptom was 30s. Treat anything over a few
 seconds on a warm path as a regression worth tracing rather than tuning.

@@ -97,6 +97,16 @@ all the math and handing back the single number or action to take.
 Standing rules for ALL changes. Follow them unless the user explicitly says otherwise.
 Mechanics for 1, 2, 6 and 7 are in [docs/workflow.md](docs/workflow.md).
 
+**Current infrastructure (since 2026-09-04):** the k3s cluster runs on this host (`server02`) as
+a **single-node cluster**. Run `sudo k3s kubectl ...` locally; do not SSH to the retired
+`node01`/`node02`/`node03.failed.name` cluster hosts. Production and dev remain separate k3s
+namespaces with independent Postgres and Redis instances. The local Docker Compose stack also
+remains available. Use Docker for isolated tests against uncommitted working-tree code; prefer the
+local k3s `dev` namespace when the deployed image, Postgres/Redis integration, ingress, or other
+cluster behavior is what needs proving. Production is for read-only diagnosis and explicitly
+requested production verification, never destructive or fixture-seeding tests. See
+[docs/workflow.md](docs/workflow.md).
+
 1. **Always test.** Write proper test cases for new features and run them against the container
    before calling anything shipped. Assert *durable invariants*, not runtime state an admin can
    change. → [test suites](docs/workflow.md#test-suites)
@@ -124,6 +134,9 @@ Mechanics for 1, 2, 6 and 7 are in [docs/workflow.md](docs/workflow.md).
    as a one-line changelog entry: single-line `feat:`/`fix:`/`chore:` description, no body, stating
    *why* the change was made, not just *what* changed. A vague commit (`fix stuff`, `wip`) becomes
    a vague, useless line in the public changelog. → [cutting a release](docs/workflow.md#cutting-a-release)
+   **Standing user preference:** after completing and verifying a change, commit and push it unless
+   the user explicitly says not to. Stay on the active branch by default; this does not override
+   rule 6's requirement to ask before choosing or switching between `main` and `dev`.
 8. **Preserve user privacy.** User data is never exposed publicly. Every endpoint that returns
    character names, systems, planets, or any locatable data **must** be gated by `require_context`
    (own data only) or `require_admin`. The only exceptions: (a) the Admin → Users page, already

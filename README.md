@@ -83,13 +83,19 @@ python tests/test_features.py --url http://localhost:8000
 
 ## Deployment
 
-Production runs on k3s via GitOps. A push to `main` triggers:
+Production runs via GitOps on the single-node k3s cluster hosted on `server02`. A push to `main`
+triggers:
 
 1. **GitHub Actions** builds and pushes `ghcr.io/fredrik84/eve-pi-planner:latest` (~40s)
 2. **ArgoCD image updater** detects the new digest and commits a pin to [evpi-gitops](https://github.com/fredrik84/evpi-gitops) (~2 min)
 3. **ArgoCD** syncs and rolls the pod (~1 min)
 
 No manual deploy step. The gitops repo holds all cluster manifests.
+
+The local Docker Compose development stack remains available. Because k3s is hosted on the same
+node, deployed integration checks can instead run directly with `sudo k3s kubectl`, normally in
+the isolated `dev` namespace; use `production` only for read-only diagnostics or deliberate smoke
+verification.
 
 ---
 
