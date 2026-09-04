@@ -210,14 +210,16 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
         ).fetchall()
         # Last-fetch time per character, read up front (one connection, closed before the ESI loop
         # below) so the staleness guard doesn't re-hit ESI for a character refreshed seconds ago.
-        fetched_at_by_char = {r["character_id"]: r["fetched_at"] for r in con.execute(
-            "SELECT character_id, fetched_at FROM pp_char_industry_jobs"
+        previous_by_char = {r["character_id"]: r for r in con.execute(
+            "SELECT character_id, fetched_at, jobs_json FROM pp_char_industry_jobs"
         )}
+        fetched_at_by_char = {cid: r["fetched_at"] for cid, r in previous_by_char.items()}
     finally:
         con.close()
 
     now = _time.time()
     skipped = 0
+    changed = 0
     fetched: list[tuple] = []          # (character_id, jobs_json, fetched_at) — written in one batch below
     for c in chars:
         scopes = c["scopes"] or ""
@@ -238,6 +240,15 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
         # of a job appearing in both responses.
         if "read_corporation_jobs" in scopes:
             jobs = jobs + fetch_corp_industry_jobs(c["character_id"], token)
+        old = previous_by_char.get(c["character_id"])
+        previous_jobs = _json.loads(old["jobs_json"]) if old else []
+        # ESI may legally hand back its still-valid cached response even for a forced request.
+        # Tell the UI whether the snapshot's contents actually moved, not merely whether we made
+        # another HTTP request and stamped a newer local fetched_at on it.
+        canonical = lambda xs: _json.dumps(sorted(xs, key=lambda j: int(j.get("job_id") or 0)),
+                                            sort_keys=True, separators=(",", ":"))
+        if old is None or canonical(jobs) != canonical(previous_jobs):
+            changed += 1
         fetched.append((c["character_id"], _json.dumps(jobs), _time.time()))
 
     # One connection for all the writes, after the (slow) ESI fetches are done — not one per char.
@@ -271,7 +282,8 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
         recovery = retry_automatic_orders(context_id)
     except Exception:
         log.exception("automatic reaction-order recovery failed for context %s", context_id)
-    return {"ok": True, "characters_refreshed": refreshed, "characters_skipped": skipped,
+    return {"ok": True, "characters_refreshed": refreshed, "characters_changed": changed,
+            "characters_skipped": skipped, "snapshot_at": max((x[2] for x in fetched), default=None),
             "automatic_recovery": recovery}
 
 

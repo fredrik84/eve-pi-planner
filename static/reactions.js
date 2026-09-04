@@ -1034,18 +1034,34 @@ let _rxLifetime = null;
 // within ESI's cache window. Best-effort — a failed refresh just leaves the cached view in place.
 function _rxRefreshJobs(force, btn) {
   const orig = btn ? btn.textContent : null;
+  const status = document.getElementById('rxJobsRefreshStatus');
+  if (status) status.innerHTML = '<span class="pp-spinner"></span> Asking ESI for current jobs…';
   if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
   return apiSend('POST', '/api/reactions/jobs/refresh' + (force ? '?force=1' : ''))
-    .catch(() => null)
-    .then(res => {
-      if (res && (res.characters_refreshed > 0 || force)) _loadReactionsDashboard();
+    .then(async res => {
+      if (res && (res.characters_refreshed > 0 || force)) {
+        if (status) status.innerHTML = '<span class="pp-spinner"></span> Rebuilding job status…';
+        // The query token also prevents an intermediary/browser from reusing a GET response after
+        // the refresh. The server invalidates its own dashboard cache on every successful pull.
+        const data = await api('/api/reactions/jobs?refresh=' + Date.now());
+        _rxLastDashboardData = data;
+        _renderReactionsDashboard(data);
+      }
       const recovery = (res && res.automatic_recovery) || {};
       const assigned = (recovery.assigned || []).reduce((n, x) => n + (x.runs || 0), 0);
       const blocked = (recovery.blocked || []).length;
       if (force && assigned) toast(`Refresh assigned ${assigned.toLocaleString()} waiting reaction run${assigned === 1 ? '' : 's'} in priority order.`, 'success');
       else if (force && blocked) toast(`${blocked} reaction order${blocked === 1 ? '' : 's'} still need attention.`, 'warning');
+      else if (force && res && res.characters_refreshed && !res.characters_changed) toast('ESI returned the same job snapshot. Delivered jobs can take up to about 5 minutes to appear; try again shortly.', 'info', 7000);
+      else if (force && res) toast(`Job status updated from ESI for ${res.characters_refreshed || 0} character${res.characters_refreshed === 1 ? '' : 's'}.`, 'success');
+      if (status) status.textContent = res && res.characters_changed
+        ? 'Updated just now'
+        : (res && res.characters_refreshed ? 'Checked just now · ESI snapshot unchanged' : 'No connected characters could be refreshed');
     })
-    .catch(() => {})
+    .catch(err => {
+      if (status) status.textContent = 'Refresh failed';
+      if (force) toastError(err, 'Could not refresh ESI jobs');
+    })
     .finally(() => { if (btn) { btn.disabled = false; btn.textContent = orig; } });
 }
 
