@@ -194,6 +194,30 @@ def fetch_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]
 _JOBS_CACHE_TTL = 300
 
 
+def _disappeared_completed_jobs(previous_jobs: list[dict], jobs: list[dict], now: float) -> list[tuple[float, int]]:
+    """Completion stamps for old jobs absent from a new current-jobs snapshot.
+
+    Only a job already finished by status or scheduled end qualifies; an early disappearance is
+    a cancellation and must not release the next stage.
+    """
+    new_ids = {int(j.get("job_id") or 0) for j in jobs if j.get("job_id")}
+    completed = []
+    for previous in previous_jobs:
+        jid = int(previous.get("job_id") or 0)
+        if not jid or jid in new_ids:
+            continue
+        status = (previous.get("status") or "").lower()
+        end_ts = None
+        try:
+            end_ts = datetime.fromisoformat(
+                str(previous.get("end_date") or "").replace("Z", "+00:00")).timestamp()
+        except Exception:
+            pass
+        if status in ("ready", "delivered") or (end_ts is not None and end_ts <= now):
+            completed.append((end_ts or now, jid))
+    return completed
+
+
 @router.post("/api/reactions/jobs/refresh")
 def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_context)):
     """Refresh the caller's own characters' cached reaction-job list from ESI — only characters
@@ -202,6 +226,7 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
     opt into this. Called on Reactions tab-open (respecting ESI's ~5min cache via _JOBS_CACHE_TTL)
     and by the manual "Refresh jobs" button (force=1, bypasses the staleness guard)."""
     ensure_industry_jobs_table()
+    ensure_reaction_assignments_table()
     con = get_connection()
     try:
         chars = con.execute(
@@ -220,6 +245,7 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
     now = _time.time()
     skipped = 0
     changed = 0
+    completed_bindings: list[tuple[float, int]] = []  # (completed_at, disappeared job_id)
     fetched: list[tuple] = []          # (character_id, jobs_json, fetched_at) — written in one batch below
     for c in chars:
         scopes = c["scopes"] or ""
@@ -242,6 +268,9 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
             jobs = jobs + fetch_corp_industry_jobs(c["character_id"], token)
         old = previous_by_char.get(c["character_id"])
         previous_jobs = _json.loads(old["jobs_json"]) if old else []
+        # A job delivered in-game normally vanishes from this endpoint; preserve that exact slot's
+        # finished state before replacing the old snapshot.
+        completed_bindings.extend(_disappeared_completed_jobs(previous_jobs, jobs, now))
         # ESI may legally hand back its still-valid cached response even for a forced request.
         # Tell the UI whether the snapshot's contents actually moved, not merely whether we made
         # another HTTP request and stamped a newer local fetched_at on it.
@@ -260,6 +289,11 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
                 "ON CONFLICT (character_id) DO UPDATE SET jobs_json=excluded.jobs_json, fetched_at=excluded.fetched_at",
                 fetched,
             )
+            if completed_bindings:
+                con.executemany(
+                    "UPDATE pp_reaction_assignments SET last_completed_at=? WHERE esi_job_id=?",
+                    completed_bindings,
+                )
             con.commit()
         finally:
             con.close()
@@ -446,7 +480,11 @@ def ensure_reaction_assignments_table():
                     "recover_runs INTEGER NOT NULL DEFAULT 0",
                     # Exact ESI identity of the currently executing instance of this recurring
                     # slot. Cleared when that job leaves the active snapshot; the slot remains.
-                    "esi_job_id INTEGER")
+                    "esi_job_id INTEGER",
+                    # A bound job that finished and then disappeared from ESI completed THIS
+                    # exact recurring slot. Kept until its next ESI job binds, so a delivered S1
+                    # still releases S2 after ESI removes it from the current-jobs response.
+                    "last_completed_at DOUBLE PRECISION")
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rx_assign_esi_job "
                     "ON pp_reaction_assignments (esi_job_id)")
         con.commit()
@@ -512,7 +550,8 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
                 "JOIN pp_characters c ON c.character_id=a.character_id "
                 "LEFT JOIN pp_reaction_orders o ON o.id=a.order_id "
                 "WHERE c.context_id=? AND a.type_id=? AND a.esi_job_id IS NULL "
-                "ORDER BY COALESCE(o.priority,-1) DESC,a.created_at,a.id LIMIT 1",
+                "ORDER BY COALESCE(o.priority,-1) DESC,"
+                "CASE WHEN a.last_completed_at IS NOT NULL THEN 0 ELSE 1 END,a.created_at,a.id LIMIT 1",
                 (context_id, job["type_id"]),
             ).fetchone()
             if not slot:
@@ -548,7 +587,8 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
                         continue
                     con.execute("UPDATE pp_reaction_assignments SET character_id=? WHERE id=?",
                                 (source_cid, displaced["id"]))
-            con.execute("UPDATE pp_reaction_assignments SET esi_job_id=?,character_id=? WHERE id=?",
+            con.execute("UPDATE pp_reaction_assignments SET esi_job_id=?,character_id=?,"
+                        "last_completed_at=NULL WHERE id=?",
                         (job["job_id"], target_cid, slot["id"]))
             bound_ids.add(job["job_id"])
             changed += 1
@@ -1101,6 +1141,11 @@ def chain_stage_state(rows: list[dict], jobs: list[dict], now: float,
                     running += 1
                 elif done_types.get(tid, 0) > 0:
                     done_types[tid] -= 1
+                    done += 1
+                elif r.get("last_completed_at") is not None:
+                    # ESI removes a job after the player delivers it. The refresh records that
+                    # transition on the exact bound assignment before clearing esi_job_id, so the
+                    # completed lower-stage slot remains evidence for promoting the next stage.
                     done += 1
             # A hand mark is a FLOOR under what ESI showed, per (character, product, stage), never a
             # replacement for it: the higher of the two wins, exactly as `resolve_done` does on the
@@ -3599,7 +3644,8 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                 # rather than recomputed because the pass that knows the counterfactual has already
                 # run and closed its connection by the time these rows are read.
                 f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order, "
-                f"created_at, order_id, esi_job_id, COALESCE(cadence_over_h,0) AS cadence_over_h, "
+                f"created_at, order_id, esi_job_id, last_completed_at, "
+                f"COALESCE(cadence_over_h,0) AS cadence_over_h, "
                 f"COALESCE(surplus_runs,0) AS surplus_runs, COALESCE(jobs_saved,0) AS jobs_saved, "
                 f"COALESCE(recover_runs,0) AS recover_runs "
                 f"FROM pp_reaction_assignments WHERE character_id IN ({placeholders}) ORDER BY tier_order", char_ids,

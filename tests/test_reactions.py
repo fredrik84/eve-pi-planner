@@ -1340,7 +1340,8 @@ def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     planned matches nothing, and a chain reacted before this tool saw it has no job to read. In all
     three the page said "after stage 1 finishes" about a stage that was over, with no way to say so.
     A mark is a FLOOR under what was observed: it can bring a stage forward, never hide a real job."""
-    from app.reactions.jobs import chain_stage_state, manual_jobs, _RX_DONE, _RX_RUNNING, _RX_ALL
+    from app.reactions.jobs import (chain_stage_state, manual_jobs, _disappeared_completed_jobs,
+                                   _RX_DONE, _RX_RUNNING, _RX_ALL)
 
     rows = [{"character_id": 1, "type_id": 11, "tier_order": 0, "runs": 5, "created_at": 100.0,
              "name": "Carbon Fiber"},
@@ -1355,6 +1356,26 @@ def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     done = st({(1, 11, 0): (_RX_ALL, _RX_DONE)})
     ok &= check(done[0]["done"] == 1, "marking stage 1 done counts it as done")
     ok &= check(done[1]["ready"], "and that is what lets stage 2 start — the whole point")
+
+    # Once a delivered job disappears from ESI's current-jobs response, the exact bound plan row
+    # retains the completion. This is distinct from a hand mark and must work for only part of a
+    # multi-job stage without releasing the next stage early.
+    remembered_rows = [dict(rows[0], last_completed_at=123.0), rows[1]]
+    remembered = {s["stage"]: s for s in chain_stage_state(remembered_rows, [], 200.0, None)}
+    ok &= check(remembered[0]["done"] == 1 and remembered[1]["ready"],
+                "a delivered job removed by ESI still promotes the exact queued S2 slot")
+    partial_rows = [dict(rows[0], last_completed_at=123.0),
+                    dict(rows[0], last_completed_at=None), rows[1]]
+    partial = {s["stage"]: s for s in chain_stage_state(partial_rows, [], 200.0, None)}
+    ok &= check(partial[0]["done"] == 1 and not partial[1]["ready"],
+                "one remembered completion does not promote S2 while another S1 job remains")
+    transitions = _disappeared_completed_jobs([
+        {"job_id": 1, "status": "active", "end_date": "1970-01-01T00:01:00Z"},
+        {"job_id": 2, "status": "active", "end_date": "1970-01-01T00:10:00Z"},
+        {"job_id": 3, "status": "delivered"},
+    ], [], 300.0)
+    ok &= check([jid for _, jid in transitions] == [1, 3],
+                "refresh remembers delivered/ended disappearances but not early cancellations")
 
     run = st({(1, 11, 0): (_RX_ALL, _RX_RUNNING)})
     ok &= check(run[0]["running"] == 1 and run[0]["done"] == 0,
