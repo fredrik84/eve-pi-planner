@@ -1128,6 +1128,13 @@ multiple generations of the same order and reports the steady-state load once—
 retained generation. A release is refused with a visible recurrence error if the concurrent stages
 plus unrelated work do not fit, and it stops releasing if an older cycle has fallen a stage behind.
 
+The ordinary run leveller and final-stage packer deliberately skip an overlapping order: both solve
+one absolute stage at a time and therefore cannot see that last week's Stage 2 competes with this
+week's Stage 1. `rebalance_recurring_pipelines` runs after them on dashboard load and repairs existing
+queued layouts against cadence offsets, leaving ESI-bound jobs fixed. This second guard matters for
+old plans released before the pipeline rule existed and prevents a later housekeeping pass from
+moving a safe release back onto an already-full reactor character.
+
 ## Idea, not backlog: make the ranking aware of what you already hold
 
 **Not planned, not scheduled, and deliberately not in TODO.md** — recorded here so the reasoning

@@ -2065,8 +2065,10 @@ def level_product_runs(context_id: int) -> int:
         if oid is None:
             continue
         top_of_order[int(oid)] = max(top_of_order.get(int(oid), 0), int(r["tier_order"] or 0))
+    overlapping_orders = _overlapping_order_ids(rows)
     inner = [r for r in rows
              if int(r["id"]) not in frozen
+             and not (r.get("order_id") is not None and int(r["order_id"]) in overlapping_orders)
              and not (r.get("order_id")
                       and int(r["tier_order"] or 0) == top_of_order[int(r["order_id"])])]
     if not inner:
@@ -2620,9 +2622,12 @@ def split_order_tops_to_cadence(context_id: int) -> int:
         for r in rows:
             k = (r["character_id"], round(float(r["created_at"] or 0.0), 3))
             top[k] = max(top.get(k, 0), int(r["tier_order"] or 0))
+        overlapping_orders = _overlapping_order_ids(rows)
 
         written = 0
         for r in rows:
+            if int(r["order_id"]) in overlapping_orders:
+                continue                       # pipeline layout is already cadence-sized and phase-safe
             k = (r["character_id"], round(float(r["created_at"] or 0.0), 3))
             if int(r["tier_order"] or 0) != top[k]:
                 continue                       # an intermediate — the leveller already has it
@@ -2708,10 +2713,11 @@ def pack_pending_order_tops(context_id: int) -> int:
     total runs, cost, reward, order, or stage.
     """
     rows = _plan_rows(context_id, "a.id, a.character_id, a.type_id, a.runs, a.input_cost, a.reward, "
-                      "a.tier_order, a.order_id")
+                      "a.tier_order, a.order_id, a.created_at")
     order_rows = [r for r in rows if r.get("order_id") is not None]
     if not order_rows:
         return 0
+    overlapping_orders = _overlapping_order_ids(order_rows)
     top = {}
     for r in order_rows:
         oid = int(r["order_id"])
@@ -2719,7 +2725,7 @@ def pack_pending_order_tops(context_id: int) -> int:
     groups: dict[tuple[int, int, int], list[dict]] = {}
     for r in order_rows:
         key = (int(r["order_id"]), int(r["type_id"]), int(r["tier_order"] or 0))
-        if key[2] == top[key[0]]:
+        if key[0] not in overlapping_orders and key[2] == top[key[0]]:
             groups.setdefault(key, []).append(r)
 
     try:
@@ -3124,6 +3130,84 @@ def clone_recurring_cycle(context_id: int, order_id: int) -> dict:
                 retired += len(ids)
         con.commit()
         return {"released": True, "rows": len(cloned), "retired": retired, "chain": now}
+    finally:
+        con.close()
+
+
+def _overlapping_order_ids(rows: list[dict]) -> set[int]:
+    """Orders represented by more than one assignment generation in ``rows``."""
+    generations: dict[int, set[float]] = {}
+    for row in rows:
+        if row.get("order_id") is None:
+            continue
+        generations.setdefault(int(row["order_id"]), set()).add(
+            round(float(row.get("created_at") or 0.0), 3))
+    return {oid for oid, chains in generations.items() if len(chains) > 1}
+
+
+def rebalance_recurring_pipelines(context_id: int) -> int:
+    """Place every phase of an already-overlapping order against the same timeline.
+
+    The normal leveller works by absolute ``tier_order`` because independent single generations
+    at Stage 1 compete with each other. In a recurring pipeline the older generation's Stage 2
+    competes with the newer generation's Stage 1 instead. This repair runs last on dashboard load,
+    preserves bound/running rows, and moves only queued rows that do not fit beside the preceding
+    generation at that cadence offset.
+    """
+    rows = _plan_rows(
+        context_id,
+        "a.id,a.character_id,a.type_id,a.tier_order,a.order_id,a.created_at,a.esi_job_id")
+    overlapping = _overlapping_order_ids(rows)
+    if not overlapping:
+        return 0
+    chars = {int(c["character_id"]): c for c in _character_capacities(context_id)}
+    capacity = {cid: int(c.get("slots") or 0) for cid, c in chars.items()}
+    changed = 0
+    con = get_connection()
+    try:
+        for oid in sorted(overlapping):
+            own = [r for r in rows if r.get("order_id") is not None and int(r["order_id"]) == oid]
+            others_by_char: dict[int, list[dict]] = {}
+            for row in rows:
+                if row.get("order_id") is not None and int(row["order_id"]) == oid:
+                    continue
+                others_by_char.setdefault(int(row["character_id"]), []).append(row)
+            base = {cid: max(0, slots - _concurrent_load(others_by_char.get(cid, [])))
+                    for cid, slots in capacity.items()}
+
+            cycles: dict[float, list[dict]] = {}
+            for row in own:
+                cycles.setdefault(round(float(row.get("created_at") or 0.0), 3), []).append(row)
+            sequences = []
+            for cycle in sorted(cycles):
+                by_stage: dict[int, list[dict]] = {}
+                for row in cycles[cycle]:
+                    by_stage.setdefault(int(row.get("tier_order") or 0), []).append(row)
+                sequences.append([by_stage[stage] for stage in sorted(by_stage)])
+
+            for offset in range(max((len(sequence) for sequence in sequences), default=0)):
+                simultaneous = [row for sequence in sequences if offset < len(sequence)
+                                for row in sequence[offset]]
+                fixed = [row for row in simultaneous if row.get("esi_job_id") is not None]
+                remaining = dict(base)
+                for row in fixed:
+                    cid = int(row["character_id"])
+                    remaining[cid] = remaining.get(cid, 0) - 1
+                if any(room < 0 for room in remaining.values()) or sum(remaining.values()) < len(simultaneous) - len(fixed):
+                    continue
+                for row in sorted((r for r in simultaneous if r.get("esi_job_id") is None),
+                                  key=lambda r: (float(r.get("created_at") or 0.0), int(r["id"]))):
+                    original = int(row["character_id"])
+                    cid = original if remaining.get(original, 0) > 0 else max(remaining, key=remaining.get)
+                    remaining[cid] -= 1
+                    if cid != original:
+                        con.execute("UPDATE pp_reaction_assignments SET character_id=? WHERE id=?",
+                                    (cid, int(row["id"])))
+                        row["character_id"] = cid
+                        changed += 1
+        if changed:
+            con.commit()
+        return changed
     finally:
         con.close()
 
@@ -3844,6 +3928,9 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         # keep logging into every character. Pending final-stage jobs are packed independently:
         # sequential stages reuse slots, and character identity does not change job duration.
         pack_pending_order_tops(context_id)
+        # Recurring generations are phase-shifted: old Stage 2 and new Stage 1 are simultaneous.
+        # Run last so no single-generation levelling/packing pass can undo that placement.
+        rebalance_recurring_pipelines(context_id)
     except Exception:
         pass
     # What the player has marked running or done by hand. Own connection, so it belongs here with

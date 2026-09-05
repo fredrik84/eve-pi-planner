@@ -1512,7 +1512,7 @@ def test_recurring_pipeline_repacks_sequential_layout() -> bool:
     """The reported RCF layout had 10 S1 + 9 S2 rows on one 10-slot character. A repeated
     generation must spread across account capacity, retire completed S1, and not build backlog."""
     from app.reactions.jobs import (clone_recurring_cycle, ensure_reaction_assignments_table,
-                                    _concurrent_load)
+                                    _concurrent_load, rebalance_recurring_pipelines)
 
     ctx, oid = 777099, 990099
     cids = (990091, 990092, 990093)
@@ -1546,6 +1546,24 @@ def test_recurring_pipeline_repacks_sequential_layout() -> bool:
                  for cid in cids}
         ok &= check(max(loads.values()) <= 10,
                     f"the overlapping pipeline is repacked within each character's reactors ({loads})")
+        newest = max(float(r["created_at"]) for r in all_rows)
+        # Reproduce the post-release dashboard regression: a later stage-only packer moved a full
+        # new S1 product back beside the old S2 reservation.
+        con.execute("UPDATE pp_reaction_assignments SET character_id=? "
+                    "WHERE order_id=? AND created_at=? AND tier_order=0 AND type_id=1001",
+                    (cids[1], oid, newest))
+        con.commit()
+        moved = rebalance_recurring_pipelines(ctx)
+        repaired = [dict(r) for r in con.execute(
+            "SELECT * FROM pp_reaction_assignments WHERE order_id=?", (oid,))]
+        old_chain = min(float(r["created_at"]) for r in repaired)
+        simultaneous = [r for r in repaired
+                        if (float(r["created_at"]) == old_chain and int(r["tier_order"]) == 1)
+                        or (float(r["created_at"]) == newest and int(r["tier_order"]) == 0)]
+        current_load = {cid: len([r for r in simultaneous if int(r["character_id"]) == cid])
+                        for cid in cids}
+        ok &= check(moved > 0 and max(current_load.values()) <= 10,
+                    f"dashboard repair cannot move new S1 back beside old S2 ({current_load})")
         blocked = clone_recurring_cycle(ctx, oid)
         ok &= check(not blocked.get("released") and blocked.get("backlog"),
                     "another cycle is held while the two-stage pipeline still has two unfinished generations")
