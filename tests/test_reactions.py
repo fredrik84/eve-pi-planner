@@ -1449,6 +1449,10 @@ def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     ok &= check(manual_jobs(marks, 99, 11, 0, 4, _RX_DONE) == 0
                 and manual_jobs(marks, 1, 11, 5, 4, _RX_DONE) == 0,
                 "another character or another stage is a different group entirely")
+    chain_marks = {(1, 11, 0, 100.0): (_RX_ALL, _RX_DONE)}
+    ok &= check(manual_jobs(chain_marks, 1, 11, 0, 4, _RX_DONE, 100.0) == 4
+                and manual_jobs(chain_marks, 1, 11, 0, 4, _RX_DONE, 200.0) == 0,
+                "an older cycle's manual mark does not complete a newer overlapping chain")
     return ok
 
 

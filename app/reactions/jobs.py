@@ -997,30 +997,67 @@ def _manual_key(character_id, type_id, tier_order) -> tuple[int, int, int]:
     return (int(character_id), int(type_id), int(tier_order or 0))
 
 
-def reaction_manual_marks(context_id: int) -> dict[tuple[int, int, int], tuple[int, str]]:
-    """{(character, product, stage): (jobs, state)} the player has marked by hand."""
+def reaction_manual_marks(context_id: int) -> dict[tuple, tuple[int, str]]:
+    """Chain-resolved manual marks for this account.
+
+    Legacy storage has one row per (character, product, stage). Resolve it to the newest matching
+    chain that existed at click time, so an overlapping recurring cycle created later does not
+    inherit the earlier cycle's mark.
+    """
     ensure_reaction_manual_done_table()
     con = get_connection()
     try:
         rows = con.execute(
-            "SELECT character_id, type_id, tier_order, jobs, state FROM pp_reaction_manual_done "
+            "SELECT character_id,type_id,tier_order,jobs,state,marked_at FROM pp_reaction_manual_done "
             "WHERE context_id=?", (context_id,)).fetchall()
+        assignments = con.execute(
+            "SELECT a.character_id,a.type_id,COALESCE(a.tier_order,0) AS tier_order,a.created_at "
+            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id=a.character_id "
+            "WHERE c.context_id=?", (context_id,)).fetchall()
     except Exception:
         return {}
     finally:
         con.close()
-    return {_manual_key(r["character_id"], r["type_id"], r["tier_order"]):
-            (int(r["jobs"]), str(r["state"] or _RX_DONE)) for r in rows}
+    result = {}
+    for r in rows:
+        key = _manual_key(r["character_id"], r["type_id"], r["tier_order"])
+        eligible = [round(float(a["created_at"] or 0.0), 3) for a in assignments
+                    if _manual_key(a["character_id"], a["type_id"], a["tier_order"]) == key
+                    and float(a["created_at"] or 0.0) <= float(r["marked_at"] or 0.0)]
+        if eligible:
+            result[(*key, max(eligible))] = (int(r["jobs"]), str(r["state"] or _RX_DONE))
+    return result
+
+
+def reaction_manual_mark_records(context_id: int) -> list[dict]:
+    """Manual marks with their timestamp, for assigning legacy group marks to one plan chain.
+
+    The UI historically keyed a mark without `created_at`. When two cycles overlap, `marked_at`
+    identifies the newest matching chain that existed at the click; a chain created later must not
+    inherit an earlier cycle's consumed-material state.
+    """
+    ensure_reaction_manual_done_table()
+    con = get_connection()
+    try:
+        return [dict(r) for r in con.execute(
+            "SELECT character_id,type_id,tier_order,jobs,state,marked_at "
+            "FROM pp_reaction_manual_done WHERE context_id=?", (context_id,)).fetchall()]
+    finally:
+        con.close()
 
 
 def manual_jobs(marks: dict, character_id: int, type_id: int, tier_order: int,
-                steps: int, state: str = _RX_DONE) -> int:
+                steps: int, state: str = _RX_DONE, chain: float | None = None) -> int:
     """How many of a group's `steps` jobs are hand-marked into `state`, resolved against the plan.
 
     A group carries at most ONE mark, so asking for `done` on a group marked `running` is 0 — the
     states are alternatives, not a ladder. `_RX_ALL` means "however many the plan holds today",
     which is what keeps a mark meaningful after the leveller re-splits the work into more jobs."""
-    m = marks.get(_manual_key(character_id, type_id, tier_order))
+    key = _manual_key(character_id, type_id, tier_order)
+    m = marks.get((*key, round(float(chain), 3))) if chain is not None else None
+    # Direct callers/tests and pre-resolution dictionaries retain the original three-part key.
+    if m is None:
+        m = marks.get(key)
     if m is None or m[1] != state:
         return 0
     return steps if m[0] == _RX_ALL else max(0, min(m[0], steps))
@@ -1158,8 +1195,9 @@ def chain_stage_state(rows: list[dict], jobs: list[dict], now: float,
                 m_done = m_run = 0
                 for tid, rs in by_product.items():
                     cid = rs[0].get("character_id")
-                    m_done += manual_jobs(marks, cid, tid, stage, len(rs), _RX_DONE)
-                    m_run += manual_jobs(marks, cid, tid, stage, len(rs), _RX_RUNNING)
+                    chain = round(float(rs[0].get("created_at") or 0.0), 3)
+                    m_done += manual_jobs(marks, cid, tid, stage, len(rs), _RX_DONE, chain)
+                    m_run += manual_jobs(marks, cid, tid, stage, len(rs), _RX_RUNNING, chain)
                 done = min(len(steps), max(done, m_done))
                 running = min(len(steps) - done, max(running, m_run))
             entry = {
@@ -3805,17 +3843,18 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         # `pending` and carries the mark instead of vanishing: the page has to be able to draw it
         # and let the player take the mark back, and a row that quietly disappeared when ticked
         # would be a mark you could set and never clear.
-        manual_left: dict[tuple[int, int, str], int] = {}
+        manual_left: dict[tuple[int, int, float, str], int] = {}
         if marks:
-            grouped: dict[tuple[int, int], int] = {}
+            grouped: dict[tuple[int, int, float], int] = {}
             for a in assignments.get(c["character_id"], []):
-                k = (a["type_id"], int(a.get("tier_order") or 0))
+                k = (a["type_id"], int(a.get("tier_order") or 0),
+                     round(float(a.get("created_at") or 0.0), 3))
                 grouped[k] = grouped.get(k, 0) + 1
-            for (tid, tier), n in grouped.items():
+            for (tid, tier, chain), n in grouped.items():
                 for st in _RX_STATES:
-                    got = manual_jobs(marks, c["character_id"], tid, tier, n, st)
+                    got = manual_jobs(marks, c["character_id"], tid, tier, n, st, chain)
                     if got:
-                        manual_left[(tid, tier, st)] = got
+                        manual_left[(tid, tier, chain, st)] = got
 
         pending = []
         for a in assignments.get(c["character_id"], []):
@@ -3841,9 +3880,10 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
             marked = None
             if not is_running:
                 tier_a = int(a.get("tier_order") or 0)
+                chain_a = round(float(a.get("created_at") or 0.0), 3)
                 for st in (_RX_DONE, _RX_RUNNING):
-                    if manual_left.get((a["type_id"], tier_a, st), 0) > 0:
-                        manual_left[(a["type_id"], tier_a, st)] -= 1
+                    if manual_left.get((a["type_id"], tier_a, chain_a, st), 0) > 0:
+                        manual_left[(a["type_id"], tier_a, chain_a, st)] -= 1
                         marked = st
                         break
             # An INTERMEDIATE is a product another row of this plan consumes — its output is not

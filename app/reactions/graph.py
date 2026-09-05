@@ -915,7 +915,8 @@ def _plan_materials(assignments: list[dict], reached: dict,
     return out
 
 
-def _rows_still_needing_materials(rows: list[dict], jobs_by_character: dict[int, list[dict]]) -> list[dict]:
+def _rows_still_needing_materials(rows: list[dict], jobs_by_character: dict[int, list[dict]],
+                                  manual_marks: list[dict] | None = None) -> list[dict]:
     """Remove plan rows already covered by live ESI jobs, count-aware per character/product.
 
     Installing a reaction consumes its inputs immediately.  Assignment rows deliberately persist
@@ -934,8 +935,30 @@ def _rows_still_needing_materials(rows: list[dict], jobs_by_character: dict[int,
             key = (int(character_id), int(type_id))
             active_counts[key] = active_counts.get(key, 0) + 1
 
+    # Resolve each legacy group mark to the newest matching chain that already existed when the
+    # player clicked it. This is what keeps a completed older cycle from hiding the fresh cycle
+    # created afterward when both use the same character/product/stage.
+    marked_chains: dict[tuple[int, int, int, float], int] = {}
+    for mark in manual_marks or []:
+        if mark.get("state") not in ("running", "done"):
+            continue
+        key = (int(mark["character_id"]), int(mark["type_id"]), int(mark.get("tier_order") or 0))
+        eligible = [round(float(r.get("created_at") or 0.0), 3) for r in rows
+                    if (int(r["character_id"]), int(r["type_id"]),
+                        int(r.get("tier_order") or 0)) == key
+                    and float(r.get("created_at") or 0.0) <= float(mark.get("marked_at") or 0.0)]
+        if eligible:
+            marked_chains[(*key, max(eligible))] = int(mark.get("jobs") or -1)
+
     pending = []
     for row in rows:
+        row_key = (int(row["character_id"]), int(row["type_id"]),
+                   int(row.get("tier_order") or 0), round(float(row.get("created_at") or 0.0), 3))
+        marked = marked_chains.get(row_key, 0)
+        if row.get("last_completed_at") is not None or marked == -1 or marked > 0:
+            if marked > 0:
+                marked_chains[row_key] = marked - 1
+            continue
         key = (int(row["character_id"]), int(row["type_id"]))
         if active_counts.get(key, 0) > 0:
             active_counts[key] -= 1
@@ -1177,7 +1200,7 @@ def reactions_shopping_list(include_orders: bool = False,
     construction, so use one or the other for a given buy, never both."""
     # Deferred import: this reads the jobs-layer plan table, but jobs imports graph, so graph can
     # only reach jobs at call time (not module load) without a circular import.
-    from app.reactions.jobs import ensure_reaction_assignments_table
+    from app.reactions.jobs import ensure_reaction_assignments_table, reaction_manual_mark_records
     ensure_reaction_assignments_table()
     con = get_connection()
     try:
@@ -1190,7 +1213,7 @@ def reactions_shopping_list(include_orders: bool = False,
                     "cost": _EMPTY_SHOPPING_COST, "speculative_count": 0, "order_count": 0}
         placeholders = ",".join("?" * len(char_ids))
         rows = [dict(r) for r in con.execute(
-            f"SELECT character_id, type_id, runs, order_id, created_at, "
+            f"SELECT character_id, type_id, runs, order_id, created_at, last_completed_at, "
             f"COALESCE(tier_order,0) AS tier_order FROM pp_reaction_assignments "
             f"WHERE character_id IN ({placeholders})",
             char_ids,
@@ -1214,7 +1237,8 @@ def reactions_shopping_list(include_orders: bool = False,
     # indistinguishable from an empty materials list alone.
     counts = {"speculative_count": len(speculative), "order_count": len(order_linked)}
     selected = rows if include_orders else speculative
-    assignments = _rows_still_needing_materials(selected, jobs_by_character)
+    assignments = _rows_still_needing_materials(
+        selected, jobs_by_character, reaction_manual_mark_records(context_id))
 
     if not assignments:
         return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
