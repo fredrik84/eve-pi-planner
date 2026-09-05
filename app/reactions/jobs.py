@@ -1113,7 +1113,17 @@ def mark_reaction(req: ReactionMarkRequest, context_id: int = Depends(require_co
     set_reaction_manual(context_id, req.character_id, req.type_id, req.tier_order,
                         req.jobs, req.state)
     _invalidate_dashboard_cache(context_id)
-    return {"ok": True}
+    recovery = {"attempted": 0, "assigned": [], "blocked": []}
+    if req.state == _RX_DONE and req.jobs != 0:
+        # The last Stage-1 tick may be the event that makes a due recurring generation releasable.
+        # Do it before the browser reloads the board, otherwise that reload can fetch the old
+        # dashboard first and only release the cycle later while loading the Orders panel.
+        try:
+            from app.reactions.orders import retry_automatic_orders
+            recovery = retry_automatic_orders(context_id)
+        except Exception:
+            log.exception("automatic recurring release failed after manual reaction completion")
+    return {"ok": True, "automatic_recovery": recovery}
 
 
 def chain_stage_state(rows: list[dict], jobs: list[dict], now: float,
@@ -2933,13 +2943,189 @@ def _concurrent_load(rows: list[dict], adding: dict[int, int] | None = None) -> 
     slot and then reported as occupying three, and the allocators that read those numbers quietly
     planned less work than the account had reactors for.
     """
+    # Multiple generations of one order are deliberately phase-shifted. In steady state one
+    # generation occupies each stage, so the reservation is one complete generation (the sum of
+    # its stage jobs), not two copies of the widest absolute tier. This is detectable from the
+    # chain identity already stamped in ``created_at``; ordinary one-cycle plans retain the
+    # original widest-tier model.
+    order_cycles: dict[int, dict[float, list[dict]]] = {}
+    for row in rows:
+        if row.get("order_id") is not None:
+            order_cycles.setdefault(int(row["order_id"]), {}).setdefault(
+                round(float(row.get("created_at") or 0.0), 3), []).append(row)
+    pipelined_orders = {oid for oid, cycles in order_cycles.items() if len(cycles) > 1}
+    pipeline_load = sum(max((len(cycle) for cycle in order_cycles[oid].values()), default=0)
+                        for oid in pipelined_orders)
+
     per_tier: dict[int, int] = {}
     for r in rows:
+        if r.get("order_id") is not None and int(r["order_id"]) in pipelined_orders:
+            continue
         t = int(r.get("tier_order") or 0)
         per_tier[t] = per_tier.get(t, 0) + 1
     for t, n in (adding or {}).items():
         per_tier[t] = per_tier.get(t, 0) + n
-    return max(per_tier.values(), default=0)
+    return pipeline_load + max(per_tier.values(), default=0)
+
+
+def clone_recurring_cycle(context_id: int, order_id: int) -> dict:
+    """Release the next cadence cycle from the newest layout of a recurring order.
+
+    One cycle is sequential, but weekly recurring cycles are a pipeline: after the newest cycle's
+    first stage lands, its next stage and the following cycle's first stage run together.  Cloning
+    the rows preserves the deliberately levelled run/job layout.  Capacity is therefore the SUM of
+    one cycle's stages per character (the steady-state pipeline), plus the peak of unrelated work.
+
+    Completed older cycles are retired before cloning.  ``created_at`` is already the plan-chain
+    identity everywhere else in Reactions, so it is also the cycle identity; no second counter or
+    schema is needed.
+    """
+    ensure_reaction_assignments_table()
+    marks = reaction_manual_marks(context_id)
+    con = get_connection()
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT a.* FROM pp_reaction_assignments a JOIN pp_characters c "
+            "ON c.character_id=a.character_id WHERE a.order_id=? AND c.context_id=? "
+            "ORDER BY a.created_at,a.id", (order_id, context_id)).fetchall()]
+        if not rows:
+            return {"released": False, "empty": True, "error": "No previous cycle to repeat."}
+
+        cycles: dict[float, list[dict]] = {}
+        for row in rows:
+            cycles.setdefault(round(float(row.get("created_at") or 0.0), 3), []).append(row)
+
+        def stage_done(cycle_rows: list[dict], stage: int) -> bool:
+            groups: dict[tuple[int, int], list[dict]] = {}
+            for row in cycle_rows:
+                if int(row.get("tier_order") or 0) == stage:
+                    groups.setdefault((int(row["character_id"]), int(row["type_id"])), []).append(row)
+            if not groups:
+                return False
+            for (cid, tid), group in groups.items():
+                observed = sum(1 for row in group if row.get("last_completed_at") is not None)
+                hand = manual_jobs(marks, cid, tid, stage, len(group), _RX_DONE,
+                                   round(float(group[0].get("created_at") or 0.0), 3))
+                if max(observed, hand) < len(group):
+                    return False
+            return True
+
+        newest = max(cycles)
+        template = cycles[newest]
+        template_stages = {int(r.get("tier_order") or 0) for r in template}
+        # A delivered cycle is history, not another reservation. Keep its rows in memory as the
+        # repeatable template even when it is the newest/only generation, then retire it in SQL.
+        retired = 0
+        for cycle, cycle_rows in list(cycles.items()):
+            stages = {int(r.get("tier_order") or 0) for r in cycle_rows}
+            if stages and all(stage_done(cycle_rows, stage) for stage in stages):
+                ids = [int(r["id"]) for r in cycle_rows]
+                placeholders = ",".join("?" * len(ids))
+                retired += con.execute(
+                    f"DELETE FROM pp_reaction_assignments WHERE id IN ({placeholders})", ids).rowcount
+                del cycles[cycle]
+
+        # At most one unfinished generation can occupy each stage. If old Stage 2 work has fallen
+        # behind, do not keep issuing Stage 1 batches into an ever-growing backlog.
+        if len(cycles) >= len(template_stages):
+            if retired:
+                con.commit()
+            return {"released": False, "backlog": True, "retired": retired,
+                    "error": "The previous recurring cycles must advance before another weekly batch can fit."}
+        first_stage = min(int(r.get("tier_order") or 0) for r in template)
+        if not stage_done(template, first_stage):
+            if retired:
+                con.commit()
+            return {"released": False, "waiting": True, "retired": retired,
+                    "error": f"Waiting for Stage {first_stage + 1} of the current cycle to finish."}
+
+        chars = {int(r["character_id"]): dict(r) for r in con.execute(
+            "SELECT character_id,mass_reactions,advanced_mass_reactions,scopes FROM pp_characters "
+            "WHERE context_id=?", (context_id,)).fetchall()}
+        other_tiers: dict[int, dict[int, int]] = {}
+        for row in con.execute(
+            "SELECT a.character_id,COALESCE(a.tier_order,0) AS tier_order,COUNT(*) AS n "
+            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id=a.character_id "
+            "WHERE c.context_id=? AND (a.order_id IS NULL OR a.order_id<>?) "
+            "GROUP BY a.character_id,COALESCE(a.tier_order,0)", (context_id, order_id)):
+            other_tiers.setdefault(int(row["character_id"]), {})[int(row["tier_order"])] = int(row["n"])
+        base_available = {
+            cid: max(0, reaction_slots(char) - max(other_tiers.get(cid, {}).values(), default=0))
+            for cid, char in chars.items() if reaction_capable(char)[0]
+        }
+
+        # Strip the completed leading stages conceptually before placing the successor. For each
+        # future cadence offset, cycle N's next stage competes with cycle N+1's stage after that.
+        # This is the actual pipeline timeline; summing every stage on its original character
+        # would reject the reported 10-S1 + 9-S2 sequential layout before it can be redistributed.
+        active_stages: list[list[list[dict]]] = []
+        for cycle_rows in cycles.values():
+            remaining_stages = []
+            leading = True
+            for stage in sorted({int(r.get("tier_order") or 0) for r in cycle_rows}):
+                if leading and stage_done(cycle_rows, stage):
+                    continue
+                leading = False
+                remaining_stages.append(
+                    [r for r in cycle_rows if int(r.get("tier_order") or 0) == stage])
+            if remaining_stages:
+                active_stages.append(remaining_stages)
+
+        now = _time.time()
+        columns = [
+            "character_id", "type_id", "name", "runs", "input_cost", "reward",
+            "tier_order", "order_id", "cadence_over_h", "surplus_runs", "jobs_saved",
+            "recover_runs",
+        ]
+        placeholders = ",".join("?" * len(columns))
+        cloned = []
+        template_by_stage = {
+            stage: sorted([r for r in template if int(r.get("tier_order") or 0) == stage],
+                          key=lambda r: int(r["id"]))
+            for stage in sorted(template_stages)
+        }
+        for offset, stage in enumerate(sorted(template_by_stage)):
+            occupied: dict[int, int] = {}
+            for stage_sequence in active_stages:
+                if offset >= len(stage_sequence):
+                    continue
+                for existing in stage_sequence[offset]:
+                    cid = int(existing["character_id"])
+                    occupied[cid] = occupied.get(cid, 0) + 1
+            remaining = {cid: max(0, room - occupied.get(cid, 0))
+                         for cid, room in base_available.items()}
+            if sum(remaining.values()) < len(template_by_stage[stage]):
+                if retired:
+                    con.commit()
+                return {"released": False, "retired": retired,
+                        "error": "Not enough free reaction slots for overlapping weekly stages."}
+            for row in template_by_stage[stage]:
+                original = int(row["character_id"])
+                cid = original if remaining.get(original, 0) > 0 else max(remaining, key=remaining.get)
+                values = dict(row)
+                values["character_id"] = cid
+                con.execute(
+                    f"INSERT INTO pp_reaction_assignments ({','.join(columns)},created_at,esi_job_id,last_completed_at) "
+                    f"VALUES ({placeholders},?,NULL,NULL)",
+                    tuple(values.get(column) for column in columns) + (now,))
+                remaining[cid] -= 1
+                cloned.append(values)
+
+        # Once its successor exists, completed leading stages of older generations are evidence,
+        # not future work. Removing them makes the board show exactly the pipeline frontier and
+        # prevents their already-consumed materials/slots from looking reserved again.
+        for cycle_rows in cycles.values():
+            for stage in sorted({int(r.get("tier_order") or 0) for r in cycle_rows}):
+                if not stage_done(cycle_rows, stage):
+                    break
+                ids = [int(r["id"]) for r in cycle_rows if int(r.get("tier_order") or 0) == stage]
+                marks_sql = ",".join("?" * len(ids))
+                con.execute(f"DELETE FROM pp_reaction_assignments WHERE id IN ({marks_sql})", ids)
+                retired += len(ids)
+        con.commit()
+        return {"released": True, "rows": len(cloned), "retired": retired, "chain": now}
+    finally:
+        con.close()
 
 
 @router.post("/api/reactions/assign")
@@ -4147,20 +4333,15 @@ def _character_capacities(context_id: int) -> list[dict]:
             "SELECT character_id, jobs_json FROM pp_char_industry_jobs"
         )}
         char_ids = [c["character_id"] for c in chars]
-        # Grouped by (character, TIER) rather than counted per character: what competes for a slot
-        # is everything at the same tier_order, so a character's planned load is the worst tier and
-        # not the sum (`_concurrent_load`). Counting the sum reserved a slot for every stage of a
-        # chain at once — stages that by definition never run at the same time — and every
-        # allocator downstream of this then had fewer slots to place work in than the account owns.
-        pending_tiers: dict[int, dict[int, int]] = {}
+        pending: dict[int, list[dict]] = {}
         if char_ids:
             placeholders = ",".join("?" * len(char_ids))
             for r in con.execute(
-                f"SELECT character_id, COALESCE(tier_order,0) AS tier_order, COUNT(*) AS n "
+                f"SELECT character_id,COALESCE(tier_order,0) AS tier_order,order_id,created_at "
                 f"FROM pp_reaction_assignments WHERE character_id IN ({placeholders}) "
-                f"GROUP BY character_id, COALESCE(tier_order,0)", char_ids,
+                f"ORDER BY character_id,created_at", char_ids,
             ):
-                pending_tiers.setdefault(r["character_id"], {})[int(r["tier_order"])] = r["n"]
+                pending.setdefault(int(r["character_id"]), []).append(dict(r))
     finally:
         con.close()
 
@@ -4172,8 +4353,8 @@ def _character_capacities(context_id: int) -> list[dict]:
         row = cached.get(c["character_id"])
         jobs = _json.loads(row["jobs_json"]) if row else []
         used = len([j for j in jobs if j.get("status") in ("active", "paused", "ready")])
-        tiers = pending_tiers.get(c["character_id"], {})
-        used += (max(tiers.values(), default=0) if peak_only else sum(tiers.values()))
+        planned = pending.get(int(c["character_id"]), [])
+        used += (_concurrent_load(planned) if peak_only else len(planned))
         result.append({
             "character_id": c["character_id"], "character_name": c["character_name"],
             "free_slots": max(0, slots - used),

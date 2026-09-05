@@ -1105,27 +1105,28 @@ formula panel says so rather than leaving a user to wonder why their cap never b
 note, deliberately, not a rewrite: making those reads standalone is a much larger change with no
 reported cost behind it.
 
-## Idea, not backlog: pipelining a chain's stages
+## Recurring batches form a weekly pipeline (2026-09-05)
 
-**Not planned. Parked by the user 2026-08-14: "keep it per stage for now."** Recorded here rather
-than in TODO.md so the reasoning survives without costing a backlog read.
+A recurring order repeats a complete batch, but it does not wait for that batch's final stage before
+planning the next one. There is one warm-up cadence: after cycle one's Stage 1 completes, cycle one's
+Stage 2 and cycle two's Stage 1 are both ready. From then on, a two-stage product delivers one batch
+per cadence instead of one batch every two cadences.
 
-**The premise correction first, so nobody re-derives it:** within ONE chain, stage 2 cannot start
-before stage 1 finishes — EVE requires the materials to exist at install time, and stage 1's output
-IS stage 2's input. That is not our sequencing choice, and it is why `_concurrent_load` counts the
-worst tier rather than summing rows.
+`created_at` is already the chain identity and now also identifies the recurring generation. A due
+release clones the newest generation's exact levelled job layout, but only after its first stage is
+complete. Manual and ESI completion remain scoped to that generation, so a tick from last week never
+completes this week's jobs. Fully completed older generations are retired automatically; marking the
+standing order complete delivers only its oldest generation and preserves any newer Stage 1 already
+queued.
 
-**The idea.** Split stage 1 into N batches; when the first batch completes, start stage 2 on that
-output while batches 2..N are still running. It is the honest version of "run stages at the same
-time" and it is real throughput, not a presentation change.
-
-**Why it is parked.** It needs partial-output tracking and it changes what an assignment row means —
-today a row is a whole stage's work for a chain, and pipelining makes it a fraction of one. The
-cheaper parts of the same complaint already shipped (one slot model behind `reactions_parallel_stages`,
-widening into idle reactors, and held intermediates consumed via `reactions_use_stock`), and those
-are what the stage-at-a-time model buys. Only revisit this if per-stage scheduling stops satisfying
-the original complaint — *"we should run multiple stages at the same time if we have slots to spare"*
-— which it currently does.
+Capacity changes once generations overlap. One generation is sequential and reserves its widest
+stage. A steady recurring pipeline has different generations in different stages at the same time.
+The release therefore repacks each repeated stage across eligible account characters against the
+actual cadence-by-cadence timeline; it does not blindly clone a valid sequential placement such as
+10 Stage-1 + 9 Stage-2 rows back onto the same 10-slot character. `_concurrent_load` recognizes
+multiple generations of the same order and reports the steady-state load once—not one whole load per
+retained generation. A release is refused with a visible recurrence error if the concurrent stages
+plus unrelated work do not fit, and it stops releasing if an older cycle has fallen a stage behind.
 
 ## Idea, not backlog: make the ranking aware of what you already hold
 

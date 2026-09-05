@@ -270,9 +270,9 @@ def test_order_preview(api: Api) -> bool:
 
 
 def test_recurring_order_releases_each_cycle(api: Api) -> bool:
-    """Recurring is operational, not a label: creation claims the first batch, completing a cycle
-    keeps the standing order open, and a due list refresh claims the next one automatically."""
-    print(f"\n{'='*60}\n  Recurring customer order: auto-assign -> complete -> release again\n{'='*60}")
+    """A weekly order pipelines generations: after cycle one's first stage, a due refresh queues
+    cycle two without deleting cycle one's later stages; delivery retires only the oldest cycle."""
+    print(f"\n{'='*60}\n  Recurring customer order: overlapping weekly cycles\n{'='*60}")
     ok = True
     product = _find_test_product(api)
     if not check(product is not None, "found a reachable product for a recurring order"):
@@ -291,22 +291,42 @@ def test_recurring_order_releases_each_cycle(api: Api) -> bool:
     ok &= check(order["assigned_runs"] == order["top_level_runs"],
                 "the first recurring batch is assigned automatically")
 
-    status, completed = api.post(f"/api/reactions/orders/{oid}/status", {"status": "completed"})
-    cycle = completed.get("order", {})
-    ok &= check(status == 200 and cycle.get("status") == "open",
-                "completing a recurring cycle keeps the standing order open")
-    ok &= check(cycle.get("assigned_runs") == 0, "completion hands the cycle's runs back")
-
-    # Bring the next cadence boundary forward; GET /orders is the release/retry sweep used by the
-    # live Reactions refresh and must claim it without another button press.
     con = get_connection()
+    before_rows = [dict(r) for r in con.execute(
+        "SELECT * FROM pp_reaction_assignments WHERE order_id=? ORDER BY created_at,id", (oid,))]
+    first_stage = min(int(r.get("tier_order") or 0) for r in before_rows)
+    con.execute("UPDATE pp_reaction_assignments SET last_completed_at=1 "
+                "WHERE order_id=? AND COALESCE(tier_order,0)=?", (oid, first_stage))
     con.execute("UPDATE pp_reaction_orders SET recurring_next_at=0 WHERE id=?", (oid,))
     con.commit()
     con.close()
     status, listed = api.get("/api/reactions/orders")
     again = next((o for o in listed.get("orders", []) if o["id"] == oid), {})
     ok &= check(status == 200 and again.get("assigned_runs") == again.get("top_level_runs"),
-                "a due cadence refresh automatically assigns the next batch")
+                "a due cadence refresh keeps the standing batch fully assigned")
+    con = get_connection()
+    chains = con.execute(
+        "SELECT created_at,COUNT(*) AS n FROM pp_reaction_assignments WHERE order_id=? "
+        "GROUP BY created_at ORDER BY created_at", (oid,)).fetchall()
+    con.close()
+    stage_count = len({int(r.get("tier_order") or 0) for r in before_rows})
+    expected_chains = 2 if stage_count > 1 else 1
+    ok &= check(len(chains) == expected_chains,
+                "cycle two overlaps later stages (or replaces a finished single-stage cycle)")
+
+    status, completed = api.post(f"/api/reactions/orders/{oid}/status", {"status": "completed"})
+    cycle = completed.get("order", {})
+    ok &= check(status == 200 and cycle.get("status") == "open",
+                "delivering a recurring cycle keeps the standing order open")
+    con = get_connection()
+    remaining_chains = con.execute(
+        "SELECT COUNT(DISTINCT created_at) AS n FROM pp_reaction_assignments WHERE order_id=?",
+        (oid,)).fetchone()["n"]
+    con.close()
+    expected_remaining = max(0, expected_chains - 1)
+    expected_assigned = cycle.get("top_level_runs") if expected_remaining else 0
+    ok &= check(remaining_chains == expected_remaining and cycle.get("assigned_runs") == expected_assigned,
+                "delivery retires only the oldest cycle and preserves any queued next week")
 
     status, stopped = api.post(f"/api/reactions/orders/{oid}/recurrence", {"action": "stop"})
     ok &= check(status == 200 and stopped.get("order", {}).get("recurring_interval_days") is None,
@@ -1479,7 +1499,62 @@ def test_assigning_twice_does_not_book_it_twice() -> bool:
     ok &= check(_concurrent_load([], {}) == 0, "an empty plan occupies nothing")
     ok &= check(_concurrent_load([], {2: 4}) == 4,
                 "a first assignment is measured on its own")
+    pipeline = [
+        {"order_id": 46, "created_at": cycle, "tier_order": stage}
+        for cycle in (100.0, 200.0) for stage, jobs in ((0, 6), (1, 4)) for _ in range(jobs)
+    ]
+    ok &= check(_concurrent_load(pipeline, {}) == 10,
+                "overlapping recurring cycles reserve one steady-state pipeline, not two batches")
     return ok
+
+
+def test_recurring_pipeline_repacks_sequential_layout() -> bool:
+    """The reported RCF layout had 10 S1 + 9 S2 rows on one 10-slot character. A repeated
+    generation must spread across account capacity, retire completed S1, and not build backlog."""
+    from app.reactions.jobs import (clone_recurring_cycle, ensure_reaction_assignments_table,
+                                    _concurrent_load)
+
+    ctx, oid = 777099, 990099
+    cids = (990091, 990092, 990093)
+    ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        for cid in cids:
+            con.execute(
+                "INSERT INTO pp_characters (character_id,character_name,context_id,scopes,"
+                "mass_reactions,advanced_mass_reactions) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT (character_id) DO UPDATE SET context_id=excluded.context_id,"
+                "scopes=excluded.scopes,mass_reactions=excluded.mass_reactions,"
+                "advanced_mass_reactions=excluded.advanced_mass_reactions",
+                (cid, f"Pipeline {cid}", ctx, "read_character_jobs", 5, 4))
+        rows = [(cids[0], 1001, 0)] * 10 + [(cids[1], 1002, 0)] * 10 + [(cids[1], 2001, 1)] * 9
+        for cid, tid, stage in rows:
+            con.execute(
+                "INSERT INTO pp_reaction_assignments "
+                "(character_id,type_id,name,runs,input_cost,reward,created_at,tier_order,order_id,last_completed_at) "
+                "VALUES (?,?,?,111,0,0,100,?,?,?)",
+                (cid, tid, str(tid), stage, oid, 1 if stage == 0 else None))
+        con.commit()
+        result = clone_recurring_cycle(ctx, oid)
+        ok = check(result.get("released") and result.get("rows") == 29,
+                   "the next weekly generation keeps all 29 planned jobs")
+        all_rows = [dict(r) for r in con.execute(
+            "SELECT * FROM pp_reaction_assignments WHERE order_id=?", (oid,))]
+        old_s1 = [r for r in all_rows if float(r["created_at"]) == 100 and int(r["tier_order"]) == 0]
+        ok &= check(not old_s1, "completed prior Stage 1 leaves the queue after releasing its successor")
+        loads = {cid: _concurrent_load([r for r in all_rows if int(r["character_id"]) == cid])
+                 for cid in cids}
+        ok &= check(max(loads.values()) <= 10,
+                    f"the overlapping pipeline is repacked within each character's reactors ({loads})")
+        blocked = clone_recurring_cycle(ctx, oid)
+        ok &= check(not blocked.get("released") and blocked.get("backlog"),
+                    "another cycle is held while the two-stage pipeline still has two unfinished generations")
+        return ok
+    finally:
+        con.execute("DELETE FROM pp_reaction_assignments WHERE order_id=?", (oid,))
+        con.execute("DELETE FROM pp_characters WHERE context_id=?", (ctx,))
+        con.commit()
+        con.close()
 
 
 def test_explode_chain_tiers() -> bool:
@@ -1604,6 +1679,7 @@ def run_unit_tests() -> bool:
         test_the_cadence_reaches_an_orders_own_top_row(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
+        test_recurring_pipeline_repacks_sequential_layout(),
         test_adopt_relocates_pending_recurring_work_instead_of_cloning_it(),
         test_reaction_transactions_are_postgres_compatible(),
         test_binding_never_overfills_a_characters_stage(),
