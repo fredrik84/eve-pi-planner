@@ -3220,22 +3220,24 @@ def _gate_stages_account_wide(characters: list[dict]) -> None:
     vacuously true the moment the plan is made, which would light up "stage 2, start now" while
     the Carbon Fiber for it sat unstarted on somebody else.
 
-    Conservative on purpose: a stage nobody has finished holds back every stage above it, even
-    across chains that do not share materials. That matches how the plan is actually worked —
-    install a stage, come back, install the next — and being early with "start now" is the failure
-    that matters here. Mutates the entries in place; no return.
+    The gate is per CHAIN. Two unrelated plans both call their first work "Stage 1", but sulfuric
+    acid in one cannot block Reinforced Carbon Fiber in another. `chain` is the shared created_at
+    stamped on every row produced by one assign, and survives pooling across characters. Mutates
+    the entries in place; no return.
     """
-    pending: dict[int, bool] = {}
+    pending: dict[tuple[float, int], bool] = {}
     for c in characters:
         for e in c.get("stages") or []:
             if e.get("todo") or e.get("running"):
-                pending[int(e.get("stage") or 0)] = True
+                chain = round(float(e.get("chain") or 0.0), 3)
+                pending[(chain, int(e.get("stage") or 0))] = True
     if not pending:
         return
     for c in characters:
         for e in c.get("stages") or []:
             stage = int(e.get("stage") or 0)
-            if e.get("ready") and any(pending.get(st) for st in range(stage)):
+            chain = round(float(e.get("chain") or 0.0), 3)
+            if e.get("ready") and any(pending.get((chain, st)) for st in range(stage)):
                 e["ready"] = False
 
 

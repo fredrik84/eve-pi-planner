@@ -1539,19 +1539,25 @@ function _renderReactionsDashboard(data) {
   // A cross-character stage is easy to mark only halfway: every product card is independently
   // truthful, but "I marked S1" feels complete when another S1 product lives on the next row.
   // Name the exact remainder beside the stage gate instead of leaving a silent "after stage 1".
-  const laterTiers = [...new Set(pipeRows.filter(g => g.tier > 0).map(g => g.tier))].sort((a, b) => a - b);
+  const laterStages = [];
+  pipeRows.filter(g => g.tier > 0).forEach(g => (g.rows || []).forEach(r => {
+    const target = { tier: g.tier, chain: Number(r.chain || 0) };
+    if (!laterStages.some(x => x.tier === target.tier && x.chain === target.chain)) laterStages.push(target);
+  }));
+  laterStages.sort((a, b) => a.tier - b.tier || a.chain - b.chain);
   let waitingBanner = '';
-  for (const tier of laterTiers) {
+  for (const target of laterStages) {
     const waiting = [];
     (data.characters || []).forEach(c => (c.stages || []).forEach(s => {
-      if (s.stage < tier && ((s.todo || 0) + (s.running || 0)) > 0) {
+      if (Number(s.chain || 0) === target.chain && s.stage < target.tier
+          && ((s.todo || 0) + (s.running || 0)) > 0) {
         waiting.push({ character: c.character_name, jobs: (s.todo || 0) + (s.running || 0), names: s.names || [] });
       }
     }));
     if (waiting.length) {
       const jobs = waiting.reduce((n, w) => n + w.jobs, 0);
       const detail = waiting.map(w => `${w.names.map(_esc).join(', ')} on ${_esc(w.character)}`).join(' · ');
-      waitingBanner = `<div class="rx-reconnect-note"><b>Stage ${tier + 1} is still waiting for ${jobs} Stage ${tier} job${jobs === 1 ? '' : 's'}.</b> Remaining: ${detail}.</div>`;
+      waitingBanner = `<div class="rx-reconnect-note"><b>Stage ${target.tier + 1} is still waiting for ${jobs} Stage ${target.tier} job${jobs === 1 ? '' : 's'} in this plan.</b> Remaining: ${detail}.</div>`;
       break;
     }
   }

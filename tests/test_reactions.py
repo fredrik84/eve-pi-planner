@@ -366,7 +366,7 @@ def test_reactions_phase1_is_task_first() -> bool:
                 "character and slot capacity stays visible under the task list")
     ok &= check('class="pp-card rx-metrics-card"' in page and 'rx-metrics-fold' not in page,
                 "current-task metrics stay visible on Overview")
-    ok &= check('is still waiting for ${jobs} Stage ${tier} job' in js
+    ok &= check('is still waiting for ${jobs} Stage ${target.tier} job' in js
                 and 'Remaining: ${detail}' in js,
                 "a partly marked cross-character stage names the jobs still blocking promotion")
     ok &= check('"output_qty": output_qty_by_type.get' in open("app/reactions/jobs.py").read()
@@ -1347,6 +1347,7 @@ def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     three the page said "after stage 1 finishes" about a stage that was over, with no way to say so.
     A mark is a FLOOR under what was observed: it can bring a stage forward, never hide a real job."""
     from app.reactions.jobs import (chain_stage_state, manual_jobs, _disappeared_completed_jobs,
+                                   _gate_stages_account_wide,
                                    _RX_DONE, _RX_RUNNING, _RX_ALL)
 
     rows = [{"character_id": 1, "type_id": 11, "tier_order": 0, "runs": 5, "created_at": 100.0,
@@ -1382,6 +1383,21 @@ def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     ], [], 300.0)
     ok &= check([jid for _, jid in transitions] == [1, 3],
                 "refresh remembers delivered/ended disappearances but not early cancellations")
+
+    # Pooling can place one chain across characters, so the final gate is account-wide — but only
+    # WITHIN that chain. Another plan's tier 0 is not an ingredient of this plan's tier 1.
+    staged = [
+        {"stages": [{"chain": 100.0, "stage": 1, "ready": True, "todo": 9, "running": 0}]},
+        {"stages": [{"chain": 900.0, "stage": 0, "ready": True, "todo": 10, "running": 0}]},
+    ]
+    _gate_stages_account_wide(staged)
+    ok &= check(staged[0]["stages"][0]["ready"],
+                "unrelated Stage 1 work does not block this chain's ready Stage 2")
+    staged.append({"stages": [{"chain": 100.0, "stage": 0, "ready": True,
+                                "todo": 1, "running": 0}]})
+    _gate_stages_account_wide(staged)
+    ok &= check(not staged[0]["stages"][0]["ready"],
+                "unfinished Stage 1 work in the same chain still blocks Stage 2")
 
     run = st({(1, 11, 0): (_RX_ALL, _RX_RUNNING)})
     ok &= check(run[0]["running"] == 1 and run[0]["done"] == 0,
