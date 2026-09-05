@@ -10,6 +10,6 @@
     "report": "playwright show-report artifacts/report --host 0.0.0.0"
   },
   "devDependencies": {
-    "@playwright/test": "1.62.0"
+    "@playwright/test": "1.63.0"
   }
 }
