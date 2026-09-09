@@ -348,6 +348,7 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
         recovery = retry_automatic_orders(context_id)
     except Exception:
         log.exception("automatic reaction-order recovery failed for context %s", context_id)
+    repair_recurring_generation_totals(context_id)
     slot_queue = enforce_reaction_slot_ceiling(context_id)
     return {"ok": True, "characters_refreshed": refreshed, "characters_changed": changed,
             "characters_skipped": skipped, "snapshot_at": max((x[2] for x in fetched), default=None),
@@ -540,6 +541,10 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
     ensure_industry_jobs_table()
     ensure_reaction_assignments_table()
     ensure_reaction_orders_table()
+    try:
+        manual = reaction_manual_marks(context_id)
+    except Exception:
+        manual = {}
     con = get_connection()
     changed = 0
     try:
@@ -564,6 +569,57 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
                                    "runs": int(job.get("runs") or 0),
                                    "start_date": job.get("start_date") or ""})
         active_ids = {j["job_id"] for j in active}
+        plan_rows = [dict(r) for r in con.execute(
+            "SELECT a.id,a.character_id,a.type_id,a.tier_order,a.order_id,a.created_at,"
+            "a.esi_job_id,a.last_completed_at FROM pp_reaction_assignments a "
+            "JOIN pp_characters c ON c.character_id=a.character_id WHERE c.context_id=?",
+            (context_id,))]
+
+        # A later stage in a recurring generation must never claim a still-running job from the
+        # preceding generation merely because its product matches. This happened to order 46:
+        # the previous cycle had one more live RCF job than plan rows, so the generic oldest-slot
+        # binder stole one of next week's Stage-2 rows and hid it from the install queue.
+        by_generation_stage: dict[tuple, list[dict]] = {}
+        for row in plan_rows:
+            if row.get("order_id") is None:
+                continue
+            key = (int(row["order_id"]), round(float(row.get("created_at") or 0.0), 3),
+                   int(row.get("tier_order") or 0))
+            by_generation_stage.setdefault(key, []).append(row)
+
+        def stage_complete(group: list[dict]) -> bool:
+            by_owner: dict[tuple[int, int], list[dict]] = {}
+            for row in group:
+                by_owner.setdefault((int(row["character_id"]), int(row["type_id"])), []).append(row)
+            for (cid, tid), owned in by_owner.items():
+                observed = sum(1 for row in owned if row.get("last_completed_at") is not None)
+                hand = manual_jobs(manual, cid, tid, int(owned[0].get("tier_order") or 0),
+                                   len(owned), _RX_DONE,
+                                   round(float(owned[0].get("created_at") or 0.0), 3))
+                if max(observed, hand) < len(owned):
+                    return False
+            return True
+
+        def slot_ready(row: dict) -> bool:
+            if row.get("order_id") is None or int(row.get("tier_order") or 0) <= 0:
+                return True
+            oid = int(row["order_id"])
+            chain = round(float(row.get("created_at") or 0.0), 3)
+            lower = [group for (order, generation, stage), group in by_generation_stage.items()
+                     if order == oid and generation == chain
+                     and stage < int(row.get("tier_order") or 0)]
+            return all(stage_complete(group) for group in lower)
+
+        # Repair bindings written before the generation boundary existed. The ESI job remains an
+        # orphan (and still consumes capacity); only the future cycle's false claim is removed.
+        impossible = [r for r in plan_rows if r.get("esi_job_id") and not slot_ready(r)]
+        if impossible:
+            marks_sql = ",".join("?" * len(impossible))
+            con.execute(f"UPDATE pp_reaction_assignments SET esi_job_id=NULL WHERE id IN ({marks_sql})",
+                        [int(r["id"]) for r in impossible])
+            for row in impossible:
+                row["esi_job_id"] = None
+            changed += len(impossible)
         bound = [dict(r) for r in con.execute(
             "SELECT a.id,a.esi_job_id FROM pp_reaction_assignments a JOIN pp_characters c "
             "ON c.character_id=a.character_id WHERE c.context_id=? AND a.esi_job_id IS NOT NULL",
@@ -581,16 +637,18 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
         for job in sorted(active, key=lambda j: (j["start_date"], j["job_id"])):
             if job["job_id"] in bound_ids:
                 continue
-            slot = con.execute(
-                "SELECT a.id,a.character_id,COALESCE(a.tier_order,0) AS tier_order "
+            candidates = [dict(r) for r in con.execute(
+                "SELECT a.id,a.character_id,a.type_id,a.order_id,a.created_at,"
+                "a.last_completed_at,COALESCE(a.tier_order,0) AS tier_order "
                 "FROM pp_reaction_assignments a "
                 "JOIN pp_characters c ON c.character_id=a.character_id "
                 "LEFT JOIN pp_reaction_orders o ON o.id=a.order_id "
                 "WHERE c.context_id=? AND a.type_id=? AND a.esi_job_id IS NULL "
                 "ORDER BY COALESCE(o.priority,-1) DESC,"
-                "CASE WHEN a.last_completed_at IS NOT NULL THEN 0 ELSE 1 END,a.created_at,a.id LIMIT 1",
+                "CASE WHEN a.last_completed_at IS NOT NULL THEN 0 ELSE 1 END,a.created_at,a.id",
                 (context_id, job["type_id"]),
-            ).fetchone()
+            )]
+            slot = next((candidate for candidate in candidates if slot_ready(candidate)), None)
             if not slot:
                 continue
             source_cid = int(slot["character_id"])
@@ -636,6 +694,63 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
     if changed:
         _invalidate_dashboard_cache(context_id)
     return changed
+
+
+def repair_recurring_generation_totals(context_id: int) -> int:
+    """Keep every untouched recurring generation equal to its committed order quantity.
+
+    Live jobs can correct a historical row to the run count actually installed, but that evidence
+    belongs only to that generation. It must not become next week's smaller template. Only a fully
+    uninstalled top stage is repaired; running work remains physical fact.
+    """
+    ensure_reaction_assignments_table()
+    ensure_reaction_orders_table()
+    con = get_connection()
+    changed = 0
+    try:
+        orders = {int(r["id"]): int(r["assigned_runs"] or 0)
+                  for r in con.execute(
+                      "SELECT id,top_level_runs,assigned_runs FROM pp_reaction_orders "
+                      "WHERE context_id=? AND recurring_interval_days IS NOT NULL", (context_id,))}
+        if not orders:
+            return 0
+        marks_sql = ",".join("?" * len(orders))
+        rows = [dict(r) for r in con.execute(
+            f"SELECT id,order_id,created_at,tier_order,runs,input_cost,reward,esi_job_id,"
+            f"last_completed_at FROM pp_reaction_assignments WHERE order_id IN ({marks_sql}) "
+            f"ORDER BY order_id,created_at,tier_order,id", list(orders))]
+        generations: dict[tuple[int, float], list[dict]] = {}
+        for row in rows:
+            generations.setdefault((int(row["order_id"]),
+                                    round(float(row.get("created_at") or 0.0), 3)), []).append(row)
+        for (oid, _generation), generation in generations.items():
+            target = orders.get(oid, 0)
+            if target <= 0:
+                continue
+            top_stage = max(int(r.get("tier_order") or 0) for r in generation)
+            top = [r for r in generation if int(r.get("tier_order") or 0) == top_stage]
+            if not top or any(r.get("esi_job_id") or r.get("last_completed_at") is not None for r in top):
+                continue
+            total = sum(int(r.get("runs") or 0) for r in top)
+            if total == target:
+                continue
+            base, rem = divmod(target, len(top))
+            if base <= 0:
+                continue
+            sizes = [base + 1] * rem + [base] * (len(top) - rem)
+            total_cost = sum(float(r.get("input_cost") or 0.0) for r in top)
+            total_reward = sum(float(r.get("reward") or 0.0) for r in top)
+            for row, runs in zip(sorted(top, key=lambda r: int(r["id"])), sizes):
+                frac = runs / target
+                con.execute("UPDATE pp_reaction_assignments SET runs=?,input_cost=?,reward=? WHERE id=?",
+                            (runs, round(total_cost * frac, 2), round(total_reward * frac, 2),
+                             int(row["id"])))
+                changed += 1
+        if changed:
+            con.commit()
+        return changed
+    finally:
+        con.close()
 
 
 # ── Fixed-unit customer orders ──────────────────────────────────────────────────────────────
@@ -3162,6 +3277,11 @@ def clone_recurring_cycle(context_id: int, order_id: int) -> dict:
             "ORDER BY a.created_at,a.id", (order_id, context_id)).fetchall()]
         if not rows:
             return {"released": False, "empty": True, "error": "No previous cycle to repeat."}
+        order_row = con.execute(
+            "SELECT top_level_runs,assigned_runs FROM pp_reaction_orders "
+            "WHERE id=? AND context_id=?", (order_id, context_id)).fetchone()
+        order_target = int((order_row["assigned_runs"] or 0)
+                           if order_row else 0)
 
         cycles: dict[float, list[dict]] = {}
         for row in rows:
@@ -3257,6 +3377,20 @@ def clone_recurring_cycle(context_id: int, order_id: int) -> dict:
                           key=lambda r: int(r["id"]))
             for stage in sorted(template_stages)
         }
+        # Historical installed jobs may have corrected the template's stored runs to what was
+        # really typed. That is evidence about the old batch, not permission to shrink every
+        # future batch. Rebuild the untouched top stage to the order's exact committed run total.
+        top_stage = max(template_by_stage)
+        top_run_by_id: dict[int, int] = {}
+        top_cost = sum(float(r.get("input_cost") or 0.0) for r in template_by_stage[top_stage])
+        top_reward = sum(float(r.get("reward") or 0.0) for r in template_by_stage[top_stage])
+        if order_target > 0 and template_by_stage[top_stage]:
+            base, rem = divmod(order_target, len(template_by_stage[top_stage]))
+            if base > 0:
+                top_run_by_id = {
+                    int(row["id"]): base + (1 if idx < rem else 0)
+                    for idx, row in enumerate(template_by_stage[top_stage])
+                }
         for offset, stage in enumerate(sorted(template_by_stage)):
             occupied: dict[int, int] = {}
             for stage_sequence in active_stages:
@@ -3277,6 +3411,10 @@ def clone_recurring_cycle(context_id: int, order_id: int) -> dict:
                 cid = original if remaining.get(original, 0) > 0 else max(remaining, key=remaining.get)
                 values = dict(row)
                 values["character_id"] = cid
+                if stage == top_stage and int(row["id"]) in top_run_by_id:
+                    values["runs"] = top_run_by_id[int(row["id"])]
+                    values["input_cost"] = top_cost * values["runs"] / order_target
+                    values["reward"] = top_reward * values["runs"] / order_target
                 con.execute(
                     f"INSERT INTO pp_reaction_assignments ({','.join(columns)},created_at,esi_job_id,last_completed_at) "
                     f"VALUES ({placeholders},?,NULL,NULL)",
@@ -4049,6 +4187,10 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
     # Also performs the additive backfill for snapshots fetched before persistent job bindings
     # existed. Idempotent after the first read; subsequent dashboard loads write nothing.
     bind_reaction_jobs_to_plan(context_id)
+    # Binding is also where an old-cycle job can expose a historical run-count mismatch. Keep that
+    # evidence on the old cycle, then restore every untouched recurring top stage to its exact
+    # committed total before any dashboard totals or install instructions are built.
+    repair_recurring_generation_totals(context_id)
     # Fetched BEFORE opening the main connection below, not inside that try block — this opens
     # its OWN connection internally (member_group/get_reaction_settings/account override), and
     # holding two connections open at once per request is exactly what exhausted the pool under

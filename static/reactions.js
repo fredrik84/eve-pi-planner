@@ -1321,10 +1321,11 @@ function _renderReactionsDashboard(data) {
         : (tier > 0
           ? (ready ? ` — ${_rxStageLabel(tier, true)}` : ` — ${_rxStageLabel(tier, false)}, so don't install it yet`)
           : ' — nothing has to finish first');
-      // "+2" = two MORE jobs exactly like this one. The count, not the total, because the square
-      // shows one job's run count and the whole point is that you type the same number again.
+      // Say the TOTAL job count. A compact square reading "+7" for eight jobs was naturally read
+      // as seven allocated slots on order 46, hiding a whole job in the exact place meant to make
+      // the install instruction clearer.
       const moreBadge = grp.n > 1
-        ? `<span class="rx-slot-more" title="${grp.n} identical jobs — install ${_esc(a.name)} ×${a.runs} ${grp.n} times">+${grp.n - 1}</span>`
+        ? `<span class="rx-slot-more" title="${grp.n} identical jobs — install ${_esc(a.name)} ×${a.runs} ${grp.n} times">${grp.n} jobs</span>`
         : '';
       const moreTip = grp.n > 1 ? ` — ${grp.n} identical jobs` : '';
       // The mark also has to be reachable without the pipeline view, since that is its own flag —

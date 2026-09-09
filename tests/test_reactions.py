@@ -445,6 +445,8 @@ def test_reactions_phase1_is_task_first() -> bool:
     ok &= check("!!a.slot_deferred ||" in js and "Capacity queued" in js
                 and "next free reactor" in js,
                 "physical overflow is visibly queued instead of drawing an impossible reactor")
+    ok &= check('>${grp.n} jobs</span>' in js and '>+${grp.n - 1}</span>' not in js,
+                "a folded queue badge states eight jobs as '8 jobs', never the ambiguous '+7'")
     ok &= check("Valued at <b>buy orders</b>" not in js and "Mixed basis: jobs before" not in js
                 and "Full cost adds <b>" not in js,
                 "Overview metrics do not trail non-actionable accounting prose")
@@ -1649,13 +1651,20 @@ def test_recurring_pipeline_repacks_sequential_layout() -> bool:
     """The reported RCF layout had 10 S1 + 9 S2 rows on one 10-slot character. A repeated
     generation must spread across account capacity, retire completed S1, and not build backlog."""
     from app.reactions.jobs import (clone_recurring_cycle, ensure_reaction_assignments_table,
-                                    _concurrent_load, rebalance_recurring_pipelines)
+                                    ensure_reaction_orders_table, _concurrent_load,
+                                    rebalance_recurring_pipelines)
 
     ctx, oid = 777099, 990099
     cids = (990091, 990092, 990093)
-    ensure_reaction_assignments_table()
+    ensure_reaction_assignments_table(); ensure_reaction_orders_table()
     con = get_connection()
     try:
+        con.execute("DELETE FROM pp_reaction_orders WHERE id=?", (oid,))
+        con.execute(
+            "INSERT INTO pp_reaction_orders "
+            "(id,context_id,type_id,name,target_qty,top_level_runs,assigned_runs,status,created_at,"
+            "recurring_interval_days) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (oid, ctx, 2001, "Exact recurring batch", 200000, 1000, 1000, "open", 1.0, 7.0))
         for cid in cids:
             con.execute(
                 "INSERT INTO pp_characters (character_id,character_name,context_id,scopes,"
@@ -1684,6 +1693,11 @@ def test_recurring_pipeline_repacks_sequential_layout() -> bool:
         ok &= check(max(loads.values()) <= 10,
                     f"the overlapping pipeline is repacked within each character's reactors ({loads})")
         newest = max(float(r["created_at"]) for r in all_rows)
+        newest_top = [r for r in all_rows
+                      if float(r["created_at"]) == newest and int(r["tier_order"]) == 1]
+        ok &= check(sum(int(r["runs"]) for r in newest_top) == 1000
+                    and sorted({int(r["runs"]) for r in newest_top}) == [111, 112],
+                    "every new recurring top stage preserves exactly 1,000 runs (111/112 across nine jobs)")
         # Reproduce the post-release dashboard regression: a later stage-only packer moved a full
         # new S1 product back beside the old S2 reservation.
         con.execute("UPDATE pp_reaction_assignments SET character_id=? "
@@ -1707,6 +1721,7 @@ def test_recurring_pipeline_repacks_sequential_layout() -> bool:
         return ok
     finally:
         con.execute("DELETE FROM pp_reaction_assignments WHERE order_id=?", (oid,))
+        con.execute("DELETE FROM pp_reaction_orders WHERE id=?", (oid,))
         con.execute("DELETE FROM pp_characters WHERE context_id=?", (ctx,))
         con.commit()
         con.close()
@@ -1839,6 +1854,7 @@ def run_unit_tests() -> bool:
         test_adopt_relocates_pending_recurring_work_instead_of_cloning_it(),
         test_reaction_transactions_are_postgres_compatible(),
         test_binding_never_overfills_a_characters_stage(),
+        test_binding_cannot_cross_a_recurring_generation(),
         test_explode_chain_tiers(),
         test_value_reaction_batch(),
         test_local_sell_hint(),
@@ -1932,6 +1948,76 @@ def test_binding_never_overfills_a_characters_stage() -> bool:
             con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (cid,))
             con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (cid,))
             con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
+        con.commit(); con.close()
+
+
+def test_binding_cannot_cross_a_recurring_generation() -> bool:
+    """An extra running top-stage job from last week must remain an orphan while this week's
+    feeder stage is still running. It cannot consume and hide one of next week's queued rows."""
+    import json as _json
+    from app.db import get_connection
+    import app.reactions.jobs as J
+
+    ctx, cid, oid, lower_tid, top_tid = 777096, 9940009, 990096, 57453, 57457
+    J.ensure_industry_jobs_table(); J.ensure_reaction_assignments_table(); J.ensure_reaction_orders_table()
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (cid,))
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (cid,))
+        con.execute("DELETE FROM pp_reaction_orders WHERE id=?", (oid,))
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
+        con.execute("INSERT INTO pp_characters (context_id,character_id,character_name,"
+                    "mass_reactions,advanced_mass_reactions,scopes) VALUES (?,?,?,?,?,?)",
+                    (ctx, cid, "Generation binder", 5, 4, "esi-industry.read_character_jobs.v1"))
+        con.execute("INSERT INTO pp_reaction_orders "
+                    "(id,context_id,type_id,name,target_qty,top_level_runs,assigned_runs,status,created_at,"
+                    "recurring_interval_days) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (oid, ctx, top_tid, "Recurring RCF", 200000, 1000, 1000, "open", 1.0, 7.0))
+        # Previous generation: one planned top job. The live snapshot contains a second one which
+        # must not spill into the next generation merely because its product matches.
+        con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,input_cost,"
+                    "reward,created_at,tier_order,order_id,esi_job_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (cid, top_tid, "RCF", 500, 0, 0, 100.0, 1, oid, 880101))
+        # New generation: feeder still active, then two deliberately undersized untouched top rows.
+        con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,input_cost,"
+                    "reward,created_at,tier_order,order_id,esi_job_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (cid, lower_tid, "Carbon Fiber", 120, 0, 0, 200.0, 0, oid, 880103))
+        for _ in range(2):
+            con.execute("INSERT INTO pp_reaction_assignments (character_id,type_id,name,runs,input_cost,"
+                        "reward,created_at,tier_order,order_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (cid, top_tid, "RCF", 389, 0, 0, 200.0, 1, oid))
+        jobs = [
+            {"job_id": 880101, "product_type_id": top_tid, "runs": 500,
+             "activity_id": 9, "status": "active", "start_date": "2026-09-01T00:00:00Z"},
+            {"job_id": 880102, "product_type_id": top_tid, "runs": 500,
+             "activity_id": 9, "status": "active", "start_date": "2026-09-01T00:00:01Z"},
+            {"job_id": 880103, "product_type_id": lower_tid, "runs": 120,
+             "activity_id": 9, "status": "active", "start_date": "2026-09-08T00:00:00Z"},
+        ]
+        con.execute("INSERT INTO pp_char_industry_jobs (character_id,jobs_json,fetched_at) VALUES (?,?,?)",
+                    (cid, _json.dumps(jobs), 1.0))
+        con.commit()
+    finally:
+        con.close()
+    try:
+        J.bind_reaction_jobs_to_plan(ctx)
+        J.repair_recurring_generation_totals(ctx)
+        con = get_connection()
+        future = [dict(r) for r in con.execute(
+            "SELECT runs,esi_job_id FROM pp_reaction_assignments WHERE order_id=? AND created_at=200 "
+            "AND tier_order=1 ORDER BY id", (oid,))]
+        con.close()
+        ok = check(all(r["esi_job_id"] is None for r in future),
+                   "an old-cycle live job cannot bind to a future stage whose inputs are unfinished")
+        ok &= check([int(r["runs"]) for r in future] == [500, 500],
+                    "the untouched future generation repairs back to its exact 1,000-run target")
+        return ok
+    finally:
+        con = get_connection()
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (cid,))
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (cid,))
+        con.execute("DELETE FROM pp_reaction_orders WHERE id=?", (oid,))
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
         con.commit(); con.close()
 
 

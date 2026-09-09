@@ -1173,6 +1173,21 @@ queued layouts against cadence offsets, leaving ESI-bound jobs fixed. This secon
 old plans released before the pipeline rule existed and prevents a later housekeeping pass from
 moving a safe release back onto an already-full reactor character.
 
+Each generation also preserves the order's exact `assigned_runs` at its top stage. Historical ESI
+jobs may correct an old row to what the player actually installed, but that is evidence about that
+batch—not a smaller template for every following week. A newly cloned or wholly uninstalled top
+stage is divided evenly with a remainder (1,000 runs over nine jobs becomes one 112 and eight 111),
+never rounded down to nine identical 111-run jobs.
+
+The ESI binder respects the same generation boundary. A later-stage row is ineligible while any
+lower stage in its own `created_at` generation is unfinished. Without that check, an extra live
+final-stage job from the preceding week matched by product alone, consumed a future row, and hid it
+from the install list; order 46 consequently displayed only the compact “+7” remainder of its nine
+planned jobs. Legacy impossible bindings are detached automatically and become honest orphan live
+jobs, while the untouched future generation is restored to its exact target. Compact queued cards
+now show the total (`8 jobs`) rather than an additive badge (`+7`) so the UI cannot turn eight
+allocations into an apparent seven.
+
 ## Idea, not backlog: make the ranking aware of what you already hold
 
 **Not planned, not scheduled, and deliberately not in TODO.md** — recorded here so the reasoning
