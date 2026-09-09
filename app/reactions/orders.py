@@ -20,7 +20,7 @@ from app.reactions.jobs import (
     _character_capacities, ensure_reaction_orders_table, ensure_reaction_assignments_table,
     _allocate_and_insert, formula_concurrency_caps, _cap_jobs, give_back_order_runs,
     live_reaction_runs, reaction_manual_marks, manual_jobs, _RX_RUNNING,
-    _invalidate_dashboard_cache, clone_recurring_cycle,
+    _invalidate_dashboard_cache, clone_recurring_cycle, reaction_capacity_snapshot_fresh,
 )
 
 
@@ -850,6 +850,12 @@ def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: in
     if runs_to_assign <= 0:
         raise HTTPException(status_code=400, detail="Nothing to assign")
 
+    fresh, stale_detail = reaction_capacity_snapshot_fresh(context_id)
+    if not fresh:
+        detail = stale_detail or "Refresh reaction jobs before assigning customer work."
+        _queue_order_error(order_id, detail)
+        raise HTTPException(status_code=409, detail=detail)
+
     loaded = _load_goo_and_reached(context_id)
     node = loaded[1].get(order["type_id"]) if loaded else None
     if not node or node.get("via") is None:
@@ -888,6 +894,10 @@ def _release_recurring_cycle(order_id: int, context_id: int) -> dict:
         order = _get_order_or_404(con, order_id, context_id)
     finally:
         con.close()
+    fresh, stale_detail = reaction_capacity_snapshot_fresh(context_id)
+    if not fresh:
+        raise HTTPException(status_code=409, detail=stale_detail or
+                            "Refresh reaction jobs before releasing recurring work.")
     if order["assigned_runs"] < order["top_level_runs"]:
         result = assign_reaction_order(order_id, OrderAssignRequest(), context_id)
         complete = result["order"]["assigned_runs"] >= result["order"]["top_level_runs"]

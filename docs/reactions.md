@@ -1105,6 +1105,21 @@ formula panel says so rather than leaving a user to wonder why their cap never b
 note, deliberately, not a rewrite: making those reads standalone is a much larger change with no
 reported cost behind it.
 
+## Customer work requires a current slot snapshot (2026-09-09)
+
+Creating customer work used the cached ESI job list without checking its age. If a character filled
+their reactors after the last refresh, the allocator could queue new work there; installing the jobs
+on other characters then appeared to "solve itself" because `bind_reaction_jobs_to_plan` correctly
+relocated the rows to match ESI. Reconciliation was working, but initial distribution was based on
+evidence that no longer described the account.
+
+The create flow now visibly refreshes reaction jobs immediately before committing the order. The
+server independently requires every eligible character's snapshot to be no older than ESI's
+five-minute cache window before `assign_reaction_order` or a recurring release may place anything.
+A failed or partial refresh therefore leaves the saved order waiting with a named stale-capacity
+error instead of guessing a character. API callers get the same guard; it is not merely frontend
+sequencing.
+
 ## Recurring batches form a weekly pipeline (2026-09-05)
 
 A recurring order repeats a complete batch, but it does not wait for that batch's final stage before

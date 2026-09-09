@@ -3198,6 +3198,7 @@ function _rxReviewOrder() {
 
 function _rxCreateOrder() {
   const status = document.getElementById('rxOrderCreateStatus');
+  const createBtn = document.getElementById('rxOrderCreateBtn');
   const o = _rxOrderProductMatch();
   if (!o) { status.textContent = 'Pick a product from the list.'; return; }
   const qty = parseFloat(document.getElementById('rxOrderQty').value);
@@ -3214,11 +3215,20 @@ function _rxCreateOrder() {
     status.textContent = 'Enter a recurring cadence between 0.25 and 365 days.';
     return;
   }
-  status.textContent = 'Creating…';
-  apiSend('POST', '/api/reactions/orders',
-          { type_id: o.type_id, target_qty: qty, client_name: clientName || null, notes: notes || null,
-            client_price: price > 0 ? price : null,
-            recurring_interval_days: recurring ? recurringDays : null })
+  // Distribution is a statement about which reactors are free NOW. Refresh immediately before
+  // committing; tab-open data may be much older by the time the user has reviewed and priced the
+  // order. The server independently refuses stale capacity, so a failed/partial refresh cannot
+  // silently park work on a character whose slots are already full.
+  if (createBtn) createBtn.disabled = true;
+  status.textContent = 'Checking current reaction jobs…';
+  apiSend('POST', '/api/reactions/jobs/refresh?force=1')
+    .then(() => {
+      status.textContent = 'Creating and distributing…';
+      return apiSend('POST', '/api/reactions/orders',
+        { type_id: o.type_id, target_qty: qty, client_name: clientName || null, notes: notes || null,
+          client_price: price > 0 ? price : null,
+          recurring_interval_days: recurring ? recurringDays : null });
+    })
     .then(data => {
       _rxCloseNewOrderModal();
       ppReturnToOverview('rx', 'overview', 'rxOverviewPanel');
@@ -3235,7 +3245,8 @@ function _rxCreateOrder() {
         toast('Customer order created. It is ready to plan from the Overview.', 'success');
       }
     })
-    .catch(err => { status.textContent = err.message; });
+    .catch(err => { status.textContent = err.message; })
+    .finally(() => { if (createBtn) createBtn.disabled = false; });
 }
 
 // What the order EARNS. Only a price the user typed can answer it — an order's revenue is what was

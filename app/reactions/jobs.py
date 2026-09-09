@@ -194,6 +194,38 @@ def fetch_corp_industry_jobs(character_id: int, access_token: str) -> list[dict]
 _JOBS_CACHE_TTL = 300
 
 
+def reaction_capacity_snapshot_fresh(context_id: int, now: float | None = None) -> tuple[bool, str | None]:
+    """Whether every reaction-capable tracked character has a current ESI jobs snapshot.
+
+    Customer work must not be distributed from an old picture of occupied reactors. The browser
+    refreshes immediately before creation, while this server-side guard also covers API callers,
+    recurring retries and a failed/partial ESI refresh. Five minutes is ESI's own cache window;
+    anything older is no longer evidence of current capacity.
+    """
+    ensure_industry_jobs_table()
+    con = get_connection()
+    try:
+        chars = [dict(r) for r in con.execute(
+            "SELECT character_id,character_name,mass_reactions,advanced_mass_reactions,scopes "
+            "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,))]
+        fetched = {int(r["character_id"]): r["fetched_at"] for r in con.execute(
+            "SELECT character_id,fetched_at FROM pp_char_industry_jobs")}
+    finally:
+        con.close()
+    current = float(now if now is not None else _time.time())
+    stale = []
+    for char in chars:
+        if not reaction_capable(char)[0]:
+            continue
+        stamp = fetched.get(int(char["character_id"]))
+        if stamp is None or current - float(stamp) > _JOBS_CACHE_TTL:
+            stale.append(str(char.get("character_name") or char["character_id"]))
+    if not stale:
+        return True, None
+    names = ", ".join(stale[:3]) + (f" and {len(stale) - 3} more" if len(stale) > 3 else "")
+    return False, f"Refresh reaction jobs before assigning: capacity is stale for {names}."
+
+
 def _disappeared_completed_jobs(previous_jobs: list[dict], jobs: list[dict], now: float) -> list[tuple[float, int]]:
     """Completion stamps for old jobs absent from a new current-jobs snapshot.
 

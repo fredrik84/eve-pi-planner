@@ -68,6 +68,11 @@ def _seed_session() -> str:
         "INSERT INTO pp_sessions (token, character_id, context_id, created_at) VALUES (?,?,?,?)",
         (token, FAKE_CID, FAKE_CTX, datetime.now(timezone.utc).isoformat()),
     )
+    con.execute(
+        "INSERT INTO pp_char_industry_jobs (character_id,jobs_json,fetched_at) VALUES (?,?,?) "
+        "ON CONFLICT (character_id) DO UPDATE SET jobs_json=excluded.jobs_json,fetched_at=excluded.fetched_at",
+        (FAKE_CID, "[]", datetime.now(timezone.utc).timestamp()),
+    )
     con.commit()
     con.close()
     return token
@@ -335,6 +340,37 @@ def test_recurring_order_releases_each_cycle(api: Api) -> bool:
     return ok
 
 
+def test_customer_order_refuses_stale_capacity(api: Api) -> bool:
+    """A saved order may wait, but it must not choose a character from an old jobs snapshot."""
+    print(f"\n{'='*60}\n  Customer order: stale ESI capacity never auto-assigns\n{'='*60}")
+    product = _find_test_product(api)
+    if not check(product is not None, "found a reachable product for the stale-capacity test"):
+        return True
+    con = get_connection()
+    con.execute("UPDATE pp_char_industry_jobs SET fetched_at=0 WHERE character_id=?", (FAKE_CID,))
+    con.commit()
+    con.close()
+    per_run_yield = product["output_qty"] / product["top_level_runs"]
+    status, created = api.post("/api/reactions/orders", {
+        "type_id": product["type_id"], "target_qty": per_run_yield,
+        "client_name": "Stale Capacity",
+    })
+    order = created.get("order", {})
+    detail = str(created.get("auto_assign_error") or "")
+    ok = check(status == 200 and order.get("assigned_runs") == 0,
+               "the order is saved but no stale character placement is made")
+    ok &= check("Refresh reaction jobs" in detail,
+                "the waiting order explains that current job capacity is required")
+    if order.get("id"):
+        api.delete(f"/api/reactions/orders/{order['id']}")
+    con = get_connection()
+    con.execute("UPDATE pp_char_industry_jobs SET fetched_at=? WHERE character_id=?",
+                (datetime.now(timezone.utc).timestamp(), FAKE_CID))
+    con.commit()
+    con.close()
+    return ok
+
+
 def test_recurring_create_refreshes_visible_queue() -> bool:
     """Creating recurring work assigns on the server, so the browser must repaint the task cards.
 
@@ -352,6 +388,9 @@ def test_recurring_create_refreshes_visible_queue() -> bool:
                "create success reloads the reaction dashboard after automatic assignment")
     ok &= check("data.auto_assigned" in body,
                 "create success acknowledges the automatic assignment")
+    ok &= check(body.index("/api/reactions/jobs/refresh?force=1") <
+                body.index("apiSend('POST', '/api/reactions/orders'"),
+                "customer work refreshes current ESI capacity before distribution")
     return ok
 
 
@@ -2294,6 +2333,7 @@ def main() -> int:
             token = _seed_session()
             api = Api(base, token)
             results.append(test_order_lifecycle(api))
+            results.append(test_customer_order_refuses_stale_capacity(api))
             results.append(test_recurring_order_releases_each_cycle(api))
             results.append(test_order_preview(api))
             results.append(test_pricing_endpoints_live(api))
