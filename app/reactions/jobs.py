@@ -348,9 +348,10 @@ def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_cont
         recovery = retry_automatic_orders(context_id)
     except Exception:
         log.exception("automatic reaction-order recovery failed for context %s", context_id)
+    slot_queue = enforce_reaction_slot_ceiling(context_id)
     return {"ok": True, "characters_refreshed": refreshed, "characters_changed": changed,
             "characters_skipped": skipped, "snapshot_at": max((x[2] for x in fetched), default=None),
-            "automatic_recovery": recovery}
+            "automatic_recovery": recovery, "slot_queue": slot_queue}
 
 
 def refresh_character_jobs(character_id: int) -> bool:
@@ -516,7 +517,11 @@ def ensure_reaction_assignments_table():
                     # A bound job that finished and then disappeared from ESI completed THIS
                     # exact recurring slot. Kept until its next ESI job binds, so a delivered S1
                     # still releases S2 after ESI removes it from the current-jobs response.
-                    "last_completed_at DOUBLE PRECISION")
+                    "last_completed_at DOUBLE PRECISION",
+                    # Planned work with no physical reactor reserved yet. It remains attached to
+                    # the best target character and visible in the queued rail, but never counts
+                    # toward that character's hard slot ceiling until promoted.
+                    "slot_deferred INTEGER NOT NULL DEFAULT 0")
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rx_assign_esi_job "
                     "ON pp_reaction_assignments (esi_job_id)")
         con.commit()
@@ -599,7 +604,8 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
                 capacity = reaction_slots(dict(target)) if target else 0
                 occupied = con.execute(
                     "SELECT COUNT(*) AS n FROM pp_reaction_assignments "
-                    "WHERE character_id=? AND COALESCE(tier_order,0)=?", (target_cid, tier),
+                    "WHERE character_id=? AND COALESCE(tier_order,0)=? "
+                    "AND COALESCE(slot_deferred,0)=0", (target_cid, tier),
                 ).fetchone()["n"]
                 if int(occupied) >= capacity:
                     # Relocation may not turn a ten-slot character into twenty assignments. Swap
@@ -611,7 +617,7 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
                         "SELECT a.id FROM pp_reaction_assignments a "
                         "LEFT JOIN pp_reaction_orders o ON o.id=a.order_id "
                         "WHERE a.character_id=? AND COALESCE(a.tier_order,0)=? "
-                        "AND a.esi_job_id IS NULL "
+                        "AND a.esi_job_id IS NULL AND COALESCE(a.slot_deferred,0)=0 "
                         "ORDER BY COALESCE(o.priority,-1),a.created_at DESC,a.id DESC LIMIT 1",
                         (target_cid, tier),
                     ).fetchone()
@@ -620,7 +626,7 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
                     con.execute("UPDATE pp_reaction_assignments SET character_id=? WHERE id=?",
                                 (source_cid, displaced["id"]))
             con.execute("UPDATE pp_reaction_assignments SET esi_job_id=?,character_id=?,"
-                        "last_completed_at=NULL WHERE id=?",
+                        "last_completed_at=NULL,slot_deferred=0 WHERE id=?",
                         (job["job_id"], target_cid, slot["id"]))
             bound_ids.add(job["job_id"])
             changed += 1
@@ -2981,6 +2987,7 @@ def _concurrent_load(rows: list[dict], adding: dict[int, int] | None = None) -> 
     slot and then reported as occupying three, and the allocators that read those numbers quietly
     planned less work than the account had reactors for.
     """
+    rows = [r for r in rows if not int(r.get("slot_deferred") or 0)]
     # Multiple generations of one order are deliberately phase-shifted. In steady state one
     # generation occupies each stage, so the reservation is one complete generation (the sum of
     # its stage jobs), not two copies of the widest absolute tier. This is detectable from the
@@ -3004,6 +3011,133 @@ def _concurrent_load(rows: list[dict], adding: dict[int, int] | None = None) -> 
     for t, n in (adding or {}).items():
         per_tier[t] = per_tier.get(t, 0) + n
     return pipeline_load + max(per_tier.values(), default=0)
+
+
+def enforce_reaction_slot_ceiling(context_id: int) -> dict:
+    """Hard guardrail: no character reserves more planned work than physical reaction slots.
+
+    Overflow is not deleted and is not allowed to masquerade as a reservation. It becomes a
+    deferred row, moves to an immediately free eligible character when possible, and otherwise is
+    targeted at the character whose currently running ESI job ends first. Re-running this after a
+    jobs refresh promotes deferred rows as soon as the slot model says they fit.
+    """
+    ensure_industry_jobs_table()
+    ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        chars = {int(r["character_id"]): dict(r) for r in con.execute(
+            "SELECT character_id,character_name,mass_reactions,advanced_mass_reactions,scopes "
+            "FROM pp_characters WHERE context_id=? AND COALESCE(is_dummy,0)=0", (context_id,))
+                     if reaction_capable(dict(r))[0]}
+        capacity = {cid: reaction_slots(char) for cid, char in chars.items()}
+        if not chars:
+            return {"deferred": 0, "moved": 0, "promoted": 0}
+        rows = [dict(r) for r in con.execute(
+            "SELECT a.id,a.character_id,a.type_id,a.tier_order,a.order_id,a.created_at,a.esi_job_id,"
+            "COALESCE(a.slot_deferred,0) AS slot_deferred,COALESCE(o.priority,-1) AS priority "
+            "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id=a.character_id "
+            "LEFT JOIN pp_reaction_orders o ON o.id=a.order_id WHERE c.context_id=? "
+            "ORDER BY COALESCE(o.priority,-1) DESC,a.created_at,a.id", (context_id,))]
+        cached = {int(r["character_id"]): _json.loads(r["jobs_json"] or "[]") for r in con.execute(
+            "SELECT j.character_id,j.jobs_json FROM pp_char_industry_jobs j JOIN pp_characters c "
+            "ON c.character_id=j.character_id WHERE c.context_id=?", (context_id,))}
+
+        # A live job normally owns a bound planner row, which already consumes one reservation.
+        # Jobs that cannot be matched still occupy real reactors, however, and therefore reduce
+        # what the planner may reserve. Counting only those orphans avoids double-counting bound
+        # jobs while preserving the hard physical ceiling.
+        bound_job_ids = {int(r["esi_job_id"]) for r in rows if r.get("esi_job_id")}
+        active_statuses = {"active", "paused", "ready"}
+        for cid, jobs in cached.items():
+            orphan_jobs = sum(
+                1 for job in jobs
+                if str(job.get("status") or "").lower() in active_statuses
+                and int(job.get("job_id") or 0) not in bound_job_ids
+            )
+            capacity[cid] = max(0, capacity.get(cid, 0) - orphan_jobs)
+
+        by_char: dict[int, list[dict]] = {cid: [] for cid in chars}
+        for row in rows:
+            by_char.setdefault(int(row["character_id"]), []).append(row)
+        deferred = moved = promoted = 0
+
+        # First make every existing placement legal. Bound ESI work is physical fact and cannot be
+        # moved/deferred; newest, later-stage uninstalled work gives way first.
+        for cid, char_rows in by_char.items():
+            ceiling = capacity.get(cid, 0)
+            while _concurrent_load(char_rows) > ceiling:
+                candidates = [r for r in char_rows
+                              if not r.get("esi_job_id") and not int(r.get("slot_deferred") or 0)]
+                if not candidates:
+                    break
+                before = _concurrent_load(char_rows)
+                ranked = []
+                for row in candidates:
+                    row["slot_deferred"] = 1
+                    after = _concurrent_load(char_rows)
+                    row["slot_deferred"] = 0
+                    ranked.append((before - after, int(row.get("tier_order") or 0),
+                                   float(row.get("created_at") or 0.0), int(row["id"]), row))
+                reduction, *_rest, chosen = max(ranked, key=lambda x: x[:-1])
+                if reduction <= 0:
+                    chosen = max(candidates, key=lambda r: (int(r.get("tier_order") or 0),
+                                                            float(r.get("created_at") or 0.0), int(r["id"])))
+                chosen["slot_deferred"] = 1
+                con.execute("UPDATE pp_reaction_assignments SET slot_deferred=1 WHERE id=?",
+                            (int(chosen["id"]),))
+                deferred += 1
+
+        def end_timestamp(job: dict) -> float:
+            try:
+                return datetime.fromisoformat(str(job.get("end_date") or "").replace("Z", "+00:00")).timestamp()
+            except Exception:
+                return float("inf")
+
+        next_free = {
+            cid: min((end_timestamp(j) for j in cached.get(cid, [])
+                      if (j.get("status") or "").lower() in active_statuses),
+                     default=float("inf"))
+            for cid in chars
+        }
+        waiting = sorted((r for r in rows if int(r.get("slot_deferred") or 0)),
+                         key=lambda r: (-int(r["priority"] if r.get("priority") is not None else -1),
+                                        float(r.get("created_at") or 0.0), int(r["id"])))
+        for row in waiting:
+            old_cid = int(row["character_id"])
+            fits = []
+            for cid in chars:
+                trial = dict(row)
+                trial["character_id"] = cid
+                trial["slot_deferred"] = 0
+                load = _concurrent_load(by_char.get(cid, []) + [trial])
+                if load <= capacity[cid]:
+                    fits.append((cid != old_cid, -(capacity[cid] - load), cid))
+            if fits:
+                _moved, _slack, target = min(fits)
+                row["slot_deferred"] = 0
+                if target != old_cid:
+                    by_char[old_cid].remove(row)
+                    row["character_id"] = target
+                    by_char.setdefault(target, []).append(row)
+                    moved += 1
+                con.execute("UPDATE pp_reaction_assignments SET character_id=?,slot_deferred=0 WHERE id=?",
+                            (target, int(row["id"])))
+                promoted += 1
+                continue
+            target = min(chars, key=lambda cid: (next_free.get(cid, float("inf")),
+                                                 _concurrent_load(by_char.get(cid, [])), cid))
+            if target != old_cid:
+                by_char[old_cid].remove(row)
+                row["character_id"] = target
+                by_char.setdefault(target, []).append(row)
+                con.execute("UPDATE pp_reaction_assignments SET character_id=? WHERE id=?",
+                            (target, int(row["id"])))
+                moved += 1
+        if deferred or moved or promoted:
+            con.commit()
+        return {"deferred": deferred, "moved": moved, "promoted": promoted}
+    finally:
+        con.close()
 
 
 def clone_recurring_cycle(context_id: int, order_id: int) -> dict:
@@ -3085,6 +3219,7 @@ def clone_recurring_cycle(context_id: int, order_id: int) -> dict:
             "SELECT a.character_id,COALESCE(a.tier_order,0) AS tier_order,COUNT(*) AS n "
             "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id=a.character_id "
             "WHERE c.context_id=? AND (a.order_id IS NULL OR a.order_id<>?) "
+            "AND COALESCE(a.slot_deferred,0)=0 "
             "GROUP BY a.character_id,COALESCE(a.tier_order,0)", (context_id, order_id)):
             other_tiers.setdefault(int(row["character_id"]), {})[int(row["tier_order"])] = int(row["n"])
         base_available = {
@@ -3188,7 +3323,8 @@ def rebalance_recurring_pipelines(context_id: int) -> int:
     """
     rows = _plan_rows(
         context_id,
-        "a.id,a.character_id,a.type_id,a.tier_order,a.order_id,a.created_at,a.esi_job_id")
+        "a.id,a.character_id,a.type_id,a.tier_order,a.order_id,a.created_at,a.esi_job_id,"
+        "COALESCE(a.slot_deferred,0) AS slot_deferred")
     overlapping = _overlapping_order_ids(rows)
     if not overlapping:
         return 0
@@ -3296,25 +3432,11 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
                 replaced += _clear_assignment_group(con, req.character_id, tier.type_id, tier_order)
             replaced += _clear_assignment_group(con, req.character_id, req.type_id, top_tier_order)
 
-            # **Capacity.** Nothing stopped the total exceeding the character's real reaction slots,
-            # which is how a 10-slot character ended up holding 27 rows. What competes for a slot is
-            # everything at the same TIER — tiers are sequential — so a deep chain is not penalised.
-            existing = [dict(r) for r in con.execute(
-                "SELECT tier_order FROM pp_reaction_assignments WHERE character_id=?",
-                (req.character_id,))]
-            # Per STAGE, summed: two siblings in one stage really do hold two reactors at once.
-            adding: dict[int, int] = {}
-            for stage, t in zip(tier_of, req.chain_tiers):
-                adding[stage] = adding.get(stage, 0) + max(1, t.job_count)
-            adding[top_tier_order] = max(1, req.job_count)
-            peak = _concurrent_load(existing, adding)
-            slots = _assigned_slot_capacity(con, req.character_id)
-            if slots and peak > slots:
-                con.rollback()
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"That needs {peak} reaction slots at once and this character has "
-                           f"{slots}. Assign fewer jobs, or spread them across characters.")
+        # **Capacity.** Nothing stopped the total exceeding the character's real reaction slots,
+        # which is how a 10-slot character ended up holding 27 rows. Overflow is legal PLANNED work,
+        # but never a physical reservation: the ceiling guard below moves it to free characters or
+        # marks it deferred. Rejecting here lost the work instead of putting it in the queue the
+        # dashboard already has. Sequential tiers remain reusable through `_concurrent_load`.
 
         tidy = _tidy_runs_on(context_id)
         for tier_order, tier in zip(tier_of, req.chain_tiers):
@@ -3326,10 +3448,12 @@ def assign_reaction(req: AssignRequest, context_id: int = Depends(require_contex
         con.commit()
     finally:
         con.close()
+    slot_queue = enforce_reaction_slot_ceiling(context_id)
     _invalidate_dashboard_cache(context_id)
     # `stock_covered` is why the plan may hold fewer stages than the caller asked for — returned so
     # the UI can say so rather than leaving a stage to vanish silently.
-    return {"ok": True, "replaced": replaced, "stock_covered": stock_covered}
+    return {"ok": True, "replaced": replaced, "stock_covered": stock_covered,
+            "slot_queue": slot_queue}
 
 
 class AdoptOrphanRequest(BaseModel):
@@ -3963,6 +4087,9 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         # Recurring generations are phase-shifted: old Stage 2 and new Stage 1 are simultaneous.
         # Run last so no single-generation levelling/packing pass can undo that placement.
         rebalance_recurring_pipelines(context_id)
+        # Final invariant over every writer above: overflow is explicitly queued, never represented
+        # as a physical reservation beyond a character's trained slot ceiling.
+        enforce_reaction_slot_ceiling(context_id)
     except Exception:
         pass
     # What the player has marked running or done by hand. Own connection, so it belongs here with
@@ -3990,6 +4117,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                 # run and closed its connection by the time these rows are read.
                 f"SELECT id, character_id, type_id, name, runs, input_cost, reward, tier_order, "
                 f"created_at, order_id, esi_job_id, last_completed_at, "
+                f"COALESCE(slot_deferred,0) AS slot_deferred, "
                 f"COALESCE(cadence_over_h,0) AS cadence_over_h, "
                 f"COALESCE(surplus_runs,0) AS surplus_runs, COALESCE(jobs_saved,0) AS jobs_saved, "
                 f"COALESCE(recover_runs,0) AS recover_runs "
@@ -4243,6 +4371,9 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                     # (or never will). Absent otherwise. Keeps the row on the page so the mark can
                     # be taken back, while the checklist and the slot count both read it.
                     "marked": marked,
+                    # Explicit capacity overflow: planned and targeted, but not holding a physical
+                    # reactor until the ceiling guard promotes it.
+                    "slot_deferred": bool(a.get("slot_deferred")),
                     # Which assign wrote this row — the chain it belongs to, so the UI can tell
                     # whether ITS stage below has finished rather than some other plan's.
                     "chain": round(float(a.get("created_at") or 0.0), 3), "input_cost": a["input_cost"], "reward": a["reward"],
@@ -4258,7 +4389,8 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         # now, ESI simply cannot see it yet, so it holds its slot exactly as a job ESI reports
         # would. Getting this backwards is what would make a hand mark cost the player capacity.
         holding = [p for p in pending if p.get("marked") != _RX_DONE]
-        pending_load = _concurrent_load(holding) if peak_only else len(holding)
+        pending_load = (_concurrent_load(holding) if peak_only else
+                        len([p for p in holding if not p.get("slot_deferred")]))
         used_slots += pending_load
 
         characters.append({
@@ -4456,7 +4588,8 @@ def _character_capacities(context_id: int) -> list[dict]:
         if char_ids:
             placeholders = ",".join("?" * len(char_ids))
             for r in con.execute(
-                f"SELECT character_id,COALESCE(tier_order,0) AS tier_order,order_id,created_at "
+                f"SELECT character_id,COALESCE(tier_order,0) AS tier_order,order_id,created_at,"
+                f"COALESCE(slot_deferred,0) AS slot_deferred "
                 f"FROM pp_reaction_assignments WHERE character_id IN ({placeholders}) "
                 f"ORDER BY character_id,created_at", char_ids,
             ):
@@ -4473,7 +4606,8 @@ def _character_capacities(context_id: int) -> list[dict]:
         jobs = _json.loads(row["jobs_json"]) if row else []
         used = len([j for j in jobs if j.get("status") in ("active", "paused", "ready")])
         planned = pending.get(int(c["character_id"]), [])
-        used += (_concurrent_load(planned) if peak_only else len(planned))
+        used += (_concurrent_load(planned) if peak_only else
+                 len([p for p in planned if not p.get("slot_deferred")]))
         result.append({
             "character_id": c["character_id"], "character_name": c["character_name"],
             "free_slots": max(0, slots - used),
@@ -4748,7 +4882,14 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     because that is what the item is, so it also bounds how many characters can host the order at
     all: every host needs at least one job of every tier.
     """
-    chars = [c for c in _character_capacities(context_id) if c["free_slots"] > 0]
+    # Lay the batch out against PHYSICAL capacity, then let the ceiling guard reserve what is free
+    # now and defer the rest. Basing the plan only on today's free slots made a full account unable
+    # to queue tomorrow's customer work at all.
+    chars = []
+    for current in _character_capacities(context_id):
+        physical = int(current.get("slots") or current.get("free_slots") or 0)
+        if physical > 0:
+            chars.append({**current, "free_slots": physical})
     if not chars or runs_needed <= 0:
         return {"runs_assigned": 0, "characters": []}
 

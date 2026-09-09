@@ -1288,10 +1288,11 @@ function _renderReactionsDashboard(data) {
     for (const a of pending.filter(p => p.marked !== 'done')) {
       const tier = a.tier_order || 0;
       const ready = tier <= 0 || _rxReadyStages.get(`${c.character_id}:${a.chain}:${tier}`) === true;
-      const queuedJob = tier > 0 && !ready;
+      const queuedJob = !!a.slot_deferred || (tier > 0 && !ready);
       const last = pendGroups[pendGroups.length - 1];
       if (queuedJob && last && last.queued
           && last.a.type_id === a.type_id && last.tier === tier && last.a.runs === a.runs
+          && !!last.a.slot_deferred === !!a.slot_deferred
           && (last.a.order_id || null) === (a.order_id || null)) {
         last.n++;
         continue;
@@ -1315,9 +1316,11 @@ function _renderReactionsDashboard(data) {
       // yet", not a lock.
       const ready = grp.ready;
       const stageBadge = `<span class="rx-slot-stage${tier > 0 && !ready ? ' rx-slot-stage-later' : ''}" title="${_esc(_rxStageLabel(tier, ready))}">S${tier + 1}</span>`;
-      const stageTip = tier > 0
-        ? (ready ? ` — ${_rxStageLabel(tier, true)}` : ` — ${_rxStageLabel(tier, false)}, so don't install it yet`)
-        : ' — nothing has to finish first';
+      const stageTip = a.slot_deferred
+        ? ' — queued until this character has a free reactor; do not install it yet'
+        : (tier > 0
+          ? (ready ? ` — ${_rxStageLabel(tier, true)}` : ` — ${_rxStageLabel(tier, false)}, so don't install it yet`)
+          : ' — nothing has to finish first');
       // "+2" = two MORE jobs exactly like this one. The count, not the total, because the square
       // shows one job's run count and the whole point is that you type the same number again.
       const moreBadge = grp.n > 1
@@ -1351,9 +1354,9 @@ function _renderReactionsDashboard(data) {
       const overTip = overH > 0 ? ` — ⚠ ${_fmtHours(overH)} past your job-length window` : '';
       const pendTitle = isMarked
         ? `You marked this installed — ${_esc(a.name)} ×${a.runs}, waiting for ESI to confirm it${_esc(orderTip)}. Click to edit.`
-        : `Not running yet — install ${_esc(a.name)} ×${a.runs} in-game${_esc(moreTip)}${_esc(orderTip)}${_esc(stageTip)}${_esc(overTip)}. Click to edit.`;
+        : `${a.slot_deferred ? 'Capacity queued' : 'Not running yet'} — ${a.slot_deferred ? 'wait to install' : 'install'} ${_esc(a.name)} ×${a.runs} in-game${_esc(moreTip)}${_esc(orderTip)}${_esc(stageTip)}${_esc(overTip)}. Click to edit.`;
       const slotHtml = `
-        <div class="rx-slot rx-slot-pending${isMarked ? ' rx-slot-marked' : ''}${overH > 0 ? ' rx-slot-over' : ''}${tier > 0 && !ready && !isMarked ? ' rx-slot-later' : ''}" title="${pendTitle}" onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
+        <div class="rx-slot rx-slot-pending${isMarked ? ' rx-slot-marked' : ''}${overH > 0 ? ' rx-slot-over' : ''}${grp.queued && !isMarked ? ' rx-slot-later' : ''}" title="${pendTitle}" onclick="_rxOpenEditAssign(${a.assignment_id}, '${c.character_id}')">
           ${durCorner}
           <img class="rx-slot-icon" src="${pendingIcon}" alt="" onerror="this.style.visibility='hidden'">
           ${stageBadge}
@@ -1388,7 +1391,7 @@ function _renderReactionsDashboard(data) {
     }
     const queuedHtml = queuedSquares.length
       ? `<div class="rx-queued-rail">
-           <span class="rx-queued-label" title="These jobs wait for an earlier stage and reuse its reactor when it finishes">Queued</span>
+           <span class="rx-queued-label" title="These jobs wait for an earlier stage or the next free reactor; they do not occupy a physical slot yet">Queued</span>
            <div class="rx-queued-items">${queuedSquares.join('')}</div>
          </div>`
       : '';

@@ -21,6 +21,7 @@ from app.reactions.jobs import (
     _allocate_and_insert, formula_concurrency_caps, _cap_jobs, give_back_order_runs,
     live_reaction_runs, reaction_manual_marks, manual_jobs, _RX_RUNNING,
     _invalidate_dashboard_cache, clone_recurring_cycle, reaction_capacity_snapshot_fresh,
+    enforce_reaction_slot_ceiling,
 )
 
 
@@ -883,8 +884,10 @@ def assign_reaction_order(order_id: int, req: OrderAssignRequest, context_id: in
         order = _order_row(con, order_id)
     finally:
         con.close()
+    slot_queue = enforce_reaction_slot_ceiling(context_id)
     _invalidate_dashboard_cache(context_id)
-    return {"order": order, "runs_assigned": result["runs_assigned"], "characters": result["characters"]}
+    return {"order": order, "runs_assigned": result["runs_assigned"], "characters": result["characters"],
+            "slot_queue": slot_queue}
 
 
 def _release_recurring_cycle(order_id: int, context_id: int) -> dict:

@@ -167,6 +167,29 @@ reported as `totals.idle_slots_used` so the extra jobs read as a choice, not an 
 
 Off ⇒ every one of those numbers is the old per-row sum. `tests/test_parallel_stages.py` pins both.
 
+## Physical slot ceiling and the capacity queue (2026-09-09)
+
+A planned job is no longer allowed to imply an eleventh physical reactor on a ten-slot character.
+`slot_deferred` separates future work from a reserved reactor: deferred rows remain part of the
+order and shopping plan, but do not reduce `free_slots` and appear in the dashboard's **Queued**
+rail with an explicit “wait to install” explanation. The ceiling is derived from the character's
+trained reaction skills (ten for the character that prompted this guard; eleven is possible with
+both slot skills at V), not a magic UI constant.
+
+`enforce_reaction_slot_ceiling` is the final invariant after assignment, customer-order placement,
+ESI refresh, binding, levelling, and recurring-pipeline repair. It preserves running/bound jobs,
+moves uninstalled overflow to another reaction-capable character when it fits immediately, and if
+the account is full targets the queued row at the character whose cached live job has the earliest
+end time. When no reliable end time exists it uses the least-loaded suitable character as the
+deterministic fallback. The next refresh/dashboard reconciliation promotes queued rows as soon as
+their target has room.
+
+Live reaction jobs which have not matched a planner row still consume a real reactor. The guard
+therefore subtracts these ESI orphans from reservable capacity while avoiding double-counting live
+jobs already bound to their plan row. Sequential stages retain the one-slot model above: a later
+stage already waits for its inputs and reuses an earlier stage's reactors, whereas `slot_deferred`
+means even the stage's eventual reservation does not currently fit.
+
 ## Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)
 
 Everywhere else in this codebase, **absent evidence never serialises work**: a product nobody has

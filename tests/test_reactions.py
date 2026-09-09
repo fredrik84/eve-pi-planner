@@ -442,6 +442,9 @@ def test_reactions_phase1_is_task_first() -> bool:
     ok &= check('capacity_contract(reservation_model="reserved"' in open(
                     "app/reactions/jobs.py", encoding="utf-8").read(),
                 "Reactions publishes the shared capacity contract as reserved capacity")
+    ok &= check("!!a.slot_deferred ||" in js and "Capacity queued" in js
+                and "next free reactor" in js,
+                "physical overflow is visibly queued instead of drawing an impossible reactor")
     ok &= check("Valued at <b>buy orders</b>" not in js and "Mixed basis: jobs before" not in js
                 and "Full cost adds <b>" not in js,
                 "Overview metrics do not trail non-actionable accounting prose")
@@ -1538,6 +1541,9 @@ def test_assigning_twice_does_not_book_it_twice() -> bool:
     ok &= check(_concurrent_load([], {}) == 0, "an empty plan occupies nothing")
     ok &= check(_concurrent_load([], {2: 4}) == 4,
                 "a first assignment is measured on its own")
+    ok &= check(_concurrent_load([{"tier_order": 0},
+                                  {"tier_order": 0, "slot_deferred": 1}], {}) == 1,
+                "capacity-queued work does not masquerade as a physical reservation")
     pipeline = [
         {"order_id": 46, "created_at": cycle, "tier_order": stage}
         for cycle in (100.0, 200.0) for stage, jobs in ((0, 6), (1, 4)) for _ in range(jobs)
@@ -1545,6 +1551,98 @@ def test_assigning_twice_does_not_book_it_twice() -> bool:
     ok &= check(_concurrent_load(pipeline, {}) == 10,
                 "overlapping recurring cycles reserve one steady-state pipeline, not two batches")
     return ok
+
+
+def test_slot_ceiling_defers_to_the_earliest_available_character() -> bool:
+    """Twenty-one same-stage rows cannot be presented as 11+10 physical reservations. The
+    overflow stays planned on the character whose live job ends first, then promotes there when a
+    reservation becomes available."""
+    from app.reactions.jobs import (ensure_industry_jobs_table, ensure_reaction_assignments_table,
+                                    enforce_reaction_slot_ceiling, _concurrent_load)
+
+    ctx = 777199
+    cids = (990191, 990192)
+    ensure_industry_jobs_table()
+    ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        for cid in cids:
+            con.execute(
+                "INSERT INTO pp_characters (character_id,character_name,context_id,scopes,"
+                "mass_reactions,advanced_mass_reactions) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT (character_id) DO UPDATE SET context_id=excluded.context_id,"
+                "scopes=excluded.scopes,mass_reactions=excluded.mass_reactions,"
+                "advanced_mass_reactions=excluded.advanced_mass_reactions",
+                (cid, f"Ceiling {cid}", ctx, "read_character_jobs", 5, 4))
+        row_no = 0
+        for cid, count in ((cids[0], 11), (cids[1], 10)):
+            for _ in range(count):
+                row_no += 1
+                esi_job_id = 880001 if cid == cids[0] and row_no == 1 else None
+                if cid == cids[1] and count == 10 and row_no == 12:
+                    esi_job_id = 880002
+                con.execute(
+                    "INSERT INTO pp_reaction_assignments "
+                    "(character_id,type_id,name,runs,input_cost,reward,created_at,tier_order,esi_job_id) "
+                    "VALUES (?,?,?,111,0,0,?,0,?)",
+                    (cid, 16633, "Test Reaction", float(row_no), esi_job_id))
+        snapshots = {
+            cids[0]: [{"job_id": 880001, "status": "active",
+                       "end_date": "2026-09-10T12:00:00Z"}],
+            cids[1]: [{"job_id": 880002, "status": "active",
+                       "end_date": "2026-09-10T10:00:00Z"}],
+        }
+        for cid, jobs in snapshots.items():
+            con.execute(
+                "INSERT INTO pp_char_industry_jobs (character_id,jobs_json,fetched_at) VALUES (?,?,1) "
+                "ON CONFLICT (character_id) DO UPDATE SET jobs_json=excluded.jobs_json,fetched_at=1",
+                (cid, json.dumps(jobs)))
+        con.commit()
+
+        first = enforce_reaction_slot_ceiling(ctx)
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM pp_reaction_assignments WHERE character_id IN (?,?)", cids)]
+        physical = {cid: _concurrent_load([r for r in rows if int(r["character_id"]) == cid])
+                    for cid in cids}
+        waiting = [r for r in rows if int(r.get("slot_deferred") or 0)]
+        ok = check(physical == {cids[0]: 10, cids[1]: 10},
+                   f"the hard ceiling leaves at most ten physical reservations ({physical})")
+        ok &= check(len(waiting) == 1 and int(waiting[0]["character_id"]) == cids[1],
+                    "overflow queues on the character whose live reactor frees first")
+        ok &= check(first.get("deferred") == 1,
+                    "the guard reports that one reservation became capacity-queued")
+
+        spare = con.execute(
+            "SELECT id FROM pp_reaction_assignments WHERE character_id=? "
+            "AND COALESCE(slot_deferred,0)=0 AND esi_job_id IS NULL LIMIT 1", (cids[1],)).fetchone()
+        con.execute("DELETE FROM pp_reaction_assignments WHERE id=?", (spare["id"],))
+        con.commit()
+        second = enforce_reaction_slot_ceiling(ctx)
+        remaining = con.execute(
+            "SELECT COUNT(*) AS n FROM pp_reaction_assignments WHERE character_id IN (?,?) "
+            "AND COALESCE(slot_deferred,0)=1", cids).fetchone()["n"]
+        ok &= check(int(remaining) == 0 and second.get("promoted") == 1,
+                    "a queued row promotes automatically when its targeted reactor becomes free")
+
+        # A reaction visible in ESI but not matched to any plan row is still a real occupied
+        # reactor. It must reduce reservations without also charging bound jobs a second time.
+        snapshots[cids[1]].append(
+            {"job_id": 889999, "status": "active", "end_date": "2026-09-10T11:00:00Z"})
+        con.execute("UPDATE pp_char_industry_jobs SET jobs_json=? WHERE character_id=?",
+                    (json.dumps(snapshots[cids[1]]), cids[1]))
+        con.commit()
+        third = enforce_reaction_slot_ceiling(ctx)
+        char_two_rows = [dict(r) for r in con.execute(
+            "SELECT * FROM pp_reaction_assignments WHERE character_id=?", (cids[1],))]
+        ok &= check(_concurrent_load(char_two_rows) == 9 and third.get("deferred") == 1,
+                    "an unmatched live reaction leaves only nine planner reservations beside it")
+        return ok
+    finally:
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id IN (?,?)", cids)
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id IN (?,?)", cids)
+        con.execute("DELETE FROM pp_characters WHERE context_id=?", (ctx,))
+        con.commit()
+        con.close()
 
 
 def test_recurring_pipeline_repacks_sequential_layout() -> bool:
@@ -1736,6 +1834,7 @@ def run_unit_tests() -> bool:
         test_the_cadence_reaches_an_orders_own_top_row(),
         test_a_reaction_can_be_marked_running_or_done_by_hand(),
         test_assigning_twice_does_not_book_it_twice(),
+        test_slot_ceiling_defers_to_the_earliest_available_character(),
         test_recurring_pipeline_repacks_sequential_layout(),
         test_adopt_relocates_pending_recurring_work_instead_of_cloning_it(),
         test_reaction_transactions_are_postgres_compatible(),
