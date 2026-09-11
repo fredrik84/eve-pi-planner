@@ -1931,6 +1931,8 @@ def test_elapsed_orphan_job_releases_its_reactor() -> bool:
         ui = open("static/reactions.js", encoding="utf-8").read()
         ok &= check("rx-completed-rail" in ui and "allJobs.filter(j => !j.complete)" in ui,
                     "the completed job is shown separately from the ten physical reactor slots")
+        ok &= check("job.end_at <= nowSec" in ui and "setTimeout(() => _renderReactionsDashboard(data)" in ui,
+                    "an open page turns the job green at end_at without waiting for another rescan")
         return ok
     finally:
         con = get_connection()

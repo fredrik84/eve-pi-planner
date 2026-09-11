@@ -202,6 +202,9 @@ The job remains visible until ESI removes it, but moves out of the character's p
 into a green **Complete** rail with “deliver it in EVE” context. An unbound job remains an orphan;
 completion never adopts extra materials into a recurring plan, never values them as still running,
 and never lets them claim a future plan row merely because product and run count happen to match.
+The dashboard payload also carries the absolute `end_at`. An open browser schedules its next
+render for that clock and turns the job green locally, so crossing the end time requires neither a
+manual refresh nor another ESI response.
 
 ## Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)
 

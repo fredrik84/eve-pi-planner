@@ -4585,6 +4585,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                 unplanned_running.append((tid, j.get("runs") or 0))
             end = j.get("end_date")
             start = j.get("start_date")
+            end_ts = None
             hours_left = None
             progress_pct = None
             if end:
@@ -4614,6 +4615,9 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                 "facility_name": j.get("facility_name"),
                 "status": j.get("status"),
                 "hours_left": hours_left,
+                # Absolute EVE completion clock lets an already-open browser turn this card green
+                # without another API/ESI round trip when the countdown reaches zero.
+                "end_at": end_ts,
                 "progress_pct": round(progress_pct, 4) if progress_pct is not None else None,
                 "orphan": is_orphan,
                 "complete": complete,

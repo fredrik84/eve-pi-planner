@@ -1123,10 +1123,47 @@ function _rxAdoptAllOrphans(btn) {
   });
 }
 
+let _rxCompletionTimer = null;
+
 function _renderReactionsDashboard(data) {
   const el = document.getElementById('rxDashboardContent');
   const metricsEl = document.getElementById('rxMetricsContent');
   if (!el) return;
+
+  // ESI gives us the end clock up front. Promote elapsed jobs locally even if the cached status
+  // still says active, then wake this same render at the next end time. No refresh or ESI call is
+  // needed for an open page to release the square and move it to the green Complete rail.
+  if (_rxCompletionTimer) { clearTimeout(_rxCompletionTimer); _rxCompletionTimer = null; }
+  const nowSec = Date.now() / 1000;
+  const releasedByCharacter = new Map();
+  for (const job of (data.running || [])) {
+    if (!job.complete && job.end_at != null && job.end_at <= nowSec) {
+      job.complete = true;
+      job.hours_left = 0;
+      job.progress_pct = 1;
+      releasedByCharacter.set(job.character_id,
+        (releasedByCharacter.get(job.character_id) || 0) + 1);
+    }
+  }
+  if (releasedByCharacter.size) {
+    let released = 0;
+    for (const char of (data.characters || [])) {
+      const n = releasedByCharacter.get(char.character_id) || 0;
+      if (!n) continue;
+      char.free_slots = Math.min(char.slots, (char.free_slots || 0) + n);
+      released += n;
+    }
+    data.free_slots = Math.min(data.total_slots || Infinity, (data.free_slots || 0) + released);
+    const pool = data.capacity && data.capacity.pools && data.capacity.pools.reaction;
+    if (pool) pool.available = Math.min(pool.total, pool.available + released);
+  }
+  const nextEnd = (data.running || [])
+    .filter(job => !job.complete && job.end_at != null && job.end_at > nowSec)
+    .reduce((soonest, job) => Math.min(soonest, job.end_at), Infinity);
+  if (Number.isFinite(nextEnd)) {
+    const waitMs = Math.max(50, Math.min(2147483647, Math.ceil((nextEnd - nowSec) * 1000) + 50));
+    _rxCompletionTimer = setTimeout(() => _renderReactionsDashboard(data), waitMs);
+  }
 
   // Connecting a character (via /auth/login?reactions=1) is a per-character ESI authorisation,
   // so this must stay reachable even after some characters are already tracked — the account
