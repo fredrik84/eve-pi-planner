@@ -1590,9 +1590,9 @@ def test_slot_ceiling_defers_to_the_earliest_available_character() -> bool:
                     (cid, 16633, "Test Reaction", float(row_no), esi_job_id))
         snapshots = {
             cids[0]: [{"job_id": 880001, "status": "active",
-                       "end_date": "2026-09-10T12:00:00Z"}],
+                       "end_date": "2099-09-10T12:00:00Z"}],
             cids[1]: [{"job_id": 880002, "status": "active",
-                       "end_date": "2026-09-10T10:00:00Z"}],
+                       "end_date": "2099-09-10T10:00:00Z"}],
         }
         for cid, jobs in snapshots.items():
             con.execute(
@@ -1629,7 +1629,7 @@ def test_slot_ceiling_defers_to_the_earliest_available_character() -> bool:
         # A reaction visible in ESI but not matched to any plan row is still a real occupied
         # reactor. It must reduce reservations without also charging bound jobs a second time.
         snapshots[cids[1]].append(
-            {"job_id": 889999, "status": "active", "end_date": "2026-09-10T11:00:00Z"})
+            {"job_id": 889999, "status": "active", "end_date": "2099-09-10T11:00:00Z"})
         con.execute("UPDATE pp_char_industry_jobs SET jobs_json=? WHERE character_id=?",
                     (json.dumps(snapshots[cids[1]]), cids[1]))
         con.commit()
@@ -1853,6 +1853,7 @@ def run_unit_tests() -> bool:
         test_recurring_pipeline_repacks_sequential_layout(),
         test_adopt_relocates_pending_recurring_work_instead_of_cloning_it(),
         test_reaction_transactions_are_postgres_compatible(),
+        test_elapsed_orphan_job_releases_its_reactor(),
         test_binding_never_overfills_a_characters_stage(),
         test_binding_cannot_cross_a_recurring_generation(),
         test_explode_chain_tiers(),
@@ -1893,6 +1894,50 @@ def test_reaction_transactions_are_postgres_compatible() -> bool:
     source = open("app/reactions/jobs.py", encoding="utf-8").read()
     return check("BEGIN IMMEDIATE" not in source,
                  "reaction request transactions use syntax shared by SQLite and PostgreSQL")
+
+
+def test_elapsed_orphan_job_releases_its_reactor() -> bool:
+    """A 90-run extra job is not a plan row, and stale ESI ``active`` must not reserve its slot."""
+    import json as _json
+    from app.db import get_connection
+    import app.reactions.jobs as J
+
+    ctx, cid, tid = 777098, 9940012, 57457
+    J.ensure_industry_jobs_table(); J.ensure_reaction_assignments_table()
+    con = get_connection()
+    try:
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (cid,))
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (cid,))
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
+        con.execute("INSERT INTO pp_characters (context_id,character_id,character_name,"
+                    "mass_reactions,advanced_mass_reactions,scopes) VALUES (?,?,?,?,?,?)",
+                    (ctx, cid, "Elapsed orphan", 5, 4, "esi-industry.read_character_jobs.v1"))
+        elapsed = [{"job_id": 880200, "product_type_id": tid, "runs": 90,
+                    "activity_id": 9, "status": "active",
+                    "start_date": "2020-01-01T00:00:00Z", "end_date": "2020-01-02T00:00:00Z"}]
+        con.execute("INSERT INTO pp_char_industry_jobs (character_id,jobs_json,fetched_at) "
+                    "VALUES (?,?,?)", (cid, _json.dumps(elapsed), 1.0))
+        con.commit()
+    finally:
+        con.close()
+    try:
+        capacity = J._character_capacities(ctx)[0]
+        ok = check(capacity["free_slots"] == 10 and capacity["running"] == 0,
+                   "an active-status job past end_date is complete and frees its physical slot")
+        ok &= check(J.live_reaction_runs(ctx) == {},
+                    "the completed orphan cannot freeze or cover any planned reaction row")
+        ok &= check(J._reaction_job_complete(elapsed[0]),
+                    "the shared job-state helper trusts EVE's elapsed completion time")
+        ui = open("static/reactions.js", encoding="utf-8").read()
+        ok &= check("rx-completed-rail" in ui and "allJobs.filter(j => !j.complete)" in ui,
+                    "the completed job is shown separately from the ten physical reactor slots")
+        return ok
+    finally:
+        con = get_connection()
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (cid,))
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id=?", (cid,))
+        con.execute("DELETE FROM pp_characters WHERE character_id=?", (cid,))
+        con.commit(); con.close()
 
 
 def test_binding_never_overfills_a_characters_stage() -> bool:

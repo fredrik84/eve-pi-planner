@@ -1142,7 +1142,7 @@ function _renderReactionsDashboard(data) {
 
   // "Adopt all" next to it — computed off THIS load's own running-job list (a fresh count every
   // repaint), not left to whatever a previous render's bulk click optimistically hid.
-  const orphanCount = (data.running || []).filter(j => j.orphan).length;
+  const orphanCount = (data.running || []).filter(j => j.orphan && !j.complete).length;
   const adoptAllBtn = document.getElementById('rxAdoptAllBtn');
   if (adoptAllBtn) {
     adoptAllBtn.style.display = orphanCount ? '' : 'none';
@@ -1208,8 +1208,10 @@ function _renderReactionsDashboard(data) {
     // the row instead of appearing in arbitrary insertion order — several interleaved products
     // was the actual "too messy to read off" complaint, not just the missing summary below.
     const _jobName = j => j.name || _rxProductName(j.product_type_id);
-    const jobs = (jobsByChar.get(c.character_name) || [])
+    const allJobs = (jobsByChar.get(c.character_name) || [])
       .slice().sort((a, b) => _jobName(a).localeCompare(_jobName(b)));
+    const jobs = allJobs.filter(j => !j.complete);
+    const completed = allJobs.filter(j => j.complete);
     // Then by STAGE first: a chain's intermediate rows carry a lower tier_order than the product
     // they feed (see assign_reaction) and tier 0 must finish before tier 1 can start — the
     // backend has always ordered by it and the payload has always carried it, but the loadout
@@ -1237,6 +1239,20 @@ function _renderReactionsDashboard(data) {
           <div class="rx-slot-filled-label">${_esc(nm)}</div>
           ${orphanBadge}
         </div>`;
+    });
+    // A cached job can still say `active` after its EVE end time. It has released the physical
+    // reactor, so keep it OUT of the ten-slot row, but show it in a green ready-to-deliver rail
+    // until ESI removes it. Completed orphan jobs stay unplanned: no Adopt action is offered.
+    const completedSquares = completed.map(j => {
+      const icon = `https://images.evetech.net/types/${j.product_type_id}/icon?size=32`;
+      const runsLabel = j.runs != null ? `×${j.runs}` : '';
+      const nm = _jobName(j);
+      const tip = `${nm} — ${runsLabel ? runsLabel + ' runs — ' : ''}complete; deliver it in EVE${j.facility_name ? ' — ' + j.facility_name : ''}${j.orphan ? ' — not part of your plan' : ''}`;
+      return `<div class="rx-slot rx-slot-complete${j.orphan ? ' rx-slot-orphan' : ''}" title="${_esc(tip)}">
+        <img class="rx-slot-icon" src="${icon}" alt="" onerror="this.style.visibility='hidden'">
+        ${runsLabel ? `<span class="rx-slot-runs">${_esc(runsLabel)}</span>` : ''}
+        <div class="rx-slot-filled-label">${_esc(nm)}</div>
+      </div>`;
     });
     // Assigned (via the wizard's "Assign") but ESI hasn't confirmed it's actually running yet —
     // a red slashed-circle "you need to go do this" slot, distinct from a genuinely free one.
@@ -1396,11 +1412,18 @@ function _renderReactionsDashboard(data) {
            <div class="rx-queued-items">${queuedSquares.join('')}</div>
          </div>`
       : '';
+    const completedHtml = completedSquares.length
+      ? `<div class="rx-completed-rail">
+           <span class="rx-completed-label" title="These jobs have reached their EVE completion time and no longer occupy a reaction slot">Complete</span>
+           <div class="rx-completed-items">${completedSquares.join('')}</div>
+         </div>`
+      : '';
     return `
       <div class="rx-char-row">
         <div class="rx-char-label">${_esc(c.character_name)}<br><span class="pp-card-hint">${rowFree} / ${c.slots} free</span></div>
         <div class="rx-char-work">
           <div class="rx-slot-row">${squares.join('')}</div>
+          ${completedHtml}
           ${queuedHtml}
         </div>
       </div>`;
@@ -1473,7 +1496,8 @@ function _renderReactionsDashboard(data) {
   // under-represents when the whole batch is actually done. Use the MEDIAN running job — a real
   // job (real product + time), so it's honest rather than a synthetic average, and its name comes
   // straight from the backend now (was showing a raw "#16665" via the opportunity-list fallback).
-  const _runTimed = (data.running || []).filter(r => r.hours_left != null).sort((a, b) => a.hours_left - b.hours_left);
+  const _runTimed = (data.running || []).filter(r => !r.complete && r.hours_left != null)
+    .sort((a, b) => a.hours_left - b.hours_left);
   const _medJob = _runTimed.length ? _runTimed[Math.floor(_runTimed.length / 2)] : null;
   const timeLeftVal = _medJob ? _fmtHours(_medJob.hours_left) : '—';
   const _medName = _medJob ? (_medJob.name || _rxProductName(_medJob.product_type_id)) : '';

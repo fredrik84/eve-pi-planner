@@ -12,6 +12,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **The shopping list buys a chain once (`_shopping_roots`)** — why only the top row of an assign is exploded
 - **What you already hold is not work (`reactions_use_stock`)** — how held intermediates shorten a chain, and the one place stock is deliberately not consulted
 - **One slot model: a chain's stages reuse a reactor (`reactions_parallel_stages`)** — why stages can't run in parallel, what reuses what, and where idle reactors go
+- **A passed EVE end time releases the slot** — how stale `active` jobs remain visible without consuming capacity or joining a plan
 - **Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)** — when an undeclared formula means "you don't own it", and what gets reported instead of planned
 - **Formulas to acquire, as a shopping section** — why the formula list sits beside the materials rather than in them
 - **Re-planning ONE customer order** — the per-order clear, and the single give-back rule it shares with Clear all
@@ -189,6 +190,18 @@ therefore subtracts these ESI orphans from reservable capacity while avoiding do
 jobs already bound to their plan row. Sequential stages retain the one-slot model above: a later
 stage already waits for its inputs and reuses an earlier stage's reactors, whereas `slot_deferred`
 means even the stage's eventual reservation does not currently fit.
+
+## A passed EVE end time releases the slot (2026-09-11)
+
+ESI can keep a reaction in the current-jobs response with `status=active` after its `end_date`.
+The end time is authoritative in that cache window. `_reaction_job_complete` is the shared state
+decision used by stage progress, current capacity, the hard slot ceiling and the live-run cover:
+`ready`/`delivered`, or an elapsed `end_date`, means complete and no longer occupying a reactor.
+
+The job remains visible until ESI removes it, but moves out of the character's physical slot row
+into a green **Complete** rail with “deliver it in EVE” context. An unbound job remains an orphan;
+completion never adopts extra materials into a recurring plan, never values them as still running,
+and never lets them claim a future plan row merely because product and run count happen to match.
 
 ## Absence becomes knowledge, but only after a paste (`app/reactions/library.py`)
 

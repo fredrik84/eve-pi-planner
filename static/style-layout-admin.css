@@ -682,14 +682,24 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
   letter-spacing: .06em;
 }
 .rx-queued-items { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.rx-queued-items .rx-slot {
+.rx-completed-rail { display: flex; align-items: center; gap: 7px; min-height: 30px; }
+.rx-completed-label {
+  flex: 0 0 auto; font-size: 10px; line-height: 1; color: #69c995; text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.rx-completed-items { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rx-queued-items .rx-slot,
+.rx-completed-items .rx-slot {
   width: 104px; height: 30px; padding: 2px 20px 2px 4px; box-sizing: border-box;
   flex-direction: row; justify-content: flex-start; gap: 5px; border-radius: 5px;
 }
-.rx-queued-items .rx-slot-icon { width: 22px; height: 22px; flex: 0 0 22px; }
+.rx-queued-items .rx-slot-icon,
+.rx-completed-items .rx-slot-icon { width: 22px; height: 22px; flex: 0 0 22px; }
 .rx-queued-items .rx-slot-pending-label { margin: 0; max-width: 54px; }
+.rx-completed-items .rx-slot-filled-label { margin: 0; max-width: 54px; color: #8fd5ae; }
 .rx-queued-items .rx-slot-timer-corner,
-.rx-queued-items .rx-slot-runs { display: none; }
+.rx-queued-items .rx-slot-runs,
+.rx-completed-items .rx-slot-runs { display: none; }
 .rx-queued-items .rx-slot-pending-badge { top: -5px; right: -5px; }
 .rx-queued-items .rx-slot-mark-badge { top: -5px; right: 14px; }
 .rx-queued-items .rx-slot-stage { bottom: -5px; left: -4px; }
@@ -701,6 +711,9 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 }
 .rx-slot-filled { border-color: #3a5a82; background: linear-gradient(160deg, #1b2a3d, #16202e); cursor: pointer; transition: border-color 0.15s; }
 .rx-slot-filled:hover { border-color: #5aa9e6; }
+.rx-slot-complete {
+  border-color: #2f6b48; background: linear-gradient(160deg, #16241c, #131e18);
+}
 /* Running slot now leads with the product NAME (below the icon, same spot a planned slot shows
    it) and demotes the countdown to a small top-right corner badge — a running slot used to show
    only the timer, never what it was making. */

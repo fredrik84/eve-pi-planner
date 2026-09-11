@@ -250,6 +250,35 @@ def _disappeared_completed_jobs(previous_jobs: list[dict], jobs: list[dict], now
     return completed
 
 
+_CURRENT_REACTION_JOB_STATUSES = {"active", "paused", "ready"}
+
+
+def _reaction_job_end_timestamp(job: dict) -> float | None:
+    try:
+        return datetime.fromisoformat(
+            str(job.get("end_date") or "").replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _reaction_job_complete(job: dict, now: float | None = None) -> bool:
+    """Whether EVE's clock says a current reaction job has finished.
+
+    ESI can keep returning ``status=active`` after ``end_date``. The scheduled completion time is
+    authoritative in that window: the job is ready to deliver and no longer occupies a reactor.
+    """
+    status = str(job.get("status") or "").lower()
+    if status in ("ready", "delivered"):
+        return True
+    end_ts = _reaction_job_end_timestamp(job)
+    return end_ts is not None and end_ts <= float(now if now is not None else _time.time())
+
+
+def _reaction_job_occupies_slot(job: dict, now: float | None = None) -> bool:
+    return (str(job.get("status") or "").lower() in _CURRENT_REACTION_JOB_STATUSES
+            and not _reaction_job_complete(job, now))
+
+
 @router.post("/api/reactions/jobs/refresh")
 def refresh_industry_jobs(force: int = 0, context_id: int = Depends(require_context)):
     """Refresh the caller's own characters' cached reaction-job list from ESI — only characters
@@ -557,6 +586,7 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
             (context_id,),
         ).fetchall()
         active: list[dict] = []
+        now = _time.time()
         for snapshot in cached:
             for job in _json.loads(snapshot["jobs_json"] or "[]"):
                 if (job.get("status") or "").lower() not in ("active", "paused", "ready"):
@@ -567,7 +597,8 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
                     active.append({"job_id": jid, "type_id": tid,
                                    "character_id": int(snapshot["character_id"]),
                                    "runs": int(job.get("runs") or 0),
-                                   "start_date": job.get("start_date") or ""})
+                                   "start_date": job.get("start_date") or "",
+                                   "complete": _reaction_job_complete(job, now)})
         active_ids = {j["job_id"] for j in active}
         plan_rows = [dict(r) for r in con.execute(
             "SELECT a.id,a.character_id,a.type_id,a.tier_order,a.order_id,a.created_at,"
@@ -635,7 +666,9 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
         # Oldest first is deterministic and mirrors the order jobs entered ESI. For each job the
         # order's explicit priority wins, then stable plan creation/id order.
         for job in sorted(active, key=lambda j: (j["start_date"], j["job_id"])):
-            if job["job_id"] in bound_ids:
+            # A stale-active job whose end time passed remains visible as completed until ESI
+            # removes it, but an unplanned one must not claim a recurring plan row after the fact.
+            if job["job_id"] in bound_ids or job["complete"]:
                 continue
             candidates = [dict(r) for r in con.execute(
                 "SELECT a.id,a.character_id,a.type_id,a.order_id,a.created_at,"
@@ -991,7 +1024,7 @@ def live_reaction_runs(context_id: int) -> dict[tuple[int, int], list[int]]:
     out: dict[tuple[int, int], list[int]] = {}
     for cid, jobs in cached.items():
         for job in jobs or []:
-            if (job.get("status") or "").lower() in ("active", "paused", "ready"):
+            if _reaction_job_occupies_slot(job):
                 out.setdefault((int(cid), int(job.get("product_type_id") or 0)),
                                []).append(int(job.get("runs") or 0))
     return out
@@ -1302,18 +1335,7 @@ def chain_stage_state(rows: list[dict], jobs: list[dict], now: float,
         tid = j.get("product_type_id")
         if not tid:
             continue
-        status = (j.get("status") or "").lower()
-        finished = status in ("ready", "delivered")
-        if not finished and status in ("active", "paused"):
-            # ESI's own `end_date` is an ISO string (same parse the countdown uses below). A job
-            # past its end date is finished whatever the cached status says — the cache is up to
-            # five minutes stale, and "is stage 1 done" should not wait on a refresh.
-            end = j.get("end_date")
-            try:
-                finished = bool(end) and datetime.fromisoformat(
-                    str(end).replace("Z", "+00:00")).timestamp() <= now
-            except Exception:
-                finished = False
+        finished = _reaction_job_complete(j, now)
         (done_types if finished else live_types)[tid] = \
             (done_types if finished else live_types).get(tid, 0) + 1
 
@@ -3162,11 +3184,11 @@ def enforce_reaction_slot_ceiling(context_id: int) -> dict:
         # what the planner may reserve. Counting only those orphans avoids double-counting bound
         # jobs while preserving the hard physical ceiling.
         bound_job_ids = {int(r["esi_job_id"]) for r in rows if r.get("esi_job_id")}
-        active_statuses = {"active", "paused", "ready"}
+        now = _time.time()
         for cid, jobs in cached.items():
             orphan_jobs = sum(
                 1 for job in jobs
-                if str(job.get("status") or "").lower() in active_statuses
+                if _reaction_job_occupies_slot(job, now)
                 and int(job.get("job_id") or 0) not in bound_job_ids
             )
             capacity[cid] = max(0, capacity.get(cid, 0) - orphan_jobs)
@@ -3202,15 +3224,9 @@ def enforce_reaction_slot_ceiling(context_id: int) -> dict:
                             (int(chosen["id"]),))
                 deferred += 1
 
-        def end_timestamp(job: dict) -> float:
-            try:
-                return datetime.fromisoformat(str(job.get("end_date") or "").replace("Z", "+00:00")).timestamp()
-            except Exception:
-                return float("inf")
-
         next_free = {
-            cid: min((end_timestamp(j) for j in cached.get(cid, [])
-                      if (j.get("status") or "").lower() in active_statuses),
+            cid: min((_reaction_job_end_timestamp(j) or float("inf") for j in cached.get(cid, [])
+                      if _reaction_job_occupies_slot(j, now)),
                      default=float("inf"))
             for cid in chars
         }
@@ -4410,9 +4426,11 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         total_slots += slots
         row = cached.get(c["character_id"])
         jobs = _json.loads(row["jobs_json"]) if row else []
-        active = [j for j in jobs if j.get("status") in ("active", "paused", "ready")]
+        active = [j for j in jobs
+                  if str(j.get("status") or "").lower() in _CURRENT_REACTION_JOB_STATUSES]
+        occupying = [j for j in active if _reaction_job_occupies_slot(j, now)]
         active_by_id = {int(j.get("job_id") or 0): j for j in active if j.get("job_id")}
-        used_slots += len(active)
+        used_slots += len(occupying)
         # How many rows of each (product, stage) group the player has marked by hand, spent row by
         # row below so marking 2 of a group's 4 jobs leaves the other 2 alone. A marked row STAYS in
         # `pending` and carries the mark instead of vanishing: the page has to be able to draw it
@@ -4537,7 +4555,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
 
         characters.append({
             "character_id": c["character_id"], "character_name": c["character_name"], "tracked": True,
-            "slots": slots, "free_slots": max(0, slots - len(active) - pending_load),
+            "slots": slots, "free_slots": max(0, slots - len(occupying) - pending_load),
             "pending": pending,
             # Opted into tracking but the token lacks the structure-read scope — facility names
             # can't resolve (show "Structure #<id>"); the UI nudges a re-authorise. See
@@ -4562,7 +4580,8 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         for j in active:
             tid = j.get("product_type_id")
             is_orphan = int(j.get("job_id") or 0) not in bound_job_ids
-            if is_orphan:
+            complete = _reaction_job_complete(j, now)
+            if is_orphan and not complete:
                 unplanned_running.append((tid, j.get("runs") or 0))
             end = j.get("end_date")
             start = j.get("start_date")
@@ -4571,14 +4590,15 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
             if end:
                 try:
                     end_ts = datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp()
-                    hours_left = round((end_ts - now) / 3600.0, 1)
+                    hours_left = max(0.0, round((end_ts - now) / 3600.0, 1))
                     if start:
                         start_ts = datetime.fromisoformat(start.replace("Z", "+00:00")).timestamp()
                         total = end_ts - start_ts
                         if total > 0:
                             progress_pct = max(0.0, min(1.0, (now - start_ts) / total))
-                            running_elapsed_sec += max(0.0, min(total, now - start_ts))
-                            running_total_sec += total
+                            if not complete:
+                                running_elapsed_sec += max(0.0, min(total, now - start_ts))
+                                running_total_sec += total
                 except Exception:
                     pass
             running.append({
@@ -4596,6 +4616,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
                 "hours_left": hours_left,
                 "progress_pct": round(progress_pct, 4) if progress_pct is not None else None,
                 "orphan": is_orphan,
+                "complete": complete,
             })
 
     # ── Step 5: flag intermediates consumed by another running reaction ─────────────────────────
@@ -4605,14 +4626,14 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
     # count only real end products — summing every running job (intermediates included) and pricing
     # it double-counts value already embedded in the final product (a chain reaction's units are
     # not additional sellable output). Purely running-set based, so it also covers orphan jobs.
-    running_output_types = {j["product_type_id"] for j in running}
+    running_output_types = {j["product_type_id"] for j in running if not j.get("complete")}
     consumed_types = {
         inp for out in running_output_types
         for inp in reaction_inputs_by_output.get(out, ())
         if inp in running_output_types
     }
     for j in running:
-        j["consumed"] = j["product_type_id"] in consumed_types
+        j["consumed"] = not j.get("complete") and j["product_type_id"] in consumed_types
 
     # ── Step 6: fold in unplanned running jobs, then gate stages account-wide ───────────────────
     # Fold in running jobs that had no plan slot (see _unplanned_running_totals) — valued from our
@@ -4746,7 +4767,9 @@ def _character_capacities(context_id: int) -> list[dict]:
         slots = reaction_slots(c)
         row = cached.get(c["character_id"])
         jobs = _json.loads(row["jobs_json"]) if row else []
-        used = len([j for j in jobs if j.get("status") in ("active", "paused", "ready")])
+        now = _time.time()
+        running = sum(1 for j in jobs if _reaction_job_occupies_slot(j, now))
+        used = running
         planned = pending.get(int(c["character_id"]), [])
         used += (_concurrent_load(planned) if peak_only else
                  len([p for p in planned if not p.get("slot_deferred")]))
@@ -4758,7 +4781,7 @@ def _character_capacities(context_id: int) -> list[dict]:
             # can I start now", wrong for "how many rows may this plan hold in total", which is
             # what the levelling pass has to answer (see level_product_runs' budget).
             "slots": slots,
-            "running": len([j for j in jobs if j.get("status") in ("active", "paused", "ready")]),
+            "running": running,
         })
     return result
 
