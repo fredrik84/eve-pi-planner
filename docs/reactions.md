@@ -958,6 +958,13 @@ ready stage, and relabels it "ready to start now" instead of "after stage 1 fini
 `end_date` check matters because the jobs cache is up to five minutes stale — "can I start yet"
 should not wait on a refresh.
 
+**Exact ESI bindings win before product-count fallback.** Consecutive recurring generations contain
+the same end product, so pooling all live jobs by product lets whichever generation is read first
+consume them. In production that made a new RCF generation borrow eight jobs explicitly bound to
+the previous generation and raised two false Dashboard warnings after every available job had been
+started. `chain_stage_state` now resolves `esi_job_id` to its own row first and exposes only truly
+unbound jobs to the fallback used for work installed outside the planner.
+
 **...and it pushes.** `reaction_stage_ready` is a twelfth alert kind (`app/alerts.py`
 `_stage_ready_alerts`), computed off the same `chain_stage_state` the page renders, so a
 notification and the screen can never disagree. It flows through the existing engine for free:

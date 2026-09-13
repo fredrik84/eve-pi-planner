@@ -1573,6 +1573,34 @@ def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     ok &= check(not recurring[1]["ready"],
                 "stage 2 stays blocked while the replacement stage-1 batch is running")
 
+    # Two generations can contain the same top product.  SQL commonly returns the new lower-stage
+    # row first, which makes that generation the first group processed.  Product-count matching
+    # used to let its unstarted top rows steal the old generation's explicitly-bound live jobs,
+    # leaving the old rows falsely ready to start on the Dashboard.
+    generation_rows = [
+        {"character_id": 1, "type_id": 11, "tier_order": 0, "runs": 5,
+         "created_at": 300.0, "name": "Carbon Fiber"},
+        {"character_id": 1, "type_id": 12, "tier_order": 1, "runs": 5,
+         "created_at": 200.0, "name": "Reinforced Carbon Fibers", "esi_job_id": 501},
+        {"character_id": 1, "type_id": 12, "tier_order": 1, "runs": 5,
+         "created_at": 200.0, "name": "Reinforced Carbon Fibers", "esi_job_id": 502},
+        {"character_id": 1, "type_id": 12, "tier_order": 1, "runs": 5,
+         "created_at": 300.0, "name": "Reinforced Carbon Fibers"},
+        {"character_id": 1, "type_id": 12, "tier_order": 1, "runs": 5,
+         "created_at": 300.0, "name": "Reinforced Carbon Fibers"},
+    ]
+    generation_jobs = [
+        {"job_id": 501, "product_type_id": 12, "status": "active"},
+        {"job_id": 502, "product_type_id": 12, "status": "active"},
+    ]
+    generations = chain_stage_state(generation_rows, generation_jobs, 0.0, None)
+    old_top = next(s for s in generations if s["chain"] == 200.0)
+    new_top = next(s for s in generations if s["chain"] == 300.0 and s["stage"] == 1)
+    ok &= check(old_top["running"] == 2 and old_top["todo"] == 0,
+                "bound live jobs stay on their previous recurring generation")
+    ok &= check(new_top["running"] == 0 and new_top["todo"] == 2 and not new_top["ready"],
+                "the next generation neither steals those jobs nor raises a false ready warning")
+
     # Partial marks resolve against the plan, and the states are alternatives rather than a ladder.
     marks = {(1, 11, 0): (2, _RX_DONE)}
     ok &= check(manual_jobs(marks, 1, 11, 0, 4, _RX_DONE) == 2, "2 of 4 jobs marked done is 2")

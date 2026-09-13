@@ -1381,11 +1381,22 @@ def chain_stage_state(rows: list[dict], jobs: list[dict], now: float,
     Chains are grouped the way every other read groups them: the assign that wrote them
     (`created_at`), so two separate plans on one character don't gate each other.
     """
+    # A binding is the identity of the plan row a live job covers.  Spend those exact jobs on
+    # those exact rows before falling back to the old product-count matching for jobs installed
+    # outside the planner.  Without this, whichever recurring generation happened to appear first
+    # in the SQL result consumed every same-product job.  A new generation's S2 rows could thereby
+    # steal the previous generation's eight explicitly-bound RCF jobs and the Dashboard announced
+    # "stage ready" even though the player had already installed all eight.
+    jobs_by_id = {int(j["job_id"]): j for j in jobs if j.get("job_id")}
+    bound_ids = {int(r["esi_job_id"]) for r in rows if r.get("esi_job_id") is not None}
     done_types: dict[int, int] = {}
     live_types: dict[int, int] = {}
     for j in jobs:
         tid = j.get("product_type_id")
         if not tid:
+            continue
+        jid = int(j.get("job_id") or 0)
+        if jid and jid in bound_ids:
             continue
         finished = _reaction_job_complete(j, now)
         (done_types if finished else live_types)[tid] = \
@@ -1406,6 +1417,13 @@ def chain_stage_state(rows: list[dict], jobs: list[dict], now: float,
             done = running = 0
             for r in steps:
                 tid = int(r["type_id"])
+                bound = jobs_by_id.get(int(r.get("esi_job_id") or 0))
+                if bound and int(bound.get("product_type_id") or 0) == tid:
+                    if _reaction_job_complete(bound, now):
+                        done += 1
+                    else:
+                        running += 1
+                    continue
                 # Recurring work can have a finished PRIOR cycle and an active CURRENT cycle of
                 # the same product in the ESI snapshot together. Current work wins: spending the
                 # historical finished job first made every row look done and released Stage 2
