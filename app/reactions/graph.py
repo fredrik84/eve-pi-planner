@@ -808,6 +808,24 @@ def reaction_stock_pool(context_id: int) -> dict[int, float]:
     return dict(request_memo(("stock_pool", context_id), _build))
 
 
+def reaction_stock_basis(context_id: int) -> dict:
+    """The named, dated evidence behind stock deductions on a shopping list.
+
+    A completed reaction proves output once existed, not that it is still spendable. Enabled asset
+    sources remain authoritative, but a stale paste must not influence a fresh list anonymously.
+    """
+    enabled = flag_on("reactions_use_stock", context_id)
+    if not enabled:
+        return {"enabled": False, "sources": []}
+    try:
+        from app.industry.assets import list_sources
+        sources = [{"name": s["name"], "kind": s["kind"], "updated_at": s.get("updated_at")}
+                   for s in list_sources(context_id) if s.get("enabled")]
+    except Exception:
+        sources = []
+    return {"enabled": True, "sources": sources}
+
+
 def _take_from_stock(stock: dict[int, float] | None, type_id: int, units_needed: float) -> float:
     """Spend what the account already holds of `type_id` against `units_needed`, returning what is
     STILL needed. `stock` is mutated — a unit spent here cannot be spent again by the next branch of
@@ -1202,6 +1220,7 @@ def reactions_shopping_list(include_orders: bool = False,
     # only reach jobs at call time (not module load) without a circular import.
     from app.reactions.jobs import ensure_reaction_assignments_table, reaction_manual_mark_records
     ensure_reaction_assignments_table()
+    stock_basis = reaction_stock_basis(context_id)
     con = get_connection()
     try:
         char_ids = [r["character_id"] for r in con.execute(
@@ -1210,7 +1229,8 @@ def reactions_shopping_list(include_orders: bool = False,
         )]
         if not char_ids:
             return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
-                    "cost": _EMPTY_SHOPPING_COST, "speculative_count": 0, "order_count": 0}
+                    "cost": _EMPTY_SHOPPING_COST, "speculative_count": 0, "order_count": 0,
+                    "stock_basis": stock_basis}
         placeholders = ",".join("?" * len(char_ids))
         rows = [dict(r) for r in con.execute(
             f"SELECT character_id, type_id, runs, order_id, created_at, last_completed_at, "
@@ -1242,13 +1262,13 @@ def reactions_shopping_list(include_orders: bool = False,
 
     if not assignments:
         return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
-                "cost": _EMPTY_SHOPPING_COST, **counts}
+                "cost": _EMPTY_SHOPPING_COST, "stock_basis": stock_basis, **counts}
 
     loaded = _load_goo_and_reached(context_id)
     if loaded is None:
         return {"materials": [], "formulas": {"complete": False, "formulas": [], "unresolved": []},
                 "cost": _EMPTY_SHOPPING_COST,
-                **counts}
+                "stock_basis": stock_basis, **counts}
     goo, reached, _, _, types = loaded
 
     # Row by row — a plan row is one in-game job, and the game rounds materials per job. See
@@ -1285,7 +1305,8 @@ def reactions_shopping_list(include_orders: bool = False,
                    for r in assignments if reached.get(int(r["type_id"])))
     cost = {"materials_cost": round(materials_cost, 2), "job_cost": round(job_cost, 2),
             "total_cost": round(materials_cost + job_cost, 2)}
-    return {"materials": materials, "formulas": formulas, "cost": cost, **counts}
+    return {"materials": materials, "formulas": formulas, "cost": cost,
+            "stock_basis": stock_basis, **counts}
 
 
 @router.get("/api/reactions/recurring-products")

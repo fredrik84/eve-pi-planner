@@ -529,6 +529,32 @@ def test_explode_shopping_list() -> bool:
     return ok
 
 
+def test_shopping_stock_basis_is_auditable() -> bool:
+    """A shopping list may deduct stock, but never from an anonymous or undated snapshot."""
+    import app.reactions.graph as G
+    import app.industry.assets as A
+
+    real_flag, real_sources = G.flag_on, A.list_sources
+    try:
+        G.flag_on = lambda key, ctx: key == "reactions_use_stock"
+        A.list_sources = lambda ctx: [
+            {"name": "Current reaction can", "kind": "container", "enabled": True,
+             "updated_at": 1234.0},
+            {"name": "Do not spend", "kind": "paste", "enabled": False,
+             "updated_at": 9999.0},
+        ]
+        basis = G.reaction_stock_basis(7)
+        ok = check(basis == {"enabled": True, "sources": [
+            {"name": "Current reaction can", "kind": "container", "updated_at": 1234.0}]},
+            "shopping reports the enabled source name, kind and evidence time")
+        G.flag_on = lambda key, ctx: False
+        ok &= check(G.reaction_stock_basis(7) == {"enabled": False, "sources": []},
+                    "stock disabled means no claimed stock basis")
+        return ok
+    finally:
+        G.flag_on, A.list_sources = real_flag, real_sources
+
+
 def test_a_chain_spreads_over_the_slots_it_has() -> bool:
     """A slot is a RATE, not a container. The customer-order path used to put each tier in exactly
     one job — a real 2000-run Reinforced Carbon Fiber order became four jobs of ~2000 runs while
@@ -1838,6 +1864,7 @@ def run_unit_tests() -> bool:
     results = [
         test_resolve_reachable(),
         test_explode_shopping_list(),
+        test_shopping_stock_basis_is_auditable(),
         test_a_chain_spreads_over_the_slots_it_has(),
         test_an_order_stops_at_the_character_that_is_not_worth_a_login(),
         test_customer_orders_only_claim_cadence_worth_of_capacity(),

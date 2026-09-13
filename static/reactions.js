@@ -220,6 +220,23 @@ function _rxCopyFormulaNames(btn) {
 
 let _rxLastFormulaShopping = [];
 
+function _rxShoppingStockNote(basis) {
+  if (!basis || !basis.enabled) return '';
+  const sources = basis.sources || [];
+  if (!sources.length) return `<div class="rx-under-warn" style="margin-bottom:10px">⚠ <b>No enabled stock source.</b>
+    Completed output is not assumed to remain in your hangar. Deliver it and add or enable its stock source
+    before using this list to buy.</div>`;
+  const oldest = sources.reduce((n, s) => s.updated_at && (!n || s.updated_at < n) ? s.updated_at : n, 0);
+  const ageDays = oldest ? Math.max(0, Math.floor((Date.now() / 1000 - oldest) / 86400)) : null;
+  const names = sources.map(s => _esc(s.name)).join(', ');
+  const age = ageDays == null ? 'at an unknown time'
+    : ageDays === 0 ? 'today' : `${ageDays} day${ageDays === 1 ? '' : 's'} ago`;
+  const stale = ageDays == null || ageDays >= 2;
+  return `<div class="${stale ? 'rx-under-warn' : 'pp-card-hint'}" style="margin-bottom:10px">${stale ? '⚠ ' : ''}<b>Stock deducted from ${names}</b>
+    (oldest update: ${age}). Completed reaction output only becomes available here after it is delivered
+    and this source is refreshed or replaced.</div>`;
+}
+
 function _loadRxShoppingList() {
   const el = document.getElementById('rxShoppingListContent');
   if (!el) return;
@@ -234,12 +251,13 @@ function _loadRxShoppingList() {
       _rxLastShoppingList = d.materials || [];
       _rxLastFormulaShopping = (d.formulas && d.formulas.formulas) || [];
       const formulaSection = _rxFormulaShoppingSection(d.formulas);
+      const stockNote = _rxShoppingStockNote(d.stock_basis);
       if (!_rxLastShoppingList.length) {
         // "Nothing assigned" and "everything you have is on a customer order" are different
         // situations and used to render identically — the second one told a player with four
         // live assignments that they had none.
         const orders = d.order_count || 0;
-        el.innerHTML = missingWarn + formulaSection + (orders > 0
+        el.innerHTML = missingWarn + stockNote + formulaSection + (orders > 0
           ? `<div class="pp-empty">No speculative assignments — but ${orders} assignment${orders === 1 ? ' is' : 's are'}
              committed to customer orders, each with its own materials report on the order itself.
              <button class="pp-btn-link" onclick="_toggleRxShoppingOrders()">Include customer orders</button></div>`
@@ -292,7 +310,7 @@ function _loadRxShoppingList() {
           ${c.job_cost ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Job install fees</span><b>${_fmtIsk(c.job_cost)}</b></div>` : ''}
           <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Total</span><b>${_fmtIsk(c.total_cost)}</b></div>
         </div>`;
-      el.innerHTML = missingWarn + scope
+      el.innerHTML = missingWarn + stockNote + scope
         + costSummary
         + formulaSection
         + section('Fetch from your alliance', group)
@@ -753,7 +771,7 @@ function _rxEaseCostLine(data) {
       + `number${retype === 1 ? '' : 's'} to type.`
     : ` There is nothing cheaper available at this stage — the surplus is what the run counts round to.`;
   return `<div class="rx-ease-cost">💡 This layout holds <b>${_fmtIsk(surplus)}</b> of surplus `
-    + `intermediates${boughtTxt}.${remedy} The extra output is stock, and your next plan spends it.</div>`;
+    + `intermediates${boughtTxt}.${remedy} Once delivered into an enabled, refreshed stock source, the next plan spends it.</div>`;
 }
 
 // ── Marking a reaction running or done by hand (`reactions_manual_done`) ──────────────────────

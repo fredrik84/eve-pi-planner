@@ -885,7 +885,16 @@ largest step (1000/500/250/100/50/25/10/5/2) that lands within **15%** of the tr
 
 Applied at `_insert_assignment_rows` (the one choke point for what gets committed) and mirrored in
 the wizard's own tier rows, so the preview and the plan show the same number. The surplus is stock,
-not waste — and with `reactions_use_stock` on, the next plan spends it.
+not waste — and with `reactions_use_stock` on, the next plan spends it **once the output has been
+delivered into an enabled stock source and that source has been refreshed**. The completion ledger
+cannot safely masquerade as inventory: it proves the material was made, but not that it was not
+sold, moved or consumed outside the planner.
+
+The Shopping tab shows that stock basis next to the list: every enabled source that influenced the
+calculation, plus the age of its oldest snapshot. This closed the September 2026 case where a
+`Pasted stock` snapshot from 20 August silently reduced a fresh list while newly completed Carbon
+Fiber and Thermosetting Polymer were absent from it. Refreshing jobs and refreshing stock are
+deliberately different operations; the former cannot make a static inventory paste current.
 
 **The shopping list follows the plan, not the ideal.** `_explode_shopping_list` takes a `planned`
 map of what each intermediate row will really produce and buys for that where it exceeds the bare

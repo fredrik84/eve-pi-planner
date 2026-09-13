@@ -702,7 +702,8 @@ def list_sources(context_id: int) -> list[dict]:
     try:
         rows = con.execute(
             "SELECT key, kind, name, parent, enabled, item_count, location_id, "
-            "COALESCE(location_name,'') AS location_name, COALESCE(system_name,'') AS system_name "
+            "COALESCE(location_name,'') AS location_name, COALESCE(system_name,'') AS system_name, "
+            "updated_at "
             "FROM pp_asset_sources WHERE context_id = ? ORDER BY kind, name",
             (context_id,),
         ).fetchall()
@@ -710,6 +711,9 @@ def list_sources(context_id: int) -> list[dict]:
         con.close()
     return [{"key": r["key"], "kind": r["kind"], "name": r["name"], "parent": r["parent"],
              "enabled": bool(r["enabled"]), "item_count": r["item_count"],
+             # A consumer that deducts stock must be able to show how old that evidence is. A
+             # pasted source does not become current when a plan or ESI jobs are refreshed.
+             "updated_at": r["updated_at"],
              # Where the box is. `place` is the one string every list groups by, built here so the
              # four places that show containers can't each invent their own wording.
              "location_id": r["location_id"], "location": r["location_name"],
