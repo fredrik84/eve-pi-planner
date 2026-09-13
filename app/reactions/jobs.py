@@ -1249,6 +1249,20 @@ def manual_jobs(marks: dict, character_id: int, type_id: int, tier_order: int,
     return steps if m[0] == _RX_ALL else max(0, min(m[0], steps))
 
 
+def _manual_marks_payload(marks: dict, character_id: int) -> list[dict]:
+    """Serialize both legacy 3-part and generation-resolved 4-part manual-mark keys."""
+    out = []
+    for key, (jobs, state) in (marks or {}).items():
+        if len(key) < 3 or int(key[0]) != int(character_id):
+            continue
+        item = {"type_id": int(key[1]), "tier_order": int(key[2]), "state": state,
+                "jobs": None if jobs == _RX_ALL else jobs}
+        if len(key) > 3:
+            item["chain"] = key[3]
+        out.append(item)
+    return out
+
+
 def set_reaction_manual(context_id: int, character_id: int, type_id: int, tier_order: int,
                         jobs: int | None, state: str = _RX_DONE) -> None:
     """Mark a group (`jobs=None` → all of it, or a count) or clear it (`jobs=0`).
@@ -4567,10 +4581,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
             "stages": chain_stage_state(assignments.get(c["character_id"], []), jobs, now, marks),
             # What this character has been marked by hand, so the page can draw the tick it is
             # showing rather than infer it back out of a covered row that now looks like any other.
-            "marks": [{"type_id": tid, "tier_order": tier, "state": st,
-                       "jobs": None if n == _RX_ALL else n}
-                      for (cid, tid, tier), (n, st) in (marks or {}).items()
-                      if cid == c["character_id"]],
+            "marks": _manual_marks_payload(marks, c["character_id"]),
         })
         # ── Step 4a: orphan jobs (running in-game with no plan slot) and running-job rows ───────
         # A running ESI job with no persistent slot binding is an ORPHAN (installed outside the

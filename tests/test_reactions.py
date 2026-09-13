@@ -1517,6 +1517,11 @@ def test_a_reaction_can_be_marked_running_or_done_by_hand() -> bool:
     ok &= check(manual_jobs(chain_marks, 1, 11, 0, 4, _RX_DONE, 100.0) == 4
                 and manual_jobs(chain_marks, 1, 11, 0, 4, _RX_DONE, 200.0) == 0,
                 "an older cycle's manual mark does not complete a newer overlapping chain")
+    from app.reactions.jobs import _manual_marks_payload
+    payload = _manual_marks_payload(chain_marks, 1)
+    ok &= check(payload == [{"type_id": 11, "tier_order": 0, "state": _RX_DONE,
+                             "jobs": None, "chain": 100.0}],
+                "the dashboard serializes a generation-resolved four-part mark without crashing")
     return ok
 
 

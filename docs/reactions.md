@@ -1023,6 +1023,11 @@ the pipeline draws a card for, and what the player is pointing at. `_RX_ALL` (-1
 many jobs the plan holds today", which is what keeps a whole-group mark meaningful across a
 re-split; a partial mark stores a count and is capped at what the plan currently holds.
 
+Recurring overlap resolves that stored triple to a four-part in-memory key by adding the matching
+plan generation (`created_at`). Dashboard serialization accepts both shapes and carries `chain`
+when present. It must not unpack a resolved key as the legacy triple: one such mark otherwise makes
+the entire jobs endpoint return 500 instead of rendering the Reactions page.
+
 **What a mark does to the slot count, and why it differs by state.** A job marked DONE has given
 its reactor back — counting it would idle a slot the character really has — so it drops out of
 `pending_load` and out of the loadout's squares. One marked RUNNING is the opposite: it is cooking
