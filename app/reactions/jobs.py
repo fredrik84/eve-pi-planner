@@ -29,7 +29,7 @@ from app.reactions._flags import flag_on
 from app.reactions.settings import effective_reaction_settings
 from app.reactions.graph import (
     _load_goo_and_reached, _value_reaction_batch, _ordered_chain_tiers, reaction_stock_pool,
-    _shopping_roots, tier_ranks, tidy_runs, request_memo, _TIDY_STEPS,
+    _shopping_roots, tier_ranks, tidy_runs, request_memo, _TIDY_STEPS, REACTION_ME_REDUCTION,
 )
 
 
@@ -951,6 +951,39 @@ def _level_runs_on(context_id: int) -> bool:
     return flag_on("reactions_level_runs", context_id)
 
 
+def _exact_job_runs(runs: int, job_count: int) -> list[int]:
+    """Split a committed total without manufacturing runs at the remainder boundary."""
+    runs = int(runs)
+    if runs <= 0:
+        return []
+    job_count = max(1, min(int(job_count), runs))
+    base, rem = divmod(runs, job_count)
+    return [base + 1] * rem + [base] * (job_count - rem)
+
+
+def _direct_tier_run_floors(formula_inputs: list[dict], parent_runs: int, parent_jobs: int,
+                            reached: dict) -> dict[int, int]:
+    """Minimum direct-intermediate runs after EVE rounds inputs once per parent job.
+
+    Exploding an aggregate 1,000-run RCF batch says 978 Carbon Fiber runs and 98 Oxy-Organic
+    runs. The actual nine parent jobs round independently and require 195,604 CF units and 982 OOS
+    units: 979 and 99 precursor runs. This is the small but load-bearing difference between a plan
+    that reaches its target and one whose last final-stage job cannot be installed.
+    """
+    parts = _exact_job_runs(parent_runs, parent_jobs)
+    floors: dict[int, int] = {}
+    for inp in formula_inputs or []:
+        node = reached.get(int(inp["type_id"])) or {}
+        via = node.get("via") or {}
+        output_qty = int(via.get("output_qty") or 0)
+        if output_qty <= 0:
+            continue
+        units = sum(math.ceil(float(inp["quantity"]) * n * (1 - REACTION_ME_REDUCTION))
+                    for n in parts)
+        floors[int(inp["type_id"])] = math.ceil(units / output_qty)
+    return floors
+
+
 def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, runs: float,
                              job_count: int, input_cost: float, reward: float, tier_order: int,
                              now: float, order_id: int | None = None, tidy: bool = False,
@@ -982,21 +1015,26 @@ def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, run
     # a little surplus is stock rather than waste — whereas the top-level product's run count is
     # what the batch's cost, output and profit were all computed from, and moving it would make
     # every one of those figures a lie. See `tidy_runs`.
-    if tidy:
+    if tidy and order_id is None:
         runs_per_job = tidy_runs(runs_per_job)
     # Measured AFTER `tidy_runs`, because rounding a run count up makes the job longer and it is
     # the row's real duration that either fits the window or does not.
-    over_h = 0.0
-    if cadence_h > 0 and cycle_hours > 0:
-        over_h = max(0.0, runs_per_job * cycle_hours - (cadence_h + _CADENCE_GRACE))
-    for _ in range(job_count):
+    # Customer work owns an exact output target. Cadence is a maximum job length, not permission
+    # to fill every slot to that length: keep the total and place the division remainder on the
+    # first jobs. Speculative work retains the intentionally tidy/equal layout above.
+    sizes = (_exact_job_runs(int(runs), job_count) if order_id is not None
+             else [runs_per_job] * job_count)
+    total_runs = sum(sizes) or 1
+    for n in sizes:
+        row_over_h = (max(0.0, n * cycle_hours - (cadence_h + _CADENCE_GRACE))
+                      if cadence_h > 0 and cycle_hours > 0 else 0.0)
         con.execute(
             "INSERT INTO pp_reaction_assignments "
             "(character_id, type_id, name, runs, input_cost, reward, created_at, tier_order, "
             "order_id, cadence_over_h) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (character_id, type_id, name, runs_per_job, input_cost / job_count, reward / job_count,
-             now, tier_order, order_id, round(over_h, 2)),
+            (character_id, type_id, name, n, input_cost * n / total_runs,
+             reward * n / total_runs, now, tier_order, order_id, round(row_over_h, 2)),
         )
 
 
@@ -2235,10 +2273,11 @@ def level_product_runs(context_id: int) -> int:
     except Exception:
         frozen, orphan_running = set(), {}
 
-    # ── Step 2: exclude what may not be re-shaped (an ORDER chain's top row) ────────────────────
-    # What may NOT be re-shaped: the TOP row of a customer ORDER's chain. Its run count is the batch
-    # that order was quoted and priced on, and cancelling the order hands exactly those runs back
-    # (`give_back_order_runs`), so moving it would make the order's own arithmetic wrong.
+    # ── Step 2: protect order tops and overlapping pipeline generations ─────────────────────────
+    # Order intermediates may still be REPACKED — that is what repairs an illegal 15/5 split across
+    # two ten-slot characters — but Step 6 preserves their exact aggregate run total. A cadence is
+    # a per-job ceiling, not a production target: 979 required CF runs may become nine rows, never
+    # nine copies of the ceiling rounded up into 240,000 units.
     #
     # Everything else is fair game — an order's intermediates, and the top row of a speculative
     # chain. Both were excluded once and both exclusions left a product showing several numbers
@@ -2251,14 +2290,14 @@ def level_product_runs(context_id: int) -> int:
     top_of_order: dict[int, int] = {}
     for r in rows:
         oid = r.get("order_id")
-        if oid is None:
-            continue
-        top_of_order[int(oid)] = max(top_of_order.get(int(oid), 0), int(r["tier_order"] or 0))
+        if oid is not None:
+            top_of_order[int(oid)] = max(top_of_order.get(int(oid), 0),
+                                         int(r["tier_order"] or 0))
     overlapping_orders = _overlapping_order_ids(rows)
     inner = [r for r in rows
              if int(r["id"]) not in frozen
              and not (r.get("order_id") is not None and int(r["order_id"]) in overlapping_orders)
-             and not (r.get("order_id")
+             and not (r.get("order_id") is not None
                       and int(r["tier_order"] or 0) == top_of_order[int(r["order_id"])])]
     if not inner:
         return 0
@@ -2679,7 +2718,18 @@ def level_product_runs(context_id: int) -> int:
             jobs = len(spots)
             keep = rs[:jobs]
             drop = rs[jobs:]
-            settled = (jobs == len(rs) and all(int(r["runs"] or 0) == runs for r in rs)
+            was = sum(int(r["runs"] or 0) for r in rs) or 1
+            # One order generation owns an immutable quantity but a mutable layout. Preserve its
+            # total while still allowing the capacity pass to change job count and placement.
+            order_keys = {(r.get("order_id"), round(float(r.get("created_at") or 0.0), 3))
+                          for r in rs if r.get("order_id") is not None}
+            exact_order = (len(order_keys) == 1
+                           and all(r.get("order_id") is not None for r in rs))
+            sizes = _exact_job_runs(was, jobs) if exact_order else [runs] * jobs
+            if exact_order:
+                note = {**note, "surplus_runs": 0, "recover_runs": 0}
+            settled = (jobs == len(rs)
+                       and all(int(r["runs"] or 0) == sizes[i] for i, r in enumerate(rs))
                        and [r["character_id"] for r in rs] == spots)
             if settled:
                 # Already one number, in the right jobs, in the right hands — but what that answer
@@ -2699,15 +2749,13 @@ def level_product_runs(context_id: int) -> int:
                                  note["jobs_saved"], note["recover_runs"], r["id"]))
                     _noted = True
                 continue
-            # Cost and profit are LINEAR in runs, so they scale with the work rather than being
-            # re-split across it. A chain's intermediate rows carry 0 either way (the whole chain's
-            # cost rolls up into its top row), but a top row carries the real ISK — and after this
-            # pass it may be making more than it was asked for. Dividing the old total across the
-            # new jobs would report the same profit for more goo bought.
-            was = sum(int(r["runs"] or 0) for r in rs) or 1
-            scale = (runs * jobs) / was
-            cost = sum(float(r["input_cost"] or 0.0) for r in rs) * scale / jobs
-            reward = sum(float(r["reward"] or 0.0) for r in rs) * scale / jobs
+            # Cost and profit are LINEAR in runs, so distribute them by each row's actual size.
+            # Speculative work can still grow through levelling and scales accordingly; an order's
+            # exact sizes sum to `was`, so its committed total value remains unchanged.
+            made = sum(sizes)
+            scale = made / was
+            unit_cost = sum(float(r["input_cost"] or 0.0) for r in rs) * scale / made
+            unit_reward = sum(float(r["reward"] or 0.0) for r in rs) * scale / made
             for i, r in enumerate(keep):
                 # ...and `character_id`, because a pooled product's jobs go where there is room.
                 # Moving a row rather than deleting and re-inserting keeps its id, its chain and
@@ -2715,7 +2763,8 @@ def level_product_runs(context_id: int) -> int:
                 con.execute("UPDATE pp_reaction_assignments SET runs=?, input_cost=?, reward=?, "
                             "character_id=?, cadence_over_h=?, surplus_runs=?, jobs_saved=?, "
                             "recover_runs=? WHERE id=?",
-                            (runs, cost, reward, spots[i], note["cadence_over_h"],
+                            (sizes[i], unit_cost * sizes[i], unit_reward * sizes[i], spots[i],
+                             note["cadence_over_h"],
                              note["surplus_runs"], note["jobs_saved"], note["recover_runs"],
                              r["id"]))
                 changed += 1
@@ -2723,13 +2772,14 @@ def level_product_runs(context_id: int) -> int:
                 con.execute("DELETE FROM pp_reaction_assignments WHERE id=?", (r["id"],))
                 changed += 1
             proto = rs[0]
-            for cid in spots[len(keep):]:
+            for i, cid in enumerate(spots[len(keep):], start=len(keep)):
                 con.execute(
                     "INSERT INTO pp_reaction_assignments "
                     "(character_id, type_id, name, runs, input_cost, reward, created_at, "
                     "tier_order, order_id, cadence_over_h, surplus_runs, jobs_saved, recover_runs) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (cid, proto["type_id"], proto["name"], runs, cost, reward,
+                    (cid, proto["type_id"], proto["name"], sizes[i],
+                     unit_cost * sizes[i], unit_reward * sizes[i],
                      proto["created_at"], proto["tier_order"], proto["order_id"],
                      note["cadence_over_h"], note["surplus_runs"], note["jobs_saved"],
                      note["recover_runs"]))
@@ -5233,6 +5283,14 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
                               max(0, caps[i] - slots[i]), spare)
                     slots[i] += add
                     spare -= add
+            # EVE rounds material use per installed PARENT job. Correct the direct precursor floor
+            # now that the final-stage split is known; aggregate chain maths is a few units short
+            # on remainders (1,000 RCF runs: 98 OOS runs on paper, 99 in the nine real jobs).
+            if formula and tiers:
+                direct_floors = _direct_tier_run_floors(
+                    formula["inputs"], share, slots[-1], reached)
+                for tid, info in tiers:
+                    info["runs"] = max(int(info["runs"]), direct_floors.get(int(tid), 0))
             for i, tid in enumerate([t for t, _ in tiers] + [type_id]):
                 if tid in left:
                     left[tid] = max(0, left[tid] - slots[i])

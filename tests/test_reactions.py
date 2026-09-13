@@ -555,6 +555,45 @@ def test_shopping_stock_basis_is_auditable() -> bool:
         G.flag_on, A.list_sources = real_flag, real_sources
 
 
+def test_customer_order_cadence_preserves_the_target() -> bool:
+    """Seven days bounds each job; it must never become seven days times every available slot."""
+    import app.reactions.jobs as J
+
+    parts = J._exact_job_runs(979, 9)
+    ok = check(sum(parts) == 979 and sorted(parts) == [108, 108] + [109] * 7,
+               f"979 precursor runs become 7×109 + 2×108, not 9×109 ({parts})")
+
+    class Capture:
+        def __init__(self):
+            self.rows = []
+
+        def execute(self, _sql, params):
+            self.rows.append(params)
+
+    con = Capture()
+    J._insert_assignment_rows(con, 1, 57453, "Carbon Fiber", 979, 9, 0.0, 0.0,
+                              0, 1.0, order_id=46, tidy=True,
+                              cycle_hours=168 / 119, cadence_h=168.0)
+    written = [int(r[3]) for r in con.rows]
+    ok &= check(written == parts and sum(written) == 979,
+                "an order row writer preserves that exact total even when tidy runs are enabled")
+    ok &= check(max(written) * (168 / 119) < 168,
+                "the longest precursor job lands below seven days")
+
+    reached = {
+        57453: {"via": {"output_qty": 200}},
+        57454: {"via": {"output_qty": 10}},
+        57455: {"via": {"output_qty": 200}},
+    }
+    inputs = [{"type_id": 57453, "quantity": 200},
+              {"type_id": 57454, "quantity": 1},
+              {"type_id": 57455, "quantity": 200}]
+    floors = J._direct_tier_run_floors(inputs, 1000, 9, reached)
+    ok &= check(floors == {57453: 979, 57454: 99, 57455: 979},
+                f"the nine final jobs cover EVE's per-job material rounding ({floors})")
+    return ok
+
+
 def test_a_chain_spreads_over_the_slots_it_has() -> bool:
     """A slot is a RATE, not a container. The customer-order path used to put each tier in exactly
     one job — a real 2000-run Reinforced Carbon Fiber order became four jobs of ~2000 runs while
@@ -1247,8 +1286,8 @@ def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
                          "JOIN pp_characters c ON c.character_id=a.character_id "
                          "WHERE c.context_id=? AND a.tier_order=0", (CTX,)).fetchone()["t"]
         con.close()
-        ok &= check(s1 >= 21 * 113,
-                    f"the stage-1 work is still fully covered ({s1} runs vs 2373 needed)")
+        ok &= check(s1 == 21 * 113,
+                    f"capacity repacking preserves the order's exact Stage-1 total ({s1} runs)")
 
         # Live order #16 after final-stage consolidation: ten queued Stage-2 jobs on A made the
         # leveller treat A as full during Stage 1, so it preserved an illegal 5/15 split across A/B
@@ -1276,6 +1315,13 @@ def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
         con.close()
         ok &= check(sorted(counts) == [10, 10],
                     f"queued Stage 2 does not preserve an illegal Stage-1 15/5 split ({counts})")
+        con = get_connection()
+        exact = con.execute(
+            "SELECT COALESCE(SUM(runs),0) t FROM pp_reaction_assignments WHERE tier_order=0 "
+            "AND character_id IN (?,?)", (9910001, 9910002)).fetchone()["t"]
+        con.close()
+        ok &= check(exact == 20 * 120,
+                    f"repairing that split does not inflate its 2,400-run commitment ({exact})")
         return ok
     finally:
         (J._level_runs_on, J._tidy_runs_on, J._parallel_stages_on,
@@ -1865,6 +1911,7 @@ def run_unit_tests() -> bool:
         test_resolve_reachable(),
         test_explode_shopping_list(),
         test_shopping_stock_basis_is_auditable(),
+        test_customer_order_cadence_preserves_the_target(),
         test_a_chain_spreads_over_the_slots_it_has(),
         test_an_order_stops_at_the_character_that_is_not_worth_a_login(),
         test_customer_orders_only_claim_cadence_worth_of_capacity(),

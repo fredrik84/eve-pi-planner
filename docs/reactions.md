@@ -571,9 +571,26 @@ Two things depended on the old assumption and moved with it:
   chain held all its own stages; now a chain can hold no row for a stage it waits on, and "every
   step of MY chain below this is done" would be vacuously true the moment the plan was made.
 
-**What it may not do.** A row committed to a **customer order** is never re-shaped: its run count is
-the batch that order was quoted on, and cancelling hands exactly those runs back
-(`give_back_order_runs`).
+**Customer-order quantity is immutable even when its layout moves.** The capacity pass may change
+an intermediate stage's job count and placement—necessary to repair an illegal 15/5 split across
+two ten-slot characters—but the stage's aggregate runs remain exactly what the order requires.
+The final stage remains protected from this pass and is cadence-split separately; cancelling still
+hands exactly the quoted runs back (`give_back_order_runs`).
+
+That quantity immutability includes intermediate rows, not only the end product. A regression found in the
+weekly 200,000-unit Reinforced Carbon Fiber order let the cross-character leveller replace the 979
+Carbon Fiber precursor runs with ten identical 120-run jobs. The cadence had become work to fill
+rather than a ceiling, producing 240,000 units for a 200,000-unit target. Order rows now keep their
+exact run total and split it as evenly as integers permit: 979 over nine jobs is seven jobs of 109
+and two of 108, all below the weekly ceiling. Ease-of-entry and aligned finish times remain the
+policy for speculative work; they do not buy surplus on a committed output target.
+
+The immediate precursor requirement is also derived from the final jobs as actually installed.
+EVE rounds material use once per job, so nine jobs totalling 1,000 RCF runs consume 195,604 Carbon
+Fiber, 982 Oxy-Organic Solvents and 195,604 Thermosetting Polymer—not the aggregate formula's
+195,600 / 978 / 195,600. The planned precursor floors are therefore 979, 99 and 979 runs. This is
+small next to the old 240,000-unit inflation, but load-bearing: without it the last final job can be
+a few units short even though the aggregate arithmetic said the stage was covered.
 
 **A speculative chain's TOP row is levelled too** — it was excluded until 2026-08-08, and that is
 what left a product showing three numbers after the pass had run. The same product is an
