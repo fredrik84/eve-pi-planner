@@ -326,6 +326,25 @@ def test_reaction_stage_ready() -> bool:
         ok &= check(a.get("dedupe_id") is not None,
                     "carries a dedupe key — a ready stage stays ready, so the 15-minute "
                     "scheduler must not re-send it every tick")
+
+    # The alert query must carry exact ESI bindings into chain_stage_state.  A newer generation's
+    # lower row is deliberately inserted first: product-only matching would let its top rows steal
+    # the older generation's two bound live jobs and report the older stage as ready again.
+    con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (FAKE_CID,))
+    for i, (tid, tier, chain, jid) in enumerate([
+            (101, 0, at + 2, None),
+            (103, 1, at + 1, 501), (103, 1, at + 1, 502),
+            (103, 1, at + 2, None), (103, 1, at + 2, None)]):
+        con.execute(
+            "INSERT INTO pp_reaction_assignments (id, character_id, type_id, name, runs, "
+            "input_cost, reward, created_at, tier_order, esi_job_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (nxt + 10 + i, FAKE_CID, tid, "Carbon Fiber" if tid == 101 else
+             "Reinforced Carbon Fiber", 10, 0.0, 0.0, chain, tier, jid))
+    _jobs([{"job_id": 501, "status": "active", "end_date": far, "product_type_id": 103},
+           {"job_id": 502, "status": "active", "end_date": far, "product_type_id": 103}])
+    bound = [a for a in compute_alerts(FAKE_CTX) if a["kind"] == "reaction_stage_ready"]
+    ok &= check(not bound,
+                f"dashboard alerts retain bindings across recurring generations (got {bound})")
     # ...and a single-stage plan never fires at all: nothing was ever waiting on anything.
     con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=? AND tier_order>0", (FAKE_CID,))
     con.commit()
