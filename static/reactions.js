@@ -310,9 +310,14 @@ function _loadRxShoppingList() {
           ${c.job_cost ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Job install fees</span><b>${_fmtIsk(c.job_cost)}</b></div>` : ''}
           <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Total</span><b>${_fmtIsk(c.total_cost)}</b></div>
         </div>`;
+      const copyAction = `
+        <div class="rx-shop-actions">
+          <button class="pp-add-btn" onclick="_rxCopyShoppingList(this)">Copy for Janice</button>
+        </div>`;
       el.innerHTML = missingWarn + stockNote + scope
         + costSummary
         + formulaSection
+        + copyAction
         + section('Fetch from your alliance', group)
         + section('Buy on the market (fuel blocks, or cheaper right now than your sheet)', market);
       _renderRxReceivedDiff();

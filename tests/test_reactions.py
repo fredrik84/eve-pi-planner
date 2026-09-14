@@ -416,6 +416,11 @@ def test_reactions_phase1_is_task_first() -> bool:
                 "occasional deadline and material controls remain available under Advanced")
     ok &= check('_rxOpenSuggestForDeadline' not in shopping and '_rxOpenRecurringDeadline' not in shopping,
                 "Shopping is an output, not a second planning launcher")
+    shop_fn = js[js.index('function _loadRxShoppingList'):js.index('function _rxCopyQtyCell')]
+    ok &= check('Copy for Janice' not in shopping
+                and 'class="rx-shop-actions"' in shop_fn
+                and shop_fn.index('+ copyAction') < shop_fn.index("+ section('Fetch from your alliance'"),
+                "the shopping copy action sits directly above its material tables, not in the remote card header")
     ok &= check('class="rx-action-menu"' in page and 'Clear planned work' in page,
                 "rare and destructive queue actions are grouped behind More")
     ok &= check("ppCloseTransientMenus('.rx-action-menu');" in page
