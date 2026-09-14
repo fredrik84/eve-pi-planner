@@ -9,6 +9,7 @@ import logging
 import time
 
 from app.planetary import PLANET_P0_MAP, _NAME_TO_COL
+from app.geography import is_wormhole_system_id
 
 log = logging.getLogger(__name__)
 
@@ -322,6 +323,24 @@ def _system_recommendations_impl(
     results, seen = [], set()
     pref = max(1, preferred_systems)
 
+    # J-space systems are valid PI candidates, but their connections are dynamic and do not
+    # belong in the SDE stargate graph.  Mark multi-system recommendations that touch one as
+    # unknown rather than misleadingly calling them distant or suggesting a higher jump limit.
+    wormhole_systems: set[str] = set()
+    if all_sys:
+        try:
+            placeholders = ",".join("?" * len(all_sys))
+            for r in con.execute(
+                f"SELECT system, system_id FROM system_geo WHERE system IN ({placeholders})",
+                all_sys,
+            ):
+                if is_wormhole_system_id(r["system_id"]):
+                    wormhole_systems.add(r["system"])
+        except Exception:
+            # Fresh unit-test/dev DBs may omit geography. That only removes the J-space
+            # annotation; the recommendation calculation itself remains usable.
+            pass
+
     # ── Neighbour (jump-distance) awareness for multi-system combos ──
     # Combos whose systems cluster within `max_jumps` are preferred; non-adjacent
     # combos still appear (fall-back). Single-system combos are trivially "within".
@@ -358,9 +377,11 @@ def _system_recommendations_impl(
                     pair_dist[frozenset((a, b))] = min(dd, pair_dist.get(frozenset((a, b)), dd))
 
     def combo_jumps(members):
-        """(within_jumps, diameter) — is the combo a cluster within max_jumps?"""
+        """(known, within_jumps, diameter) for the static stargate topology."""
         if len(members) <= 1:
-            return True, 0
+            return True, True, 0
+        if any(m in wormhole_systems for m in members):
+            return False, False, None
         edges = {m: set() for m in members}
         ds = []
         for i in range(len(members)):
@@ -375,7 +396,7 @@ def _system_recommendations_impl(
             for y in edges[stack.pop()]:
                 if y not in comp:
                     comp.add(y); stack.append(y)
-        return (len(comp) == len(members), (max(ds) if ds else None))
+        return True, len(comp) == len(members), (max(ds) if ds else None)
 
     def add(sys_names):
         m, vals = merge(sys_names)
@@ -386,7 +407,8 @@ def _system_recommendations_impl(
             return None
         seen.add(key)
         r = make_result(list(sys_names), m, vals)
-        within, diam = combo_jumps(list(sys_names))
+        known, within, diam = combo_jumps(list(sys_names))
+        r["proximity_known"] = known
         r["within_jumps"], r["jumps"] = within, diam
         results.append(r)
         return r

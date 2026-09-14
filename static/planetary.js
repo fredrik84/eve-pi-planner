@@ -2024,11 +2024,14 @@ function renderRecommendations(data) {
   }
 
   const maxJumps = _maxJumps();
-  const anyWithin = data.system_recommendations.some(r => r.systems_needed.length > 1 && r.within_jumps);
-  const fallbackNote = (maxJumps >= 0 && !anyWithin &&
-                        data.system_recommendations.some(r => r.systems_needed.length > 1))
+  const multiRecs = data.system_recommendations.filter(r => r.systems_needed.length > 1);
+  const knownMulti = multiRecs.filter(r => r.proximity_known !== false);
+  const anyWithin = knownMulti.some(r => r.within_jumps);
+  const fallbackNote = (maxJumps >= 0 && knownMulti.length && !anyWithin)
     ? `<div class="plan-jump-note">No multi-system combos within ${maxJumps} jump${maxJumps === 1 ? '' : 's'} cover your P0s — showing the closest available. Raise “Max jumps” to allow more spread.</div>`
-    : '';
+    : (multiRecs.some(r => r.proximity_known === false)
+      ? `<div class="plan-jump-note">Wormhole connections are dynamic, so J-space multi-system proximity is not scored.</div>`
+      : '');
 
   const cards = data.system_recommendations.map((rec, i) => {
     const numSys = rec.systems_needed.length;
@@ -2037,7 +2040,9 @@ function renderRecommendations(data) {
       ? `<span class="plan-cov-full">full coverage</span>`
       : `<span class="plan-cov-partial">${rec.coverage}/${rec.total_p0} P0</span>`;
     const jumpBadge = numSys > 1
-      ? (rec.within_jumps
+      ? (rec.proximity_known === false
+          ? `<span class="plan-jump-far" title="Wormhole connections are dynamic and are not present in the static stargate map.">connection unknown</span>`
+          : rec.within_jumps
           ? `<span class="plan-jump-ok">${(rec.jumps || 1) <= 1 ? 'adjacent' : rec.jumps + ' jumps'}</span>`
           : `<span class="plan-jump-far">not within ${maxJumps}</span>`)
       : '';

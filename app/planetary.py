@@ -12,6 +12,7 @@ from app.sde import get_connection, load_pi_data, ensure_once, add_columns
 from app.cache import cache_get_json, cache_set_json, cache_invalidate
 from app.esi import require_context, is_admin, require_admin
 from app.notifiers import notify_admin_discord
+from app.geography import looks_like_jspace_system_name
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -366,11 +367,13 @@ def _parse_planet_rows(text: str, con) -> tuple[list[dict], int, list[str]]:
     skipped = 0
     errors: list[str] = []
 
-    # system → constellation (auto-fill when the constellation column is absent)
-    sysgeo: dict[str, str] = {}
+    # casefolded system → canonical SDE identity (also auto-fills constellation).
+    # Canonicalising matters especially for pasted J-space names: ``j123456`` must not
+    # create a second, topology-less spelling beside the SDE's ``J123456`` row.
+    sysgeo: dict[str, tuple[str, str]] = {}
     try:
         for r in con.execute("SELECT system, constellation FROM system_geo"):
-            sysgeo[r["system"]] = r["constellation"]
+            sysgeo[r["system"].casefold()] = (r["system"], r["constellation"])
     except Exception:
         # system_geo is populated by scripts/populate_geo.py — legitimately absent in a fresh
         # dev checkout that hasn't run it yet, but in production the Dockerfile's boot chain
@@ -397,12 +400,22 @@ def _parse_planet_rows(text: str, con) -> tuple[list[dict], int, list[str]]:
         system    = _col("system")
         praw      = _col("planet_num")
         ptype_raw = _col("planet_type")
-        # Constellation: explicit column, else derived from the system name.
-        constel   = _col("constellation") or sysgeo.get(system, "")
 
         if not system:
             skipped += 1
             continue
+        geo = sysgeo.get(system.casefold())
+        if geo:
+            system = geo[0]
+        elif looks_like_jspace_system_name(system):
+            # A typo in J-space cannot be rescued by static adjacency later.  Reject it as
+            # one bad row, with a useful import error, instead of poisoning the shared DB or
+            # raising out of the whole paste.
+            errors.append(f"Unknown J-space system {system!r} — check the six-digit J-name")
+            skipped += 1
+            continue
+        # Explicit constellation wins; otherwise derive it from the canonical SDE system.
+        constel = _col("constellation") or (geo[1] if geo else "")
         try:
             planet_num = int(praw)
         except ValueError:

@@ -136,6 +136,14 @@ constellation filter still applies first (candidates are constellation-scoped). 
 `PlanRequest.max_jumps` (default 1) → profile column `max_jumps` + share key `mj`; UI
 "Max jumps" field shows only when Systems ≥ 2 (`ppToggleMaxJumps`), and the recs step
 shows an `adjacent`/`N jumps` badge plus a fall-back note when nothing fits within N.
+**J-space is deliberately not a wormhole-chain feature.** Systems in CCP's wormhole solar-system
+ID range are accepted as normal Planet DB/import and planning locations, but `system_jumps` only
+contains stable stargate edges. A recommendation spanning a wormhole system therefore carries
+`proximity_known=false`, `within_jumps=false`, and `jumps=null`; the UI says **connection unknown**
+instead of advising the player to raise Max jumps. Single-system J-space recommendations remain
+trivially local. Imports canonicalise known system names case-insensitively from `system_geo`, and
+a J###### name absent from that table is skipped with a row-level error, so a typo cannot create a
+duplicate/unknown shared Planet DB location or crash the rest of the paste.
 **Planet DB import is simplified by these:** Constellation and Type columns are now
 optional — `import_planets` fills constellation from `system_geo` by system name, and
 infers planet type from which P0 columns the row fills (matched against `PLANET_P0_MAP`,
