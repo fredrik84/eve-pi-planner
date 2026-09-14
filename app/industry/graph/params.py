@@ -1,17 +1,7 @@
 """`BuildParams` — every knob a plan is resolved against — plus the two blueprint helpers that
 reason about ME/TE, and the CCP constants both engines share."""
-import math
 from dataclasses import dataclass, field
 
-from fastapi import Depends, HTTPException
-from pydantic import BaseModel
-
-from app.sde import get_connection
-from app.markets import resolve_market_data
-from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
-from app.esi import require_context
-
-from app.industry._router import router
 
 # Flat 4% SCC surcharge CCP applies to every industry job's estimated item value (EIV), on top of
 # the system cost index and facility tax — same constant app.reactions.graph uses.

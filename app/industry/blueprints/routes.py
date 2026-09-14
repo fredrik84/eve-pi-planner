@@ -1,19 +1,12 @@
 """The hand-declared blueprint endpoints."""
-import hashlib as _hashlib
-import json as _json
-import logging
-import re as _re
 import time as _time
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
-from app.sde import get_connection, ensure_once, add_columns
-from app import esi_http
-from app.esi import require_context, BLUEPRINTS_SCOPE, CORP_INDUSTRY_JOBS_SCOPE
+from app.sde import get_connection
+from app.esi import require_context, BLUEPRINTS_SCOPE
 
-from app.cache import request_memo
 from app.industry._router import router
-from app.industry.char_cache import refresh_character_cache
 
 from app.industry.blueprints.esi import _STACK_CAP, _blueprint_product_index, ensure_char_blueprints_table
 from app.industry.blueprints.manual import _manual_enabled, ensure_manual_blueprints_table, owned_blueprints

@@ -1,14 +1,8 @@
 """How a type's runs become JOBS: blueprint copy limits, print limits, packing and cohort
 alignment. `Task` lives here because it is what this module produces."""
-import copy
 import math
 from collections import defaultdict
 from dataclasses import dataclass
-
-from app.industry.graph import (
-    BuildParams, blueprint_summary, collect_reachable, effective_material_qty,
-    reaction_policy_report, resolve_unit_costs,
-)
 
 
 # ── Scheduling ────────────────────────────────────────────────────────────────────────────────

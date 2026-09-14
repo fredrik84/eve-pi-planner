@@ -363,6 +363,12 @@ reduces the number of jobs competing for slots.
 
 ## Scheduling: slots, pace, cohort alignment and compaction
 
+The event scheduler retains one stable priority order as jobs leave its pending queue. Physical
+slot numbers are returned to a pool when their jobs finish, so a new job reuses an actually free
+slot instead of deriving its number from the count of busy slots. Dependencies complete when all
+their jobs have started and reached their end time, including jobs with zero duration.
+`tests/test_production_allocation.py` checks these rules alongside blueprint/formula concurrency.
+
 **Slots are only spent where they buy time** (`build_tasks(..., depths=, deps=)`). A stage finishes
 when its SLOWEST job does, so a job that lands early buys the plan nothing: its slot idles, and —
 the part that actually matters — **it costs the builder a second login**. Jobs finishing at 2h32m

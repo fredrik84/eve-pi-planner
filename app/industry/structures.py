@@ -57,7 +57,7 @@ the size a hull accepts decides which families it can honestly claim (`HULL_RIG_
 The map is deliberately no stricter than that. Blocking a legal configuration is worse than the
 permissiveness it replaces, so anything not positively established as impossible stays allowed.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.industry.categories import REACTION_CATEGORIES
 

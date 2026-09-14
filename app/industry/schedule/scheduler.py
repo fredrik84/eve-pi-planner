@@ -1,17 +1,12 @@
 """The resource-constrained list scheduler: dependencies, critical-path priority, and the
 slot-pool simulation that produces the waves."""
-import copy
-import math
+import heapq
 from collections import defaultdict
-from dataclasses import dataclass
 
-from app.industry.graph import (
-    BuildParams, blueprint_summary, collect_reachable, effective_material_qty,
-    reaction_policy_report, resolve_unit_costs,
-)
-
-
+from app.industry.graph import BuildParams, collect_reachable
 from app.industry.schedule.splitting import Task
+
+
 def _built_deps(agg: dict, mfg: dict, rx: dict) -> dict[int, set[int]]:
     """For each built type, the set of its inputs that are ALSO built (bought inputs are available
     at t=0, so they're not scheduling dependencies)."""
@@ -102,57 +97,49 @@ def schedule(tasks: list[Task], by_type: dict, deps: dict, pools: dict[str, int]
 
     Omitted (or a type absent from it) = unlimited, which is the old behaviour and the right default:
     a type we have observed nothing about must never be serialised on absent evidence."""
-    free = dict(pools)
+    free_slots = {activity: list(range(count)) for activity, count in pools.items()}
     caps = dict(print_caps or {})
     prints_free = dict(caps)
     completed: set[int] = set()
     running: list[Task] = []
     started: set[str] = set()
     now = 0.0
-    remaining = len(tasks)
+    # Priority never changes during the simulation; keep its stable order as tasks leave the queue.
+    pending = sorted(tasks, key=lambda t: priority.get(t.sched_key(), (0, 0.0)), reverse=True)
 
-    while remaining > 0:
+    while pending:
         # Start every ready task that fits a free slot in its pool, most-critical first.
-        ready = sorted(
-            (t for t in tasks if t.task_id not in started
-             and all(d in completed for d in deps.get(t.sched_key(), ()))),
-            key=lambda t: priority.get(t.sched_key(), (0, 0.0)), reverse=True,
-        )
-        started_any = False
-        for t in ready:
+        waiting = []
+        for t in pending:
             # A job needs a free SLOT and a free PRINT. `t.type_id` is the product, which is what
             # identifies the blueprint or formula it runs off — and it is shared across orders, so
             # two separately-planned builds contend for the same item here rather than each
             # believing they hold it.
             has_print = t.type_id not in prints_free or prints_free[t.type_id] > 0
-            if free.get(t.activity, 0) > 0 and has_print:
-                t.slot = pools[t.activity] - free[t.activity]
+            if (free_slots.get(t.activity) and has_print
+                    and all(d in completed for d in deps.get(t.sched_key(), ()))):
+                t.slot = heapq.heappop(free_slots[t.activity])
                 t.start = now
                 t.end = now + t.duration
-                free[t.activity] -= 1
                 if t.type_id in prints_free:
                     prints_free[t.type_id] -= 1
                 started.add(t.task_id)
                 running.append(t)
-                remaining -= 1
-                started_any = True
-        if started_any:
-            # Newly started tasks don't unlock anything until they finish; fall through to advance.
-            pass
+            else:
+                waiting.append(t)
+        pending = waiting
         if not running:
-            if not started_any:
-                break  # nothing running and nothing startable → unschedulable remainder
-            continue
+            break  # nothing running and nothing startable → unschedulable remainder
         # Advance to the next completion(s), free those slots, mark newly-complete types.
         next_end = min(t.end for t in running)
         now = next_end
         for t in [x for x in running if x.end == next_end]:
-            free[t.activity] += 1
+            heapq.heappush(free_slots[t.activity], t.slot)
             if t.type_id in prints_free:
                 prints_free[t.type_id] = min(caps[t.type_id], prints_free[t.type_id] + 1)
             running.remove(t)
         for tid in by_type:
-            if tid not in completed and all(x.end and x.end <= now for x in by_type[tid]):
+            if tid not in completed and all(x.task_id in started and x.end <= now for x in by_type[tid]):
                 completed.add(tid)
 
     makespan = max((t.end for t in tasks if t.end), default=0.0)

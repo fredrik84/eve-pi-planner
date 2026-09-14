@@ -25,10 +25,7 @@ planner does not notice.
 import logging
 
 from app.sde import get_connection, ensure_once
-from app.esi import require_context
 
-from app.industry._router import router
-from fastapi import Depends
 
 log = logging.getLogger(__name__)
 

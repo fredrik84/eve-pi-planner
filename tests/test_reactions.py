@@ -685,64 +685,16 @@ def test_a_chain_spreads_over_the_slots_it_has() -> bool:
     return ok
 
 
-def test_an_order_stops_at_the_character_that_is_not_worth_a_login() -> bool:
-    """Reported from a live order (#45, 1000 runs of Reinforced Carbon Fiber): stage 1 spread over 5
-    characters with two holding ONE job each, stage 2 over SEVEN with five holding one — while the
-    characters that already had jobs sat on free reactors.
-
-    The rule is marginal gain and needs no cadence: an order's wait is its reactor-hours over the
-    reactors running them, so a host with F free slots added to S already committed cuts the wait by
-    F/(S+F). Take hosts while that is worth a login; stop at the first one that isn't."""
-    from app.reactions.jobs import _lean_hosts, _WORTH_A_LOGIN
-
-    ids = lambda hs: [h["character_id"] for h in hs]
-    mk = lambda *fs: [{"character_id": i, "free_slots": f} for i, f in enumerate(fs)]
-
-    ok = check(_WORTH_A_LOGIN == 0.20, "an extra character must cut the wait by a fifth")
-
-    # The reported account: three 10-slot characters and four 5-slot ones. The 4th buys 5/35 = 14%.
-    real = mk(10, 10, 10, 5, 5, 5, 5)
-    keep = _lean_hosts(real)
-    ok &= check(ids(keep) == [0, 1, 2], "it stops at three characters on the reported account")
-    ok &= check(sum(h["free_slots"] for h in keep) == 30,
-                "which is 30 reactors — against the 33 the sprawl over seven was really using")
-
-    # It scales itself, which is the point of a RELATIVE gain: a small order lands on one character
-    # because the second buys nothing, a big spread-out account still uses everyone.
-    ok &= check(ids(_lean_hosts(mk(10, 1))) == [0],
-                "a character worth 1 slot beside 10 buys 9% and is not worth the login")
-    ok &= check(ids(_lean_hosts(mk(10, 10, 10, 10))) == [0, 1, 2, 3],
-                "four equal characters all pull real weight, so all four are used")
-    # 5 equal hosts: the 5th buys exactly 5/25 = 20% and clears the bar, the 6th buys 16.7%.
-    ok &= check(ids(_lean_hosts(mk(5, 5, 5, 5, 5, 5, 5))) == [0, 1, 2, 3, 4],
-                "equal small characters keep going until the next one drops under a fifth")
-
-    # Order matters: hosts are ranked by room, so the first one under the bar ends it.
-    ok &= check(ids(_lean_hosts(mk(2, 10, 3, 9))) == [1, 3],
-                "hosts are taken roomiest-first regardless of the order they arrive in")
-
-    # Never strand an order, and never divide by zero.
-    ok &= check(ids(_lean_hosts(mk(4))) == [0], "one character is always kept — it has to go somewhere")
-    ok &= check(_lean_hosts([]) == [], "no hosts stays no hosts")
-    ok &= check(ids(_lean_hosts(mk(10, 0, 0))) == [0], "a character with no free reactor is never added")
-
-    # Packing also serves the "don't buy more formulas" rule: every host needs one formula of every
-    # tier, so fewer hosts is strictly fewer formulas required.
-    ok &= check(len(_lean_hosts(real)) < len(real),
-                "fewer hosts than the account has — so fewer formulas the order demands at once")
-    return ok
-
-
 def test_customer_orders_only_claim_cadence_worth_of_capacity() -> bool:
     """A small weekly batch must not occupy every reactor merely because they are free."""
     import inspect
-    from app.reactions.jobs import _compact_hosts, _hosts_for_parallel_jobs, _production_pace
+    from app.reactions.jobs import _hosts_for_parallel_jobs, _production_pace
     from app.industry import settings as industry_settings
     hosts = [{"character_id": i, "free_slots": n}
              for i, n in enumerate((10, 10, 10, 5, 5, 5, 5))]
-    ok = check([h["character_id"] for h in _compact_hosts(hosts, 2, 1)] == [0],
+    ok = check([h["character_id"] for h in _hosts_for_parallel_jobs(hosts, 2)] == [0],
                "two cadence-sized jobs stay on one character instead of filling the account")
-    ok &= check(len(_compact_hosts(hosts, 25, 1)) == 3,
+    ok &= check(len(_hosts_for_parallel_jobs(hosts, 25)) == 3,
                 "a larger batch adds only the characters needed to hold its cadence layout")
     ok &= check([h["character_id"] for h in _hosts_for_parallel_jobs(hosts, 7)] == [0],
                 "seven parallel jobs stay together when one ten-slot character can run them")
@@ -1165,66 +1117,6 @@ def test_the_cadence_reaches_an_orders_own_top_row() -> bool:
         con.execute("DELETE FROM pp_reaction_assignments WHERE character_id=?", (CID,))
         con.execute("DELETE FROM pp_characters WHERE character_id=?", (CID,))
         con.commit(); con.close()
-
-
-def test_the_leveller_does_not_reach_for_a_character_the_assign_left_out() -> bool:
-    """Reported while watching the page: *"it did right... but when I was looking at it suddenly
-    swapped the 3x 7 slots to 3x7 slots + 1x1 slot."*
-
-    The two passes disagreed by construction. `_allocate_and_insert` packs an order onto the fewest
-    characters worth a login (`_lean_hosts`); `level_product_runs` re-splits the whole plan on EVERY
-    dashboard load and placed jobs against slot room alone, so it saw a spare reactor on a fourth
-    character and put a single job there. Same rule on both sides now: a character already in the
-    plan is a login you are making anyway, and anyone else has to earn the trip."""
-    from app.reactions.jobs import _WORTH_A_LOGIN
-
-    # The placement rule, stated the way Step 5b applies it.
-    def joins(free: int, reachable: int) -> bool:
-        return free > 0 and free / float(reachable + free) >= _WORTH_A_LOGIN
-
-    ok = check(not joins(1, 12),
-               "a 4th character with 1 reactor does not join 3 that still have 12 between them")
-    ok &= check(not joins(5, 30), "nor 5 reactors against the reported account's 30")
-    ok &= check(joins(5, 0),
-                "but when the characters in the plan are FULL, a new one joins at once")
-    ok &= check(joins(10, 20), "and a character carrying real weight is always worth the trip")
-    ok &= check(not joins(0, 5), "a character with no free reactor is never added")
-
-    # A row that is merely PLANNED is not a commitment: nothing is installed, so moving it costs
-    # nothing and a row on a character the packing rule would never have picked is pure overhead.
-    # The stability rule ("whoever already runs it keeps it") exists to stop churn between loads,
-    # and it must not be read as protecting a placement no one is running.
-    import app.reactions.jobs as _J2
-    room = {1: 10, 2: 10, 3: 10, 4: 5}
-    lean = {h["character_id"] for h in _J2._lean_hosts(
-        [{"character_id": c, "free_slots": n} for c, n in room.items() if n > 0])}
-    ok &= check(lean == {1, 2, 3},
-                "the 5-reactor character is not worth a login beside three 10s")
-    ok &= check(4 not in lean,
-                "so a pending row parked on it should move, not be preserved by stability")
-
-    # Under the ONE-SLOT model a stage may use the whole character, because stage 2 runs in the
-    # reactor stage 1 frees. Charging both against one pool made three 10-reactor characters read
-    # as full at 21 + 9 rows, which is what pushed a 21st job onto a fourth host.
-    room, s1, s2 = 10, 21, 9
-    ok &= check(s1 + s2 == room * 3,
-                "21 + 9 rows fills three 10-reactor characters EXACTLY — zero slack, which is why "
-                "one job had nowhere to land")
-    ok &= check(room - (s2 // 3) == 7 and 7 * 3 == s1,
-                "charging stage 2 first left stage 1 exactly 7 each, so any uneven split spills")
-    ok &= check(max(s1, s2) <= room * 3 and room * 3 - s1 == 9,
-                "counting only the busiest stage leaves 9 reactors spare, so it cannot spill")
-    ok &= check(s1 <= room * 3 and s2 <= room * 3,
-                "the invariant the old subtraction protected still holds: no STAGE exceeds the room")
-
-    # The threshold is the same number the order allocator uses — one rule, not two that drift.
-    import app.reactions.jobs as _J
-    hosts = [{"character_id": 1, "free_slots": 10}, {"character_id": 2, "free_slots": 10},
-             {"character_id": 3, "free_slots": 10}, {"character_id": 4, "free_slots": 5}]
-    kept = {h["character_id"] for h in _J._lean_hosts(hosts)}
-    ok &= check(kept == {1, 2, 3},
-                "the assign path drops the same 4th character the leveller now refuses to add")
-    return ok
 
 
 def test_the_leveller_consolidates_a_stray_host_off_the_plan() -> bool:
@@ -2065,13 +1957,11 @@ def run_unit_tests() -> bool:
         test_shopping_stock_basis_is_auditable(),
         test_customer_order_cadence_preserves_the_target(),
         test_a_chain_spreads_over_the_slots_it_has(),
-        test_an_order_stops_at_the_character_that_is_not_worth_a_login(),
         test_customer_orders_only_claim_cadence_worth_of_capacity(),
         test_order_owned_slots_have_compact_source_keys_and_a_legend(),
         test_a_stage_settles_on_one_run_count_across_its_products(),
         test_a_cadence_ceiling_holds_every_job_inside_the_week(),
         test_the_leveller_never_plans_more_jobs_than_formulas_owned(),
-        test_the_leveller_does_not_reach_for_a_character_the_assign_left_out(),
         test_the_leveller_consolidates_a_stray_host_off_the_plan(),
         test_it_warns_when_installed_jobs_will_come_up_short(),
         test_a_character_that_lost_the_jobs_scope_says_so(),

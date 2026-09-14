@@ -1,14 +1,8 @@
 """The orchestrator: demand -> tasks -> schedule -> metrics, plus character assignment and the
 marginal sweep. This is what a caller actually asks for."""
 import copy
-import math
-from collections import defaultdict
-from dataclasses import dataclass
 
-from app.industry.graph import (
-    BuildParams, blueprint_summary, collect_reachable, effective_material_qty,
-    reaction_policy_report, resolve_unit_costs,
-)
+from app.industry.graph import BuildParams, blueprint_summary, reaction_policy_report, resolve_unit_costs
 
 
 from app.industry.schedule.demand import _depths, aggregate_demand, marginal_threshold
@@ -349,7 +343,6 @@ def plan_queue(targets: list[tuple[int, int]], mfg: dict, rx: dict, prices: dict
             "price": round((total_cost - leftover_value) * (1 + params.margin_pct / 100.0), 2),
         },
     }
-
 
 
 def skill_tier(eligibility: dict | None):

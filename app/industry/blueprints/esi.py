@@ -1,19 +1,10 @@
 """Blueprints read from ESI, how a copy ranks against another, and batch identity."""
 import hashlib as _hashlib
-import json as _json
 import logging
-import re as _re
-import time as _time
-from fastapi import Depends, HTTPException
-from pydantic import BaseModel
 
-from app.sde import get_connection, ensure_once, add_columns
+from app.sde import get_connection, ensure_once
 from app import esi_http
-from app.esi import require_context, BLUEPRINTS_SCOPE, CORP_INDUSTRY_JOBS_SCOPE
 
-from app.cache import request_memo
-from app.industry._router import router
-from app.industry.char_cache import refresh_character_cache
 
 log = logging.getLogger(__name__)
 

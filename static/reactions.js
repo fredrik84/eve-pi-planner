@@ -767,7 +767,7 @@ function _rxEaseCostLine(data) {
   });
   if (surplus <= 0) return '';
   // Logins, not jobs: a job saved on a character you were logging into anyway costs nothing extra,
-  // and the thing the player actually feels is the trip. Same reasoning as `_lean_hosts`.
+  // and the thing the player actually feels is the trip.
   const bought = [];
   if (jobsSaved > 0) bought.push(`${jobsSaved} job${jobsSaved === 1 ? '' : 's'}`);
   const boughtTxt = bought.length ? ` to save you ${bought.join(' and ')}` : '';

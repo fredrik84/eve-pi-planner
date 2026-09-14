@@ -1,14 +1,8 @@
 """Planning each order apart (behind `industry_per_order_plans`), and rolling the results back
 up into one queue-wide answer."""
 import copy
-import math
-from collections import defaultdict
-from dataclasses import dataclass
 
-from app.industry.graph import (
-    BuildParams, blueprint_summary, collect_reachable, effective_material_qty,
-    reaction_policy_report, resolve_unit_costs,
-)
+from app.industry.graph import BuildParams, blueprint_summary, reaction_policy_report, resolve_unit_costs
 
 
 from app.industry.schedule.demand import _depths, aggregate_demand, marginal_threshold

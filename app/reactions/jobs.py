@@ -1693,7 +1693,6 @@ def _level_options(total: int, cap: int, max_runs: int, budget: float = _LEVEL_B
     return [o for o in pool if o["over_runs"] == least]
 
 
-
 def _collection_slot(hours: float, bucket_h: float = _CADENCE_H) -> int:
     """Which SESSION the player actually COLLECTS this job in. `hours` is real wall-clock hours.
 
@@ -1722,9 +1721,6 @@ def _collection_slot(hours: float, bucket_h: float = _CADENCE_H) -> int:
         return 0
     bucket = bucket_h if bucket_h and bucket_h > 0 else _CADENCE_H
     return math.ceil(max(0.0, hours - _CADENCE_GRACE) / bucket)
-
-
-
 
 
 def _override_time_mult(context_id: int) -> float:
@@ -1878,7 +1874,6 @@ def _remember_time_mult(context_id: int, mult: float) -> None:
             con.close()
     except Exception:
         pass
-
 
 
 def reaction_time_mult_for(context_id: int, type_id: int | None = None) -> float:
@@ -2667,8 +2662,8 @@ def level_product_runs(context_id: int) -> int:
                     quota[cid] = take
                     room_left[cid] -= take
                     left -= take
-            # ...and only THEN somewhere new — held to the same "worth a login" test the order
-            # allocator uses (`_lean_hosts`). Without it these two passes disagreed by
+            # ...and only THEN somewhere new — held to the same peak-stage packing the order
+            # allocator uses (`_hosts_for_parallel_jobs`). Without it these two passes disagreed by
             # construction: the assign packed an order onto three characters, then this pass ran on
             # the next dashboard load, saw a spare reactor on a fourth, and put a single job there.
             # Reported as a plan that "suddenly swapped 3x7 slots to 3x7 + 1x1" while watching it.
@@ -2810,7 +2805,6 @@ def level_product_runs(context_id: int) -> int:
     finally:
         con.close()
     return changed
-
 
 
 def split_order_tops_to_cadence(context_id: int) -> int:
@@ -5012,61 +5006,6 @@ def _pack_hosts_on(context_id: int) -> bool:
     return flag_on("reactions_pack_hosts", context_id)
 
 
-# How much speed an extra character has to buy to be worth the login. Adding a host with F free
-# reactors to the S you already have cuts the remaining wait by F/(S+F); below this, it doesn't.
-_WORTH_A_LOGIN = 0.20
-
-
-def _lean_hosts(hosts: list[dict], min_gain: float = _WORTH_A_LOGIN) -> list[dict]:
-    """The characters worth involving in an order, roomiest first — the rest of the work goes to
-    them.
-
-    Reported from a live order (#45, 1000 runs of Reinforced Carbon Fiber): stage 1 spread over 5
-    characters with two holding ONE job each, stage 2 over SEVEN with five holding one each — while
-    the characters that already had jobs sat on free reactors. *"To lessen logins we should try and
-    run as lean as possible... it's fully possible to not spread the Stage 2 work over all
-    characters."*
-
-    **The rule is marginal gain, and it needs no cadence.** An order's wait is its reactor-hours
-    divided by the reactors running them, so a host with `F` free slots added to the `S` already
-    committed cuts that wait by `F / (S + F)`. Keep taking hosts while that is worth a login and
-    stop at the first one that isn't. It is the same reasoning `_fit_chain_slots` already uses to
-    hand slots to tiers, one level up: spend the next unit where it actually buys something.
-
-    Why this rather than a job-length ceiling: a duration ceiling needs a number nobody has set
-    (`max_reaction_job_days` defaults to None, deliberately), and it answers the wrong question —
-    "is this job too long" instead of "is this character worth the trip". A relative gain needs no
-    unit at all and scales itself: a small order lands on ONE character because the second buys
-    nothing, and a huge one still spreads because every host is pulling real weight.
-
-    On the reported account (three 10-slot characters, four 5-slot) the 4th character buys 14% and
-    the run stops at three — 30 slots against the 33 the sprawl over seven was really using.
-
-    The FIRST host is always kept whatever it buys: the order has to be placed somewhere.
-    """
-    if not hosts:
-        return []
-    ranked = sorted(hosts, key=lambda h: -h["free_slots"])
-    keep, have = [ranked[0]], max(1, ranked[0]["free_slots"])
-    for h in ranked[1:]:
-        f = h["free_slots"]
-        if f <= 0 or f / float(have + f) < min_gain:
-            break                       # ...and everyone past it buys less still — they are sorted
-        keep.append(h)
-        have += f
-    return keep
-
-
-def _compact_hosts(hosts: list[dict], wanted_slots: int, per_chain: int) -> list[dict]:
-    """Smallest roomiest-first host set that can hold a cadence-sized complete chain."""
-    keep: list[dict] = []
-    for host in hosts:
-        keep.append(host)
-        if sum(h["free_slots"] for h in keep) >= wanted_slots + per_chain * (len(keep) - 1):
-            break
-    return keep
-
-
 def _hosts_for_parallel_jobs(hosts: list[dict], wanted_jobs: int) -> list[dict]:
     """Roomiest-first hosts needed to hold ``wanted_jobs`` concurrent jobs.
 
@@ -5090,7 +5029,8 @@ def _production_pace(context_id: int) -> str:
     return "fastest" if get_settings(context_id).get("production_pace") == "fastest" else "balanced"
 
 
-def _fit_chain_slots(works: list[float], caps: list[int], budget: int) -> list[int]:
+def _fit_chain_slots(works: list[float], caps: list[int], budget: int,
+                     stages: list[int] | None = None) -> list[int]:
     """How many slots each tier of ONE chain gets, out of a character's free slots.
 
     A chain is installed tier by tier — the intermediate has to finish before the job eating it can
@@ -5105,10 +5045,24 @@ def _fit_chain_slots(works: list[float], caps: list[int], budget: int) -> list[i
 
     Every tier starts at one slot because a chain with a tier at zero cannot be installed at all.
     `caps` stops a tier being given more slots than it has runs, which would just create empty jobs.
+
+    With stage ranks, each sequential stage reuses the whole budget. Only siblings compete for
+    slots; the caller aligns their completion times after this initial fit.
     """
     n = len(works)
     if n == 0 or budget <= 0:
         return []
+    if stages is not None:
+        groups: dict[int, list[int]] = {}
+        for i, stage in enumerate(stages):
+            groups.setdefault(stage, []).append(i)
+        slots = [1] * n
+        for indices in groups.values():
+            fitted = _fit_chain_slots([works[i] for i in indices],
+                                      [caps[i] for i in indices], budget)
+            for i, count in zip(indices, fitted):
+                slots[i] = count
+        return slots
     slots = [1] * n
     spare = budget - n
     while spare > 0:
@@ -5185,8 +5139,13 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
     stock_pool = reaction_stock_pool(context_id)
     ordered_all = _ordered_chain_tiers(formula["inputs"], runs_needed, reached,
                                         dict(stock_pool)) if formula else []
-    tier_count = len(ordered_all)
-    per_chain = tier_count + 1          # one slot per intermediate, plus the product itself
+    parallel = _parallel_stages_on(context_id)
+    ranks = tier_ranks(ordered_all)
+    all_stages = ranks + [(max(ranks) + 1) if ranks else 0]
+    minimum_load: dict[int, int] = {}
+    for stage in all_stages:
+        minimum_load[stage] = minimum_load.get(stage, 0) + 1
+    per_chain = max(minimum_load.values()) if parallel else len(all_stages)
     caps_by_type = formula_concurrency_caps(context_id)
     chain_caps = {t: caps_by_type[t] for t in [tid for tid, _ in ordered_all] + [type_id]
                   if caps_by_type.get(t)}
@@ -5197,9 +5156,8 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
                     key=lambda c: -c["free_slots"])
     if not hosts:
         return {"runs_assigned": 0, "characters": [], "error":
-                 f"Needs {tier_count} intermediate reaction job slot(s) plus 1 for the product "
-                 f"itself, all on one character — none of your tracked characters has that much free "
-                 f"right now. Free up slots, or assign a smaller batch."}
+                 f"Needs at least {per_chain} reaction slots on one character to run this chain "
+                 f"— none of your tracked characters has that capacity."}
     # A character can only take a share if there is at least one run in it for them, so a two-run
     # order never fragments across fourteen characters just because the slots exist.
     hosts = hosts[:max(1, min(len(hosts), runs_needed))]
@@ -5221,28 +5179,18 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
         cap_runs = int((order_cadence_h + _CADENCE_GRACE) / cycle_h) if cycle_h > 0 else run_n
         jobs = max(1, -(-run_n // max(1, cap_runs)))
         cadence_jobs.append(_cap_jobs(chain_caps.get(tid), min(run_n, jobs)))
-    wanted_slots = sum(cadence_jobs)
     pace = _production_pace(context_id)
     # Fastest first decides how many jobs can usefully run AT ONCE, then packs those jobs onto the
     # fewest characters. Summing the chain here is wrong under the one-slot model: its stages are
     # sequential and reuse the same reactors. Spreading seven stage-2 jobs over seven characters
     # is no faster than putting all seven on one 10-slot character.
     stage_loads: dict[int, int] = {}
-    ranks = tier_ranks(ordered_all)
-    if pace == "fastest":
-        fastest_jobs = [_cap_jobs(chain_caps.get(tid), run_n)
-                        for tid, run_n in zip([t for t, _ in ordered_all] + [type_id], all_runs)]
-        for jobs, stage in zip(fastest_jobs[:-1], ranks):
-            stage_loads[stage] = stage_loads.get(stage, 0) + jobs
-        top_stage = (max(ranks) + 1) if ranks else 0
-        stage_loads[top_stage] = stage_loads.get(top_stage, 0) + fastest_jobs[-1]
-        useful_parallel_jobs = max(stage_loads.values(), default=1)
-    else:
-        for jobs, stage in zip(cadence_jobs[:-1], ranks):
-            stage_loads[stage] = stage_loads.get(stage, 0) + jobs
-        top_stage = (max(ranks) + 1) if ranks else 0
-        stage_loads[top_stage] = stage_loads.get(top_stage, 0) + cadence_jobs[-1]
-        useful_parallel_jobs = max(stage_loads.values(), default=1)
+    useful_jobs = ([_cap_jobs(chain_caps.get(tid), run_n)
+                    for tid, run_n in zip([t for t, _ in ordered_all] + [type_id], all_runs)]
+                   if pace == "fastest" else cadence_jobs)
+    for jobs, stage in zip(useful_jobs, all_stages):
+        stage_loads[stage] = stage_loads.get(stage, 0) + jobs
+    useful_parallel_jobs = (max(stage_loads.values(), default=1) if parallel else sum(useful_jobs))
     hosts = _hosts_for_parallel_jobs(hosts, useful_parallel_jobs)
 
     # How the order's runs are split across the characters that will run it: PROPORTIONAL to each
@@ -5278,6 +5226,7 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
             tiers = _ordered_chain_tiers(formula["inputs"], share, reached, stock_pool) if formula else []
             # Stage per step, not position in the list: siblings share a stage and run together.
             ranks = tier_ranks(tiers)
+            stages = ranks + [(max(ranks) + 1) if ranks else 0]
             works = [t["runs"] * ((t["cycle_time"] or 0) / 3600.0) for _, t in tiers]
             caps = [max(1, int(t["runs"])) for _, t in tiers]
             works.append(share * top_cycle_h)
@@ -5291,14 +5240,15 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
             # Begin compact: one job per tier. The cadence pass below adds only the jobs needed to
             # keep collection inside the configured window. It deliberately does not spend every
             # otherwise-free reactor on progressively smaller runtime gains.
-            slots = (_fit_chain_slots(works, caps, host["free_slots"])
+            slots = (_fit_chain_slots(works, caps, host["free_slots"],
+                                      stages=stages if parallel else None)
                      if pace == "fastest" else [1] * len(works))
             # `_fit_chain_slots` minimises the SUM of the tier durations, which was the right
             # objective while every tier was its own stage. Now that siblings share one, what gates
             # the stage above is the LAST of them to land — so re-balance within each stage the
             # same way the wizard does. Slot-neutral, so the fit above still decides how much
             # capacity the chain gets. Imported at call time: advisor sits above this module.
-            if _parallel_stages_on(context_id) and len(tiers) > 1:
+            if parallel and len(tiers) > 1:
                 from app.reactions.advisor import _align_stage_jobs
                 align = [{"character_id": host["character_id"], "tier": ranks[i],
                           "runs": int(t["runs"]), "cycle_hours": (t["cycle_time"] or 0) / 3600.0,
@@ -5328,16 +5278,20 @@ def _allocate_and_insert(context_id: int, type_id: int, name: str, node: dict, r
                 for i, (c_h, r_n) in enumerate(zip(per_run_h, tier_runs)):
                     cap_runs = int((order_cadence_h + _CADENCE_GRACE) / c_h) if c_h > 0 else 0
                     want_jobs.append(-(-r_n // cap_runs) if cap_runs > 0 else slots[i])
-                spare = max(0, host["free_slots"] - sum(slots))
+                # Later stages reuse reactors; only jobs in the same stage share a budget.
+                budget_stages = stages if parallel else [0] * len(slots)
+                stage_used: dict[int, int] = {}
+                for stage, jobs in zip(budget_stages, slots):
+                    stage_used[stage] = stage_used.get(stage, 0) + jobs
                 # Worst overrun first: with one reactor to give, it goes to the tier that is
                 # furthest past the window, not to whichever happens to be listed first.
                 for i in sorted(range(len(slots)), key=lambda j: -(want_jobs[j] - slots[j])):
-                    if spare <= 0:
-                        break
+                    stage = budget_stages[i]
+                    spare = max(0, host["free_slots"] - stage_used[stage])
                     add = min(max(0, want_jobs[i] - slots[i]),
                               max(0, caps[i] - slots[i]), spare)
                     slots[i] += add
-                    spare -= add
+                    stage_used[stage] += add
             # EVE rounds material use per installed PARENT job. Correct the direct precursor floor
             # now that the final-stage split is known; aggregate chain maths is a few units short
             # on remainders (1,000 RCF runs: 98 OOS runs on paper, 99 in the nine real jobs).

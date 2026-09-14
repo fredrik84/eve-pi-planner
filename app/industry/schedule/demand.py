@@ -2,15 +2,10 @@
 
 One pass in low-level-code order, so a component two capitals share is built in ONE batch
 rather than once per order."""
-import copy
 import math
 from collections import defaultdict
-from dataclasses import dataclass
 
-from app.industry.graph import (
-    BuildParams, blueprint_summary, collect_reachable, effective_material_qty,
-    reaction_policy_report, resolve_unit_costs,
-)
+from app.industry.graph import BuildParams, effective_material_qty
 
 
 # ── Demand aggregation (MRP explosion) ────────────────────────────────────────────────────────

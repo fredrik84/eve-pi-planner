@@ -1,19 +1,9 @@
 """The industry window, pasted: the parser, and the batches it replaces."""
-import hashlib as _hashlib
-import json as _json
-import logging
 import re as _re
 import time as _time
-from fastapi import Depends, HTTPException
-from pydantic import BaseModel
 
-from app.sde import get_connection, ensure_once, add_columns
-from app import esi_http
-from app.esi import require_context, BLUEPRINTS_SCOPE, CORP_INDUSTRY_JOBS_SCOPE
+from app.sde import get_connection
 
-from app.cache import request_memo
-from app.industry._router import router
-from app.industry.char_cache import refresh_character_cache
 
 from app.industry.blueprints.esi import (
     _PASTE_BATCH_DEFAULT,
@@ -66,7 +56,6 @@ from app.industry.blueprints.manual import (
 # declared, whatever containers it named this time, which is what makes a move track correctly.
 
 _STACK_RE = _re.compile(r"^(\d[\d,]*)\s*[x×]\s+(.+)$", _re.IGNORECASE)
-
 
 
 def _batch_label(structure: str, container: str) -> str:

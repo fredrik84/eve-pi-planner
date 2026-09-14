@@ -168,6 +168,14 @@ reported as `totals.idle_slots_used` so the extra jobs read as a choice, not an 
 
 Off ⇒ every one of those numbers is the old per-row sum. `tests/test_parallel_stages.py` pins both.
 
+Customer-order allocation follows the same rule at placement time: the minimum character capacity
+is the widest stage, and both Fastest splitting and Balanced cadence sizing reuse that character's
+reactors at each later stage. Siblings still share one stage budget, and formula limits remain
+account-wide. A three-stage chain with one product per stage can therefore run on one reactor;
+two stages needing two jobs each can use the same two reactors without exceeding the cadence just
+because the chain contains four jobs. With `reactions_parallel_stages` off, allocation retains the
+per-row sum budget. `tests/test_production_allocation.py` exercises these placement invariants.
+
 ## Physical slot ceiling and the capacity queue (2026-09-09)
 
 A planned job is no longer allowed to imply an eleventh physical reactor on a ten-slot character.

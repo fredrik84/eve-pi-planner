@@ -1,17 +1,7 @@
 """Make-or-buy: unit costs resolved bottom-up, the reaction-policy report, and `build_plan` —
 the one-product tree the preview modal renders."""
 import math
-from dataclasses import dataclass, field
 
-from fastapi import Depends, HTTPException
-from pydantic import BaseModel
-
-from app.sde import get_connection
-from app.markets import resolve_market_data
-from app.industry_cost import fetch_system_cost_index, fetch_adjusted_prices
-from app.esi import require_context
-
-from app.industry._router import router
 
 from app.industry.graph.params import BuildParams, blueprint_summary
 from app.industry.graph.sde import _producer, effective_material_qty
