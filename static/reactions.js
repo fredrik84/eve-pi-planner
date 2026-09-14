@@ -3130,7 +3130,7 @@ function _renderRxOrdersList(orders) {
     <div class="rx-order-row${_rxIsUnpriced(o) ? ' rx-order-unpriced' : ''}" onclick="_rxOpenOrderDetail(${o.id})">
       <div class="rx-order-info">
         <div class="rx-order-name">${_esc(o.name)} <span class="pp-card-hint">× ${Math.round(o.target_qty).toLocaleString()} units</span>${o.source_kind === 'manufacturing' ? ' <span class="rx-order-noprice" style="color:#8fc7a5;border-color:#2f6b48">Manufacturing</span>' : ''}${o.recurring_interval_days ? ` <span class="rx-order-noprice" style="color:#8fc7a5;border-color:#2f6b48">every ${o.recurring_interval_days}d</span>` : ''}${_rxIsUnpriced(o) && o.source_kind !== 'manufacturing' ? ' <span class="rx-order-noprice">no price set</span>' : ''}</div>
-        <div class="pp-card-hint"><b>${_esc(_rxOrderState(o))}</b> · ${o.client_name ? _esc(o.client_name) + ' · ' : ''}${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned${o.recurring_interval_days && o.recurring_next_at ? ` · next ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}</div>
+        <div class="pp-card-hint"><b>${_esc(_rxOrderState(o))}</b> · ${o.client_name ? _esc(o.client_name) + ' · ' : ''}${o.assigned_runs.toLocaleString()} / ${o.top_level_runs.toLocaleString()} runs assigned${o.recurring_interval_days && o.recurring_next_at ? ` · cadence cutoff ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}</div>
         ${_rxManufacturingSourcesHtml(o)}
         ${o.source_message ? `<div class="rx-order-noprice" title="Linked Manufacturing work needs a decision">${_esc(o.source_message)}</div>` : ''}
       </div>
@@ -3166,6 +3166,13 @@ function _rxOpenNewOrderModal() {
   document.getElementById('rxOrderPrice').value = '';
   document.getElementById('rxOrderRecurring').checked = false;
   document.getElementById('rxOrderRecurringDays').value = 7;
+  const finish = new Date();
+  let untilSunday = (7 - finish.getDay()) % 7;
+  if (untilSunday === 0) untilSunday = 7;
+  finish.setDate(finish.getDate() + untilSunday);
+  finish.setMinutes(0, 0, 0);
+  document.getElementById('rxOrderRecurringFinish').value = _toLocalInput(finish.getTime());
+  _rxOrderRecurringFinishChanged(document.getElementById('rxOrderRecurringFinish').value);
   _rxOrderRecurringChanged();
   document.getElementById('rxOrderNotes').value = '';
   document.getElementById('rxOrderCreateStatus').textContent = '';
@@ -3185,6 +3192,33 @@ function _rxOrderRecurringChanged() {
   const on = document.getElementById('rxOrderRecurring');
   const fields = document.getElementById('rxOrderRecurringFields');
   if (fields) fields.style.display = on && on.checked ? '' : 'none';
+  _rxOrderResetReview();
+}
+
+function _rxOrderRecurringFinishChanged(v) {
+  const ms = v ? new Date(v).getTime() : 0;
+  const clock = document.getElementById('rxOrderRecurringFinishClock');
+  if (clock) clock.textContent = ms ? `Cadence anchor: ${_fmtDeadlineBoth(ms)}` : '';
+  _rxOrderResetReview();
+}
+
+function _rxOrderRecurrenceValues() {
+  const recurring = document.getElementById('rxOrderRecurring').checked;
+  const days = parseFloat(document.getElementById('rxOrderRecurringDays').value);
+  const finishValue = document.getElementById('rxOrderRecurringFinish').value;
+  const finishMs = finishValue ? new Date(finishValue).getTime() : 0;
+  if (recurring && (!(days > 0) || days > 365)) throw new Error('Enter a recurring cadence between 0.25 and 365 days.');
+  if (recurring && (!finishMs || finishMs <= Date.now())) throw new Error('Choose a future date and time for the first batch to finish.');
+  return { recurring, days, finishMs };
+}
+
+async function _rxSizeRecurringOrder(typeId, requestedQty, recurrence) {
+  if (!recurrence.recurring) return { qty: requestedQty, scaled: false };
+  const availableHours = (recurrence.finishMs - Date.now()) / 3600000;
+  const found = await _rxFindMaxQtyByDeadline(typeId, availableHours, requestedQty);
+  if (!found.fits) throw new Error('Not enough time for even one run before the selected finish time.');
+  const qty = Math.min(requestedQty, found.qty);
+  return { qty, scaled: qty < requestedQty, report: qty === found.qty ? found.report : null };
 }
 
 function _rxCloseNewOrderModal() {
@@ -3272,13 +3306,16 @@ function _rxReviewOrder() {
   rv.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Working out the order…</div>';
   document.getElementById('rxOrderCreateBtn').style.display = 'none';
   const price = parseFloat(document.getElementById('rxOrderPrice').value);
-  const recurring = document.getElementById('rxOrderRecurring').checked;
-  const recurringDays = parseFloat(document.getElementById('rxOrderRecurringDays').value);
-  if (recurring && (!(recurringDays > 0) || recurringDays > 365)) { status.textContent = 'Enter a recurring cadence between 0.25 and 365 days.'; return; }
-  apiSend('POST', '/api/reactions/orders/preview',
-          { type_id: o.type_id, target_qty: qty, client_price: price > 0 ? price : null })
-    .then(data => {
-      rv.innerHTML = `<div class="pp-card-hint" style="margin-top:12px">Review — <b>${_esc(data.order.name)}</b>: ${Math.round(data.order.target_qty).toLocaleString()} units → ${data.order.top_level_runs.toLocaleString()} run${data.order.top_level_runs === 1 ? '' : 's'}</div>${_rxOrderReportBody(data)}`;
+  let recurrence;
+  try { recurrence = _rxOrderRecurrenceValues(); }
+  catch (e) { status.textContent = e.message; rv.innerHTML = ''; return; }
+  _rxSizeRecurringOrder(o.type_id, qty, recurrence)
+    .then(async sized => ({ sized, data: await apiSend('POST', '/api/reactions/orders/preview',
+      { type_id: o.type_id, target_qty: sized.qty, client_price: price > 0 ? price : null }) }))
+    .then(({ sized, data }) => {
+      const cadenceNote = sized.scaled
+        ? `<div class="settings-note"><span>The first cycle is scaled from ${Math.round(qty).toLocaleString()} to <b>${Math.round(sized.qty).toLocaleString()} units</b> so it can finish by the selected cadence time. Following cycles repeat this fitted batch on the same rhythm.</span></div>` : '';
+      rv.innerHTML = `${cadenceNote}<div class="pp-card-hint" style="margin-top:12px">Review — <b>${_esc(data.order.name)}</b>: ${Math.round(data.order.target_qty).toLocaleString()} units → ${data.order.top_level_runs.toLocaleString()} run${data.order.top_level_runs === 1 ? '' : 's'}</div>${_rxOrderReportBody(data)}`;
       document.getElementById('rxOrderCreateBtn').style.display = '';
     })
     .catch(err => { rv.innerHTML = ''; status.textContent = err.message; });
@@ -3297,12 +3334,9 @@ function _rxCreateOrder() {
   // Review and Create are separate function calls: values read in `_rxReviewOrder` are not in
   // scope here. Referencing those locals used to throw immediately after painting "Creating…",
   // before the POST was even sent, leaving the modal stuck forever with no server log at all.
-  const recurring = document.getElementById('rxOrderRecurring').checked;
-  const recurringDays = parseFloat(document.getElementById('rxOrderRecurringDays').value);
-  if (recurring && (!(recurringDays > 0) || recurringDays > 365)) {
-    status.textContent = 'Enter a recurring cadence between 0.25 and 365 days.';
-    return;
-  }
+  let recurrence;
+  try { recurrence = _rxOrderRecurrenceValues(); }
+  catch (e) { status.textContent = e.message; return; }
   // Distribution is a statement about which reactors are free NOW. Refresh immediately before
   // committing; tab-open data may be much older by the time the user has reviewed and priced the
   // order. The server independently refuses stale capacity, so a failed/partial refresh cannot
@@ -3311,11 +3345,16 @@ function _rxCreateOrder() {
   status.textContent = 'Checking current reaction jobs…';
   apiSend('POST', '/api/reactions/jobs/refresh?force=1')
     .then(() => {
+      status.textContent = recurrence.recurring ? 'Sizing the batch to the cadence cutoff…' : 'Creating and distributing…';
+      return _rxSizeRecurringOrder(o.type_id, qty, recurrence);
+    })
+    .then(sized => {
       status.textContent = 'Creating and distributing…';
       return apiSend('POST', '/api/reactions/orders',
-        { type_id: o.type_id, target_qty: qty, client_name: clientName || null, notes: notes || null,
+        { type_id: o.type_id, target_qty: sized.qty, client_name: clientName || null, notes: notes || null,
           client_price: price > 0 ? price : null,
-          recurring_interval_days: recurring ? recurringDays : null });
+          recurring_interval_days: recurrence.recurring ? recurrence.days : null,
+          recurring_finish_at: recurrence.recurring ? recurrence.finishMs / 1000 : null });
     })
     .then(data => {
       _rxCloseNewOrderModal();
@@ -3565,7 +3604,7 @@ function _rxDeadlinePreview(typeId, qty) {
 // `estimated_hours` is monotonically non-decreasing in quantity (more runs never finish sooner),
 // which is what makes a binary search valid here — capped at 25 requests so a pathological account
 // (a huge free-slot count against a trivial cycle time) can't loop indefinitely.
-async function _rxFindMaxQtyByDeadline(typeId, availableHours) {
+async function _rxFindMaxQtyByDeadline(typeId, availableHours, maxQty = null) {
   let iterations = 0;
   let hi = 1;
   let hiReport = await _rxDeadlinePreview(typeId, hi);
@@ -3573,11 +3612,16 @@ async function _rxFindMaxQtyByDeadline(typeId, availableHours) {
   if (hiReport.time.estimated_hours == null) return { fits: false, report: hiReport };   // no free slots at all
   if (hiReport.time.estimated_hours > availableHours) return { fits: false, report: hiReport };   // not even 1 unit fits
   let lo = 1, loReport = hiReport;
-  while (hiReport.time.estimated_hours <= availableHours && iterations < 25) {
+  while (hiReport.time.estimated_hours <= availableHours && iterations < 25
+         && (maxQty == null || hi < Math.floor(maxQty))) {
     lo = hi; loReport = hiReport;
-    hi *= 2;
+    hi = maxQty == null ? hi * 2 : Math.min(hi * 2, Math.floor(maxQty));
     hiReport = await _rxDeadlinePreview(typeId, hi);
     iterations++;
+  }
+  if (maxQty != null && hi === Math.floor(maxQty)
+      && hiReport.time.estimated_hours != null && hiReport.time.estimated_hours <= availableHours) {
+    return { fits: true, qty: hi, report: hiReport };
   }
   while (hi - lo > 1 && iterations < 25) {
     const mid = Math.floor((lo + hi) / 2);
@@ -3630,7 +3674,7 @@ function _renderRxOrderDetail(data) {
     ` : `<span class="pp-card-hint">Order ${_esc(o.status)}.</span>`;
 
   el.innerHTML = `
-    <div class="pp-card-hint">${o.client_name ? `For <b>${_esc(o.client_name)}</b> — ` : ''}${Math.round(o.target_qty).toLocaleString()} units needed → ${o.top_level_runs.toLocaleString()} reaction run${o.top_level_runs === 1 ? '' : 's'}${o.recurring_interval_days ? ` · repeats every <b>${o.recurring_interval_days} days</b>${o.recurring_next_at ? ` · next cycle ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}` : ''}</div>
+    <div class="pp-card-hint">${o.client_name ? `For <b>${_esc(o.client_name)}</b> — ` : ''}${Math.round(o.target_qty).toLocaleString()} units needed → ${o.top_level_runs.toLocaleString()} reaction run${o.top_level_runs === 1 ? '' : 's'}${o.recurring_interval_days ? ` · repeats every <b>${o.recurring_interval_days} days</b>${o.recurring_next_at ? ` · finish by ${_esc(_fmtDeadlineBoth(o.recurring_next_at * 1000))}` : ''}` : ''}</div>
     ${o.notes ? `<div class="pp-card-hint" style="margin-top:2px">${_esc(o.notes)}</div>` : ''}
     ${recurringBlocked}
     ${sourceBlocked}

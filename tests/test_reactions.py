@@ -283,9 +283,11 @@ def test_recurring_order_releases_each_cycle(api: Api) -> bool:
     if not check(product is not None, "found a reachable product for a recurring order"):
         return ok
     per_run_yield = product["output_qty"] / product["top_level_runs"]
+    finish_at = datetime.now(timezone.utc).timestamp() + 6 * 86400
     status, created = api.post("/api/reactions/orders", {
         "type_id": product["type_id"], "target_qty": per_run_yield,
         "client_name": "Weekly Client", "recurring_interval_days": 7,
+        "recurring_finish_at": finish_at,
     })
     ok &= check(status == 200, f"recurring order creates (got {status})")
     if status != 200:
@@ -293,6 +295,8 @@ def test_recurring_order_releases_each_cycle(api: Api) -> bool:
     order = created["order"]
     oid = order["id"]
     ok &= check(order["recurring_interval_days"] == 7, "weekly cadence is persisted")
+    ok &= check(abs(order["recurring_next_at"] - finish_at) < 2,
+                "the chosen first completion cutoff is persisted as the cadence anchor")
     ok &= check(order["assigned_runs"] == order["top_level_runs"],
                 "the first recurring batch is assigned automatically")
 
@@ -391,6 +395,15 @@ def test_recurring_create_refreshes_visible_queue() -> bool:
     ok &= check(body.index("/api/reactions/jobs/refresh?force=1") <
                 body.index("apiSend('POST', '/api/reactions/orders'"),
                 "customer work refreshes current ESI capacity before distribution")
+    html = open("static/index.html", encoding="utf-8").read()
+    ok &= check('id="rxOrderRecurringFinish"' in html and "first batch finished by" in html,
+                "recurring orders ask for a calendar date and time, not only a duration")
+    ok &= check("_rxFindMaxQtyByDeadline(typeId, availableHours, requestedQty)" in js
+                and "Math.min(requestedQty, found.qty)" in js
+                and "recurring_finish_at: recurrence.recurring ? recurrence.finishMs / 1000" in body,
+                "the requested batch is scaled down to the cadence cutoff and sends its anchor")
+    ok &= check("cadence cutoff" in js and "finish by" in js,
+                "order cards describe the timestamp as a completion cutoff")
     return ok
 
 

@@ -821,8 +821,9 @@ def ensure_reaction_orders_table():
         # everywhere and never as zero.
         add_columns(con, "pp_reaction_orders", "client_price DOUBLE PRECISION")
         # A recurring order keeps the same commercial terms but releases one fresh production
-        # batch on a fixed rhythm. `recurring_next_at` is the next release boundary; completed
-        # cycles stay on the open order and advance this anchor instead of becoming history.
+        # batch on a fixed rhythm. `recurring_next_at` is the next calendar cadence cutoff: the
+        # current batch is sized to finish there, then the next cycle is released and the anchor
+        # advances. Completed cycles stay on the open order instead of becoming history.
         add_columns(con, "pp_reaction_orders",
                     "recurring_interval_days DOUBLE PRECISION",
                     "recurring_next_at DOUBLE PRECISION",

@@ -1855,9 +1855,14 @@ PVF-N9    3         95                 60             80                  100   
         <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <label><input type="checkbox" id="rxOrderRecurring" onchange="_rxOrderRecurringChanged()"> Recurring</label>
           <span id="rxOrderRecurringFields" style="display:none">
-            every <input type="number" id="rxOrderRecurringDays" class="pp-num-input" min="0.25" max="365" step="0.25" value="7" style="width:76px"> days
+            every <input type="number" id="rxOrderRecurringDays" class="pp-num-input" min="0.25" max="365" step="0.25" value="7" style="width:76px" oninput="_rxOrderResetReview()"> days
+            <span style="margin-left:8px">first batch finished by
+              <input type="datetime-local" id="rxOrderRecurringFinish" class="pp-num-input"
+                     onchange="_rxOrderRecurringFinishChanged(this.value)" style="width:auto">
+            </span>
           </span>
         </span>
+        <span id="rxOrderRecurringFinishClock" class="pp-card-hint"></span>
       </div>
       <textarea id="rxOrderNotes" class="bug-textarea" style="min-height:50px;margin-top:8px" placeholder="Notes (optional)"></textarea>
 

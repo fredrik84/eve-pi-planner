@@ -1199,6 +1199,16 @@ sequencing.
 
 ## Recurring batches form a weekly pipeline (2026-09-05)
 
+A recurring order has a calendar anchor as well as an interval. The New order form asks when the
+first batch must be **finished**, shows that date in both local and EVE time, and defaults the picker
+to the next Sunday at the current whole hour. Before creating anything, the browser searches the
+same server-side order preview used by the deadline tool and caps the requested quantity at the
+largest batch whose estimated start-to-finish time fits before that cutoff. It never increases the
+batch or silently moves the finish into Monday. If 200,000 units do not fit, the review states the
+smaller unit target explicitly and the Shopping list is generated from that fitted target. The
+fitted quantity is the recurring batch size; `recurring_next_at` stores its next completion/release
+cutoff and advances by `recurring_interval_days`, preserving the chosen weekday and time.
+
 A recurring order repeats a complete batch, but it does not wait for that batch's final stage before
 planning the next one. There is one warm-up cadence: after cycle one's Stage 1 completes, cycle one's
 Stage 2 and cycle two's Stage 1 are both ready. From then on, a two-stage product delivers one batch

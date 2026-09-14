@@ -296,6 +296,10 @@ class OrderCreateRequest(BaseModel):
     # free — see `_order_report`'s profit block.
     client_price: float | None = None
     recurring_interval_days: float | None = None
+    # Calendar anchor for recurring work: the first batch should be complete by this Unix time.
+    # Thereafter recurring_next_at advances by the interval and remains the next finish/release
+    # boundary. Older clients may omit it and retain the former now+interval behaviour.
+    recurring_finish_at: float | None = None
 
 
 def _next_order_priority(con, context_id: int) -> int:
@@ -342,6 +346,13 @@ def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(req
         raise HTTPException(status_code=400, detail="Recurring cadence must be between 0 and 365 days")
     recurring_days = recurring_days or None
     now = _time.time()
+    recurring_finish = float(req.recurring_finish_at or 0)
+    if recurring_finish and not recurring_days:
+        raise HTTPException(status_code=400, detail="A finish time requires a recurring cadence")
+    if recurring_days and recurring_finish and recurring_finish <= now:
+        raise HTTPException(status_code=400, detail="Recurring finish time must be in the future")
+    recurring_anchor = (recurring_finish if recurring_finish else
+                        now + recurring_days * 86400 if recurring_days else None)
     ensure_reaction_orders_table()
     con = get_connection()
     try:
@@ -353,7 +364,7 @@ def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(req
             (context_id, req.type_id, name, req.target_qty, top_level_runs,
              (req.client_name or "").strip() or None, (req.notes or "").strip() or None, now,
              req.client_price if (req.client_price or 0) > 0 else None,
-             recurring_days, now if recurring_days else None, _next_order_priority(con, context_id)),
+             recurring_days, recurring_anchor, _next_order_priority(con, context_id)),
         ).fetchone()[0]
         con.commit()
         order = _order_row(con, order_id)
@@ -372,7 +383,7 @@ def create_reaction_order(req: OrderCreateRequest, context_id: int = Depends(req
             con = get_connection()
             try:
                 con.execute("UPDATE pp_reaction_orders SET recurring_next_at=? WHERE id=?",
-                            (now + recurring_days * 86400, order_id))
+                            (recurring_anchor, order_id))
                 con.commit()
                 payload["order"] = _order_row(con, order_id)
             finally:
