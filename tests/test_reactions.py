@@ -1675,10 +1675,14 @@ def test_slot_ceiling_defers_to_the_earliest_available_character() -> bool:
 
     ctx = 777199
     cids = (990191, 990192)
+    all_cids = cids + (990193, 990194, 990195)
     ensure_industry_jobs_table()
     ensure_reaction_assignments_table()
     con = get_connection()
     try:
+        marks = ",".join("?" * len(all_cids))
+        con.execute(f"DELETE FROM pp_reaction_assignments WHERE character_id IN ({marks})", all_cids)
+        con.execute(f"DELETE FROM pp_char_industry_jobs WHERE character_id IN ({marks})", all_cids)
         for cid in cids:
             con.execute(
                 "INSERT INTO pp_characters (character_id,character_name,context_id,scopes,"
@@ -1758,6 +1762,15 @@ def test_slot_ceiling_defers_to_the_earliest_available_character() -> bool:
         con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id IN (?,?)", cids)
         con.execute("UPDATE pp_characters SET mass_reactions=4,advanced_mass_reactions=0 "
                     "WHERE character_id=?", (cids[1],))
+        # Equally free alternatives reproduce the live fleet. The guard must not select a fresh
+        # max-slack character for every row and turn seven starts into four character logins.
+        for cid in all_cids[2:]:
+            con.execute(
+                "INSERT INTO pp_characters (character_id,character_name,context_id,scopes,"
+                "mass_reactions,advanced_mass_reactions) VALUES (?,?,?,?,4,0) "
+                "ON CONFLICT (character_id) DO UPDATE SET context_id=excluded.context_id,"
+                "scopes=excluded.scopes,mass_reactions=4,advanced_mass_reactions=0",
+                (cid, f"Spare {cid}", ctx, "read_character_jobs"))
         live = []
         for i in range(8):
             jid = 881000 + i
@@ -1778,7 +1791,8 @@ def test_slot_ceiling_defers_to_the_earliest_available_character() -> bool:
         con.commit()
         reported = enforce_reaction_slot_ceiling(ctx)
         reported_rows = [dict(r) for r in con.execute(
-            "SELECT * FROM pp_reaction_assignments WHERE character_id IN (?,?)", cids)]
+            "SELECT a.* FROM pp_reaction_assignments a JOIN pp_characters c "
+            "ON c.character_id=a.character_id WHERE c.context_id=?", (ctx,))]
         nuori_rows = [r for r in reported_rows if int(r["character_id"]) == cids[0]]
         uittaras_rows = [r for r in reported_rows if int(r["character_id"]) == cids[1]]
         rta_ready = [r for r in nuori_rows
@@ -1788,10 +1802,15 @@ def test_slot_ceiling_defers_to_the_earliest_available_character() -> bool:
         ok &= check(len(uittaras_rows) == 5 and _concurrent_load(uittaras_rows) == 5
                     and reported.get("moved") == 5 and reported.get("promoted") == 5,
                     "the remaining five RTA jobs move to Uittaras's five unused slots")
+        spill_hosts = {int(r["character_id"]) for r in reported_rows
+                       if int(r["type_id"]) == 16657 and int(r["character_id"]) != cids[0]}
+        ok &= check(spill_hosts == {cids[1]},
+                    f"all five overflow jobs share one spill login ({spill_hosts})")
         return ok
     finally:
-        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id IN (?,?)", cids)
-        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id IN (?,?)", cids)
+        marks = ",".join("?" * len(all_cids))
+        con.execute(f"DELETE FROM pp_char_industry_jobs WHERE character_id IN ({marks})", all_cids)
+        con.execute(f"DELETE FROM pp_reaction_assignments WHERE character_id IN ({marks})", all_cids)
         con.execute("DELETE FROM pp_characters WHERE context_id=?", (ctx,))
         con.commit()
         con.close()

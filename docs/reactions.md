@@ -1234,7 +1234,9 @@ eight live RCF rows as `max(7, 8) = 8` and offered all seven to a ten-slot chara
 guard now reads that as `7 + 8 = 15`, exposes only two RTA jobs as startable, and leaves five in the
 overflow phase. That phase first moves them to genuinely free eligible characters (all five fit on
 Uittaras in the reported account), and uses the explicit capacity queue only if the fleet has no
-room. A stored `esi_job_id` is immovable only while that job still occupies a slot in the current
+room. Overflow from the same order generation and stage is packed onto its first spill character
+until full; it is not re-ranked by maximum remaining slack for every row, which spread five starts
+over four unnecessary character logins. A stored `esi_job_id` is immovable only while that job still occupies a slot in the current
 ESI snapshot; a stale binding cannot exempt queued work from the ceiling.
 
 Each generation also preserves the order's exact `assigned_runs` at its top stage. Historical ESI

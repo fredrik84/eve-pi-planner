@@ -3339,8 +3339,15 @@ def enforce_reaction_slot_ceiling(context_id: int) -> dict:
         waiting = sorted((r for r in rows if int(r.get("slot_deferred") or 0)),
                          key=lambda r: (-int(r["priority"] if r.get("priority") is not None else -1),
                                         float(r.get("created_at") or 0.0), int(r["id"])))
+        # Once overflow from one order generation/stage selects another character, fill that
+        # character before opening another login. The old max-slack score was applied afresh to
+        # every row, spraying five identical RTA jobs one each across the free fleet.
+        spill_targets: dict[tuple, set[int]] = {}
         for row in waiting:
             old_cid = int(row["character_id"])
+            spill_key = (row.get("order_id"), round(float(row.get("created_at") or 0.0), 3),
+                         int(row.get("tier_order") or 0))
+            used_spills = spill_targets.setdefault(spill_key, set())
             fits = []
             for cid in chars:
                 trial = dict(row)
@@ -3348,11 +3355,15 @@ def enforce_reaction_slot_ceiling(context_id: int) -> dict:
                 trial["slot_deferred"] = 0
                 load = _concurrent_load(by_char.get(cid, []) + [trial])
                 if load <= capacity[cid]:
-                    fits.append((cid != old_cid, -(capacity[cid] - load), cid))
+                    # Preserve the current host if it fits. Otherwise reuse a spill host already
+                    # opened for this exact batch, then choose the roomiest new character.
+                    fits.append((cid != old_cid, cid not in used_spills,
+                                 -(capacity[cid] - load), cid))
             if fits:
-                _moved, _slack, target = min(fits)
+                _moved, _new_login, _slack, target = min(fits)
                 row["slot_deferred"] = 0
                 if target != old_cid:
+                    used_spills.add(target)
                     by_char[old_cid].remove(row)
                     row["character_id"] = target
                     by_char.setdefault(target, []).append(row)
