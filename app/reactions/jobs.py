@@ -3197,8 +3197,9 @@ def _concurrent_load(rows: list[dict], adding: dict[int, int] | None = None) -> 
 
     **Chain tiers are SEQUENTIAL** — tier 0 must finish before tier 1 can start — so counting every
     row against the slot pool would reject legitimate deep chains that never run simultaneously.
-    What competes for slots is everything sharing a tier_order, so the load is the WORST tier, not
-    the sum. `adding` is {tier_order: rows} for the assignment being considered.
+    What competes inside ONE chain is everything sharing a tier_order, so that chain costs its
+    WORST tier rather than the sum. Independent chains still compete with each other and their
+    peaks must be added. `adding` is {tier_order: rows} for one new independent assignment.
 
     **This is THE slot model** — the assign guard, `_character_capacities` and the dashboard's own
     free-slot count all go through it. They used not to: the guard counted the worst tier while the
@@ -3221,15 +3222,22 @@ def _concurrent_load(rows: list[dict], adding: dict[int, int] | None = None) -> 
     pipeline_load = sum(max((len(cycle) for cycle in order_cycles[oid].values()), default=0)
                         for oid in pipelined_orders)
 
-    per_tier: dict[int, int] = {}
+    # Sequentiality belongs to a chain, not to the integer written in ``tier_order``.  Rolled
+    # Tungsten Alloy stage 0 and an unrelated RCF stage 1 can run at the same time.  Pooling them
+    # globally as {0: 7, 1: 8} returned max=8 and authorised fifteen reservations on Nuori's ten
+    # reactors.  Sum the peak of each independent (order, generation) instead.
+    chains: dict[tuple, dict[int, int]] = {}
     for r in rows:
         if r.get("order_id") is not None and int(r["order_id"]) in pipelined_orders:
             continue
+        chain = round(float(r.get("created_at") or 0.0), 3)
+        key = (int(r["order_id"]) if r.get("order_id") is not None else None, chain)
         t = int(r.get("tier_order") or 0)
+        per_tier = chains.setdefault(key, {})
         per_tier[t] = per_tier.get(t, 0) + 1
-    for t, n in (adding or {}).items():
-        per_tier[t] = per_tier.get(t, 0) + n
-    return pipeline_load + max(per_tier.values(), default=0)
+    independent_load = sum(max(per_tier.values(), default=0) for per_tier in chains.values())
+    added_load = max((adding or {}).values(), default=0)
+    return pipeline_load + independent_load + added_load
 
 
 def enforce_reaction_slot_ceiling(context_id: int) -> dict:
@@ -3265,8 +3273,23 @@ def enforce_reaction_slot_ceiling(context_id: int) -> dict:
         # Jobs that cannot be matched still occupy real reactors, however, and therefore reduce
         # what the planner may reserve. Counting only those orphans avoids double-counting bound
         # jobs while preserving the hard physical ceiling.
-        bound_job_ids = {int(r["esi_job_id"]) for r in rows if r.get("esi_job_id")}
         now = _time.time()
+        live_job_ids = {
+            int(job.get("job_id") or 0)
+            for jobs in cached.values() for job in jobs
+            if job.get("job_id") and _reaction_job_occupies_slot(job, now)
+        }
+        stale_bound = [r for r in rows
+                       if r.get("esi_job_id") and int(r["esi_job_id"]) not in live_job_ids]
+        bindings_cleared = len(stale_bound)
+        if stale_bound:
+            marks = ",".join("?" * len(stale_bound))
+            con.execute(f"UPDATE pp_reaction_assignments SET esi_job_id=NULL "
+                        f"WHERE id IN ({marks})", [int(r["id"]) for r in stale_bound])
+            for row in stale_bound:
+                row["esi_job_id"] = None
+        bound_job_ids = {int(r["esi_job_id"]) for r in rows
+                         if r.get("esi_job_id") and int(r["esi_job_id"]) in live_job_ids}
         for cid, jobs in cached.items():
             orphan_jobs = sum(
                 1 for job in jobs
@@ -3286,7 +3309,8 @@ def enforce_reaction_slot_ceiling(context_id: int) -> dict:
             ceiling = capacity.get(cid, 0)
             while _concurrent_load(char_rows) > ceiling:
                 candidates = [r for r in char_rows
-                              if not r.get("esi_job_id") and not int(r.get("slot_deferred") or 0)]
+                              if int(r.get("esi_job_id") or 0) not in live_job_ids
+                              and not int(r.get("slot_deferred") or 0)]
                 if not candidates:
                     break
                 before = _concurrent_load(char_rows)
@@ -3346,9 +3370,10 @@ def enforce_reaction_slot_ceiling(context_id: int) -> dict:
                 con.execute("UPDATE pp_reaction_assignments SET character_id=? WHERE id=?",
                             (target, int(row["id"])))
                 moved += 1
-        if deferred or moved or promoted:
+        if bindings_cleared or deferred or moved or promoted:
             con.commit()
-        return {"deferred": deferred, "moved": moved, "promoted": promoted}
+        return {"deferred": deferred, "moved": moved, "promoted": promoted,
+                "bindings_cleared": bindings_cleared}
     finally:
         con.close()
 

@@ -1645,6 +1645,12 @@ def test_assigning_twice_does_not_book_it_twice() -> bool:
                 "products sharing a tier compete for slots")
     ok &= check(_concurrent_load(both, {0: 3}) == 5,
                 "and what is being added counts against the tier it lands on")
+    independent = [
+        *[{"order_id": 46, "created_at": 100.0, "tier_order": 1} for _ in range(8)],
+        *[{"order_id": 59, "created_at": 200.0, "tier_order": 0} for _ in range(7)],
+    ]
+    ok &= check(_concurrent_load(independent, {}) == 15,
+                "unrelated orders add their peaks even when their stage numbers differ")
     ok &= check(_concurrent_load([], {}) == 0, "an empty plan occupies nothing")
     ok &= check(_concurrent_load([], {2: 4}) == 4,
                 "a first assignment is measured on its own")
@@ -1743,6 +1749,45 @@ def test_slot_ceiling_defers_to_the_earliest_available_character() -> bool:
             "SELECT * FROM pp_reaction_assignments WHERE character_id=?", (cids[1],))]
         ok &= check(_concurrent_load(char_two_rows) == 9 and third.get("deferred") == 1,
                     "an unmatched live reaction leaves only nine planner reservations beside it")
+
+        # Reported production shape: Nuori has eight bound RCF jobs still running, then seven RTA
+        # rows from an independent order reappear when their old jobs disappear from ESI.  Different
+        # stage numbers do not make unrelated orders sequential, and stale bindings are not physical
+        # facts.  Exactly two RTA rows may be startable; the other five must be queued.
+        con.execute("DELETE FROM pp_reaction_assignments WHERE character_id IN (?,?)", cids)
+        con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id IN (?,?)", cids)
+        con.execute("UPDATE pp_characters SET mass_reactions=4,advanced_mass_reactions=0 "
+                    "WHERE character_id=?", (cids[1],))
+        live = []
+        for i in range(8):
+            jid = 881000 + i
+            live.append({"job_id": jid, "product_type_id": 57457, "status": "active",
+                         "end_date": "2099-09-10T12:00:00Z"})
+            con.execute(
+                "INSERT INTO pp_reaction_assignments "
+                "(character_id,type_id,name,runs,input_cost,reward,created_at,tier_order,order_id,esi_job_id) "
+                "VALUES (?,57457,'RCF',111,0,0,100,1,46,?)", (cids[0], jid))
+        for i in range(7):
+            con.execute(
+                "INSERT INTO pp_reaction_assignments "
+                "(character_id,type_id,name,runs,input_cost,reward,created_at,tier_order,order_id,esi_job_id) "
+                "VALUES (?,16657,'RTA',120,0,0,200,0,59,?)",
+                (cids[0], None if i == 6 else 870000 + i))
+        con.execute("INSERT INTO pp_char_industry_jobs (character_id,jobs_json,fetched_at) VALUES (?,?,1)",
+                    (cids[0], json.dumps(live)))
+        con.commit()
+        reported = enforce_reaction_slot_ceiling(ctx)
+        reported_rows = [dict(r) for r in con.execute(
+            "SELECT * FROM pp_reaction_assignments WHERE character_id IN (?,?)", cids)]
+        nuori_rows = [r for r in reported_rows if int(r["character_id"]) == cids[0]]
+        uittaras_rows = [r for r in reported_rows if int(r["character_id"]) == cids[1]]
+        rta_ready = [r for r in nuori_rows
+                     if int(r["type_id"]) == 16657 and not int(r.get("slot_deferred") or 0)]
+        ok &= check(_concurrent_load(nuori_rows) == 10 and len(rta_ready) == 2,
+                    "eight live RCF jobs leave exactly two of seven independent RTA jobs startable")
+        ok &= check(len(uittaras_rows) == 5 and _concurrent_load(uittaras_rows) == 5
+                    and reported.get("moved") == 5 and reported.get("promoted") == 5,
+                    "the remaining five RTA jobs move to Uittaras's five unused slots")
         return ok
     finally:
         con.execute("DELETE FROM pp_char_industry_jobs WHERE character_id IN (?,?)", cids)

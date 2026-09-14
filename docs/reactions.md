@@ -1227,6 +1227,16 @@ queued layouts against cadence offsets, leaving ESI-bound jobs fixed. This secon
 old plans released before the pipeline rule existed and prevents a later housekeeping pass from
 moving a safe release back onto an already-full reactor character.
 
+Sequential reuse is scoped to **one chain**. Stage 0 of a Rolled Tungsten Alloy order is not below
+stage 1 of an unrelated Reinforced Carbon Fiber order; both can occupy reactors simultaneously, so
+their per-chain peaks add. The global-tier version of this calculation read seven RTA rows plus
+eight live RCF rows as `max(7, 8) = 8` and offered all seven to a ten-slot character. The hard slot
+guard now reads that as `7 + 8 = 15`, exposes only two RTA jobs as startable, and leaves five in the
+overflow phase. That phase first moves them to genuinely free eligible characters (all five fit on
+Uittaras in the reported account), and uses the explicit capacity queue only if the fleet has no
+room. A stored `esi_job_id` is immovable only while that job still occupies a slot in the current
+ESI snapshot; a stale binding cannot exempt queued work from the ceiling.
+
 Each generation also preserves the order's exact `assigned_runs` at its top stage. Historical ESI
 jobs may correct an old row to what the player actually installed, but that is evidence about that
 batch—not a smaller template for every following week. A newly cloned or wholly uninstalled top
