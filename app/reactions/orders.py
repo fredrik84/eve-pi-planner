@@ -10,19 +10,48 @@ from pydantic import BaseModel
 
 from app.sde import get_connection
 from app.esi import require_context
+from app.market import fetch_market_data
+from app.markets import best_local_buy
 
 from app.reactions._router import router
 from app.reactions.graph import (
     _load_goo_and_reached, _explode_shopping_list, _ordered_chain_tiers, reaction_stock_pool, _stock_covered_report,
-    _materials_report, _value_reaction_batch,
+    _materials_report, _value_reaction_batch, _plan_materials, _rows_still_needing_materials,
 )
 from app.reactions.jobs import (
     _character_capacities, ensure_reaction_orders_table, ensure_reaction_assignments_table,
     _allocate_and_insert, formula_concurrency_caps, _cap_jobs, give_back_order_runs,
-    live_reaction_runs, reaction_manual_marks, manual_jobs, _RX_RUNNING,
+    live_reaction_runs, reaction_manual_marks, reaction_manual_mark_records, manual_jobs, _RX_RUNNING,
     _invalidate_dashboard_cache, clone_recurring_cycle, reaction_capacity_snapshot_fresh,
     enforce_reaction_slot_ceiling,
 )
+from app.reactions.settings import effective_reaction_settings
+
+
+def _remaining_order_material_totals(plan_rows: list[dict], jobs_by_character: dict[int, list[dict]],
+                                     marks: list[dict], reached: dict,
+                                     stock: dict[int, float]) -> dict[int, float]:
+    """Raw inputs still needed for an assigned order, excluding jobs already installed/done."""
+    pending = _rows_still_needing_materials(plan_rows, jobs_by_character, marks)
+    # A running precursor still supplies a queued later stage. Keep the whole order's products in
+    # the in-house set, exactly as the combined Shopping tab does for its selected plan.
+    made_in_house = {int(r["type_id"]) for r in plan_rows}
+    return _plan_materials(pending, reached, stock, made_in_house)
+
+
+def _order_sale_scenario(revenue: float | None, production_cost: float,
+                         shipping: float, collateral_pct: float) -> dict:
+    """Net one sale route after production and that route's transport/collateral."""
+    if revenue is None or revenue <= 0:
+        return {"value": None, "shipping": round(shipping, 2), "collateral": None,
+                "profit": None, "margin_pct": None}
+    collateral = revenue * max(0.0, collateral_pct)
+    profit = revenue - production_cost - shipping - collateral
+    return {
+        "value": round(revenue, 2), "shipping": round(shipping, 2),
+        "collateral": round(collateral, 2), "profit": round(profit, 2),
+        "margin_pct": round(profit / revenue * 100, 1),
+    }
 
 
 def _order_report(context_id: int, order: dict) -> dict:
@@ -65,24 +94,47 @@ def _order_report(context_id: int, order: dict) -> dict:
     # Falls back to the target-quantity walk when nothing is assigned yet, which is the quote
     # before any commitment — there are no rows to read and the ideal is the honest answer.
     totals: dict[int, float] = {}
+    cost_totals: dict[int, float] = {}
     plan_rows: list[dict] = []
+    jobs_by_character: dict[int, list[dict]] = {}
     if order.get("id"):
         con = get_connection()
         try:
             plan_rows = [dict(r) for r in con.execute(
                 "SELECT a.character_id, a.type_id, a.name, a.runs, a.tier_order "
                 "FROM pp_reaction_assignments a WHERE a.order_id=?", (order["id"],))]
+            char_ids = sorted({int(r["character_id"]) for r in plan_rows})
+            if char_ids:
+                import json
+                placeholders = ",".join("?" * len(char_ids))
+                for cached in con.execute(
+                    f"SELECT character_id,jobs_json FROM pp_char_industry_jobs "
+                    f"WHERE character_id IN ({placeholders})", char_ids,
+                ):
+                    try:
+                        jobs_by_character[int(cached["character_id"])] = json.loads(
+                            cached["jobs_json"] or "[]")
+                    except (TypeError, ValueError):
+                        jobs_by_character[int(cached["character_id"])] = []
         except Exception:
             plan_rows = []
         finally:
             con.close()
     if plan_rows:
-        from app.reactions.graph import _plan_materials
-        totals = _plan_materials(plan_rows, reached, dict(reaction_stock_pool(context_id)))
+        stock = reaction_stock_pool(context_id)
+        # The copyable table is operational: what remains to buy. Cost below stays financial: the
+        # whole assigned order, so installing a job never makes the customer's job look cheaper.
+        totals = _remaining_order_material_totals(
+            plan_rows, jobs_by_character, reaction_manual_mark_records(context_id), reached,
+            dict(stock),
+        )
+        cost_totals = _plan_materials(plan_rows, reached, dict(stock))
     else:
         _explode_shopping_list(order["type_id"], target_qty, reached, totals,
                                dict(reaction_stock_pool(context_id)))
+        cost_totals = totals
     materials = _materials_report(totals, reached, types)
+    cost_materials = _materials_report(cost_totals, reached, types)
 
     # An order report is pure PRODUCTION cost (materials + job install) — no shipping/collateral and
     # no markup (the user decides what to charge), so it uses _value_reaction_batch with empty
@@ -95,7 +147,7 @@ def _order_report(context_id: int, order: dict) -> dict:
         # total for goo — reuse it rather than a second walk. Job-install fees need their own sum:
         # `own_job_cost_per_run` is a row's OWN fee only, never rolled up into its children's (each
         # tier already has its own plan row, so rolling children in here would double-count them).
-        material_cost = sum(m["unit_cost"] * m["quantity"] for m in materials)
+        material_cost = sum(m["unit_cost"] * m["quantity"] for m in cost_materials)
         job_cost = sum(int(r["runs"] or 0) * reached[int(r["type_id"])].get("own_job_cost_per_run", 0.0)
                        for r in plan_rows if reached.get(int(r["type_id"])))
     else:
@@ -120,13 +172,46 @@ def _order_report(context_id: int, order: dict) -> dict:
     # nothing" rather than "nobody has said". `None` all the way through keeps the two apart.
     price = order.get("client_price")
     price = float(price) if price not in (None, "") else None
+    tid = int(order["type_id"])
+    total_out = top_level_runs * output_qty
+    settings = effective_reaction_settings(context_id)
+    volume = float(types.get(tid, {}).get("volume") or 0.0)
+    export_shipping = total_out * volume * float(settings.get("export_isk_per_m3") or 0.0)
+    collateral_pct = float(settings.get("export_collateral_pct") or 0.0)
+
+    # The agreement remains user-owned. Market comparisons are live alternatives, calculated
+    # independently and never written back into client_price.
+    agreed = _order_sale_scenario(price, total_cost, export_shipping, collateral_pct)
+    jita_row = fetch_market_data([tid]).get(tid, {})
+    jita_unit = float(jita_row.get("buy_price") or 0.0)
+    jita = _order_sale_scenario(total_out * jita_unit if jita_unit > 0 else None,
+                                total_cost, export_shipping, collateral_pct)
+    local_row = best_local_buy(context_id, [tid]).get(tid, {})
+    local_unit = float(local_row.get("buy_price") or 0.0)
+    # A followed local market is assumed at/near the reaction site throughout Reactions pricing,
+    # so it has no Jita export leg. That can make a lower headline bid the better net sale.
+    local = _order_sale_scenario(total_out * local_unit if local_unit > 0 else None,
+                                 total_cost, 0.0, 0.0)
+    routes = [("Jita", jita_unit, jita)] if jita["value"] is not None else []
+    if local["value"] is not None:
+        routes.append((str(local_row.get("market") or "Local market"), local_unit, local))
+    best = max(routes, key=lambda route: route[2]["profit"]) if routes else (None, None, {})
     profit = {
         "client_price": price,
         "price_per_unit": round(price / target_qty, 2) if (price and target_qty) else None,
-        "profit": round(price - total_cost, 2) if price is not None else None,
-        # Margin on the PRICE (what fraction of the invoice is yours to keep), not markup on cost —
-        # it is the number that compares against a market sale, which is also a share of revenue.
-        "margin_pct": round((price - total_cost) / price * 100, 1) if price else None,
+        "profit": agreed["profit"], "margin_pct": agreed["margin_pct"],
+        "shipping_cost": agreed["shipping"], "collateral_cost": agreed["collateral"],
+        "jita_buy_price": round(jita_unit, 2) if jita_unit > 0 else None,
+        "jita_buy_value": jita["value"], "jita_profit": jita["profit"],
+        "jita_margin_pct": jita["margin_pct"], "jita_shipping_cost": jita["shipping"],
+        "jita_collateral_cost": jita["collateral"],
+        "local_market": local_row.get("market"),
+        "local_buy_price": round(local_unit, 2) if local_unit > 0 else None,
+        "local_buy_value": local["value"], "local_profit": local["profit"],
+        "local_margin_pct": local["margin_pct"],
+        "best_market": best[0], "best_buy_price": best[1],
+        "best_buy_value": best[2].get("value"), "best_market_profit": best[2].get("profit"),
+        "best_market_margin_pct": best[2].get("margin_pct"),
     }
 
     stock_covered: dict[int, dict] = {}

@@ -3337,9 +3337,8 @@ function _rxCreateOrder() {
     .finally(() => { if (createBtn) createBtn.disabled = false; });
 }
 
-// What the order EARNS. Only a price the user typed can answer it — an order's revenue is what was
-// negotiated, not a market rate — so with no price this states the cost and says the profit is not
-// set, rather than showing a zero that reads as "this earns nothing".
+// What the order EARNS — keep the user-entered agreement and live liquidation alternatives
+// separate. Market value is comparison evidence; it never overwrites the customer agreement.
 function _rxOrderProfitHtml(data) {
   const p = data.profit || {};
   const id = data.order && data.order.id;
@@ -3348,26 +3347,43 @@ function _rxOrderProfitHtml(data) {
   const editor = !id ? '' : `
     <div class="rx-mkt-search" style="margin-top:8px">
       <input type="number" id="rxOrderPriceEdit" min="0" step="1000000" style="flex:0 1 200px"
-             placeholder="Total ISK for the order" value="${p.client_price == null ? '' : p.client_price}">
+             placeholder="Agreed total ISK (manual)" value="${p.client_price == null ? '' : p.client_price}">
       <button class="pp-add-btn" onclick="_rxSaveOrderPrice(${id})">${p.client_price == null ? 'Set price' : 'Update price'}</button>
       <span id="rxOrderPriceMsg" class="pp-card-hint"></span>
     </div>`;
+  const marketGood = (p.best_market_profit || 0) >= 0;
+  const marketHtml = p.best_buy_value == null
+    ? `<div class="pp-card-hint" style="margin-top:10px;color:var(--clr-amber)">No current Jita or followed-local buy order is available for this product.</div>`
+    : `<div class="pp-card-title" style="margin-top:14px;font-size:14px">Best live buy-order route</div>
+       <div class="rx-manual-preview">
+         <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Sell to</span><b>${_esc(p.best_market)}</b></div>
+         <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Instant-sell value</span><b>${_fmtIsk(p.best_buy_value)}</b></div>
+         <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Buy price / unit</span><b>${_fmtIsk(p.best_buy_price)}</b></div>
+         <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Production cost</span><b>${_fmtIsk(data.cost.total_cost)}</b></div>
+         <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit after transport</span><b class="${marketGood ? 'an-ok' : 'an-bad'}">${_fmtIsk(p.best_market_profit)}</b></div>
+         ${p.best_market_margin_pct == null ? '' : `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Margin</span><b class="${marketGood ? 'an-ok' : 'an-bad'}">${p.best_market_margin_pct.toFixed(1)}%</b></div>`}
+       </div>
+       ${p.local_buy_value != null && p.jita_buy_value != null
+         ? `<div class="pp-card-hint" style="margin-top:5px">Compared net: ${_esc(p.local_market)} ${_fmtIsk(p.local_profit)} profit vs Jita ${_fmtIsk(p.jita_profit)} after configured freight/collateral.</div>`
+         : ''}`;
   if (p.client_price == null) {
-    return `<div class="pp-card-hint" style="margin-top:10px">No price agreed yet — this is what it
-      costs you to produce. Enter what the client pays to see the profit.</div>${editor}`;
+    return `${marketHtml}<div class="pp-card-hint" style="margin-top:10px">No customer price agreed yet. Enter the manual deal price to compare it with the live market.</div>${editor}`;
   }
   const profit = p.profit || 0;
   const good = profit >= 0;
+  const agreedLogistics = (p.shipping_cost || 0) + (p.collateral_cost || 0);
   return `
-    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Profit on this order</div>
+    <div class="pp-card-title" style="margin-top:14px;font-size:14px">Profit at agreed customer price</div>
     <div class="rx-manual-preview">
-      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Client pays</span><b>${_fmtIsk(p.client_price)}</b></div>
-      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Cost to produce</span><b>${_fmtIsk(data.cost.total_cost)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Client pays (manual)</span><b>${_fmtIsk(p.client_price)}</b></div>
+      <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Production cost</span><b>${_fmtIsk(data.cost.total_cost)}</b></div>
+      ${agreedLogistics ? `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Transport &amp; collateral</span><b>${_fmtIsk(agreedLogistics)}</b></div>` : ''}
       <div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Profit</span><b class="${good ? 'an-ok' : 'an-bad'}">${_fmtIsk(profit)}</b></div>
       ${p.margin_pct == null ? '' : `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Margin</span><b class="${good ? 'an-ok' : 'an-bad'}">${p.margin_pct.toFixed(1)}%</b></div>`}
       ${p.price_per_unit == null ? '' : `<div class="rx-manual-preview-row"><span class="rx-manual-preview-label">Per unit</span><b>${_fmtIsk(p.price_per_unit)} sold, ${_fmtIsk(data.cost.cost_per_unit)} to make</b></div>`}
     </div>
     ${good ? '' : '<div class="settings-note"><span>This order costs more to produce than the client is paying.</span></div>'}
+    ${marketHtml}
     ${editor}`;
 }
 
@@ -3513,7 +3529,7 @@ function _rxOrderReportBody(data) {
     <details class="rx-order-materials" style="margin-top:14px">
       <summary class="pp-card-title rx-fold-summary" style="font-size:14px">
         <span class="rx-fold-caret">▸</span>
-        <span>Materials to import <span class="pp-card-hint">— full chain, ${Math.round(o.target_qty).toLocaleString()} units${matCount ? ` · ${matCount} line${matCount === 1 ? '' : 's'} · ${_fmtIsk(matIsk)}` : ''}</span></span>
+        <span>Remaining materials to import <span class="pp-card-hint">— unstarted jobs only; installed jobs already consumed their inputs${matCount ? ` · ${matCount} line${matCount === 1 ? '' : 's'} · ${_fmtIsk(matIsk)}` : ''}</span></span>
         ${matCount ? `<button class="pp-add-btn" onclick="event.preventDefault();event.stopPropagation();_rxCopyOrderMaterials(this)">Copy for Janice</button>` : ''}
       </summary>
       ${materialsHtml}

@@ -394,6 +394,48 @@ def test_recurring_create_refreshes_visible_queue() -> bool:
     return ok
 
 
+def test_order_materials_exclude_an_installed_job() -> bool:
+    """An order's Janice list is remaining work, while its financial cost remains full-order."""
+    from app.reactions.orders import _remaining_order_material_totals
+
+    reached = {
+        500: {"via": {"inputs": [{"type_id": 600, "quantity": 100}], "output_qty": 200}},
+        600: {"via": None},
+    }
+    rows = [
+        {"character_id": 1, "type_id": 500, "runs": 120, "tier_order": 0, "created_at": 1},
+        {"character_id": 1, "type_id": 500, "runs": 119, "tier_order": 0, "created_at": 1},
+    ]
+    jobs = {1: [{"job_id": 7, "product_type_id": 500, "status": "active"}]}
+    totals = _remaining_order_material_totals(rows, jobs, [], reached, {})
+    expected = math.ceil(100 * 119 * (1 - 0.022))
+    ok = check(totals == {600: expected},
+               f"one installed 120-run job leaves only the unstarted 119-run inputs ({totals})")
+    js = open("static/reactions.js", encoding="utf-8").read()
+    ok &= check("Remaining materials to import" in js and "unstarted jobs only" in js,
+                "the order explains why its operational list can be smaller than full-order cost")
+    return ok
+
+
+def test_order_sale_routes_compare_net_profit() -> bool:
+    from app.reactions.orders import _order_sale_scenario
+
+    jita = _order_sale_scenario(800_000_000, 750_000_000, 5_000_000, 0.00625)
+    local = _order_sale_scenario(795_000_000, 750_000_000, 0, 0)
+    agreed = _order_sale_scenario(1_200_000_000, 750_000_000, 5_000_000, 0.00625)
+    ok = check(jita["profit"] == 40_000_000,
+               "Jita profit deducts production, export freight and collateral")
+    ok &= check(local["profit"] == 45_000_000 and local["profit"] > jita["profit"],
+                "a lower local bid wins when avoiding Jita freight yields more net profit")
+    ok &= check(agreed["profit"] == 437_500_000,
+                "the user's agreed customer price remains its own editable scenario")
+    js = open("static/reactions.js", encoding="utf-8").read()
+    ok &= check("Best live buy-order route" in js and "Client pays (manual)" in js
+                and "Compared net:" in js,
+                "the UI separates the agreement and explains the net local/Jita comparison")
+    return ok
+
+
 def test_reactions_phase1_is_task_first() -> bool:
     """The common Reactions path stays automated; manual/risk controls remain secondary."""
     print(f"\n{'='*60}\n  Reactions Phase 1: automated, task-first UI\n{'='*60}")
@@ -2732,7 +2774,9 @@ def main() -> int:
     args = parser.parse_args()
     base = args.url.rstrip("/")
 
-    results = [run_unit_tests(), test_recurring_create_refreshes_visible_queue(),
+    results = [run_unit_tests(), test_order_materials_exclude_an_installed_job(),
+               test_order_sale_routes_compare_net_profit(),
+               test_recurring_create_refreshes_visible_queue(),
                test_reactions_phase1_is_task_first()]
 
     if not args.no_live:

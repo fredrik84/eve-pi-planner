@@ -1245,6 +1245,15 @@ batch—not a smaller template for every following week. A newly cloned or wholl
 stage is divided evenly with a remainder (1,000 runs over nine jobs becomes one 112 and eight 111),
 never rounded down to nine identical 111-run jobs.
 
+An order keeps three economic facts separate. `client_price` is the user's editable agreed sale
+price; the app never replaces it with a market quote. The order report also fetches the current
+Jita buy bid and the best bid across followed local markets. Each route is compared by **net
+profit**: production cost plus configured export freight/collateral for Jita, versus production
+cost without that Jita export leg for a local sale. The higher-profit route is labelled as the best
+live buy-order route, even when its headline unit bid is lower. Starting a job does not reduce the
+full-order production cost, but it does remove that job's already-consumed inputs from the
+copyable **Remaining materials to import** list, matching the combined Shopping tab.
+
 The ESI binder respects the same generation boundary. A later-stage row is ineligible while any
 lower stage in its own `created_at` generation is unfinished. Without that check, an extra live
 final-stage job from the preceding week matched by product alone, consumed a future row, and hid it
