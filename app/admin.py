@@ -20,7 +20,6 @@ from app.cache import cache_get_json, cache_set_json
 from app.esi import (
     require_admin, require_context, is_admin, session_context_id,
     ADMIN_CHARACTERS, ensure_admin_table, _session_lookup,
-    _db_tester_names,
 )
 from app.esi_data import corp_wallet_summary
 

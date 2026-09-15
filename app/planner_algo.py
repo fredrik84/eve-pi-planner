@@ -20,35 +20,24 @@ from app.planner_recommendations import (
 )
 
 def _max_matching_slots(slot_planet_lists: list[list[dict]]) -> int:
-    """
-    Maximum bipartite matching: how many slots can be assigned a unique planet, where
-    each slot has its own independent planet candidate list. Used for per-character
-    feasibility checks where some slots have committed planets.
-    """
-    planet_to_idx: dict[tuple, int] = {}
-    for planets in slot_planet_lists:
-        for p in planets:
-            k = (p["system"], p["planet_num"])
-            if k not in planet_to_idx:
-                planet_to_idx[k] = len(planet_to_idx)
-    n_planets = len(planet_to_idx)
-    adj = [
-        [planet_to_idx[(p["system"], p["planet_num"])]
-         for p in planets if (p["system"], p["planet_num"]) in planet_to_idx]
-        for planets in slot_planet_lists
-    ]
-    match_planet = [-1] * n_planets
+    """Maximum number of slots that can each use a distinct candidate planet.
+    A committed slot has only its pinned planet in its candidate list."""
+    # Most characters need only a handful of the hundreds of candidates. Traverse lazily
+    # rather than indexing every candidate before each feasibility check.
+    match_planet: dict[tuple, int] = {}
 
     def augment(slot, seen):
-        for p in adj[slot]:
-            if p in seen: continue
-            seen.add(p)
-            if match_planet[p] == -1 or augment(match_planet[p], seen):
-                match_planet[p] = slot
+        for planet in slot_planet_lists[slot]:
+            key = (planet["system"], planet["planet_num"])
+            if key in seen:
+                continue
+            seen.add(key)
+            if key not in match_planet or augment(match_planet[key], seen):
+                match_planet[key] = slot
                 return True
         return False
 
-    return sum(1 for s in range(len(slot_planet_lists)) if augment(s, set()))
+    return sum(1 for slot in range(len(slot_planet_lists)) if augment(slot, set()))
 
 
 def _slot_to_planet_list(slot: dict, planet_lists: dict) -> list[dict]:
@@ -1648,5 +1637,4 @@ def _pick_factory_system(req, sys_fac_count: dict[str, int]):
     if sys_fac_count:
         return max(sys_fac_count, key=lambda s: sys_fac_count[s])
     return None
-
 

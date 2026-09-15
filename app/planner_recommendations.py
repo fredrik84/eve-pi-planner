@@ -262,6 +262,12 @@ def _system_recommendations_impl(
                         "value": v, "planet_num": row["planet_num"], "planet_type": row["planet_type"],
                     }
 
+    # Only the top K entries can contribute to a combination's top K. Drop each system's
+    # unused tail once, instead of sorting it again for every pair and triple.
+    for data in sys_data.values():
+        for name, values in data["vals"].items():
+            data["vals"][name] = sorted(values, reverse=True)[:depth_k[name]]
+
     def merge(sys_names):
         merged, vals = {}, {}
         for sname in sys_names:
@@ -399,11 +405,11 @@ def _system_recommendations_impl(
         return True, len(comp) == len(members), (max(ds) if ds else None)
 
     def add(sys_names):
-        m, vals = merge(sys_names)
-        if not any(n in m for n in p0_names):
-            return None
         key = tuple(sorted(sys_names))
         if key in seen:
+            return None
+        m, vals = merge(sys_names)
+        if not any(n in m for n in p0_names):
             return None
         seen.add(key)
         r = make_result(list(sys_names), m, vals)

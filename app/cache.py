@@ -2,7 +2,7 @@
 Optional Redis cache for read-heavy, write-rare data (currently: the /api/characters payload,
 invalidated on rescan / character add-remove rather than a bare TTL).
 
-Entirely opt-in via REDIS_URL. When unset (production, today) every function here is a no-op —
+Entirely opt-in via REDIS_URL. When unset every function here is a no-op —
 callers always have a working DB fallback, so a missing/unreachable Redis degrades to exactly
 today's behavior, never an error.
 """
@@ -22,9 +22,9 @@ def _client():
         return None
     try:
         import redis
-        c = redis.Redis.from_url(REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
-        c.ping()
-        return c
+        # Connection is lazy. Caching a failed startup ping as None disabled Redis for the
+        # worker's lifetime; individual operations already handle outages and can retry later.
+        return redis.Redis.from_url(REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
     except Exception:
         log.exception("redis unavailable, caching disabled")
         return None
@@ -70,10 +70,18 @@ def cache_mget_json(keys: list[str]) -> dict[str, object]:
         return {}
     try:
         raw_values = c.mget(keys)
-        return {k: json.loads(v) for k, v in zip(keys, raw_values) if v is not None}
     except Exception:
         log.exception("cache_mget_json failed")
         return {}
+    result = {}
+    for key, raw in zip(keys, raw_values):
+        if raw is None:
+            continue
+        try:
+            result[key] = json.loads(raw)
+        except (ValueError, TypeError):
+            log.exception("invalid cached JSON for %s", key)
+    return result
 
 
 def cache_mset_json(items: dict, ttl: int = 300):

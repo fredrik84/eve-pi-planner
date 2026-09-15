@@ -28,21 +28,22 @@ def _is_cached_miss(value) -> bool:
     return isinstance(value, dict) and value == _CACHE_MISS
 
 
-def _cached_fetch(type_ids: list[int], local_cache: dict, redis_prefix: str, fuzzworks_fn):
+def _cached_fetch(type_ids: list[int], local_cache: dict, redis_prefix: str, fetch,
+                  *, success_ttl: int = CACHE_TTL):
     """Shared 3-tier lookup: in-process dict (L1) -> Redis (L2, shared across every worker and
     replica — a no-op if REDIS_URL isn't set, degrading exactly to the old L1-only behavior) ->
-    Fuzzworks (L3, the actual network call every cache tier above exists to avoid)."""
+    upstream (L3). Prices and history share cache semantics, with their own success lifetimes."""
     if not type_ids:
         return {}
 
     now = time.monotonic()
     result: dict[int, object] = {}
     missing: list[int] = []
-    for tid in type_ids:
+    for tid in dict.fromkeys(type_ids):
         entry = local_cache.get(tid)
         # A failed upstream lookup is cached briefly too.  Without this, a Fuzzwork outage (or a
         # type omitted from its response) made every page request immediately contact it again.
-        ttl = FAILURE_CACHE_TTL if entry and _is_cached_miss(entry[0]) else CACHE_TTL
+        ttl = FAILURE_CACHE_TTL if entry and _is_cached_miss(entry[0]) else success_ttl
         if entry and now - entry[1] < ttl:
             if not _is_cached_miss(entry[0]):
                 result[tid] = entry[0]
@@ -63,7 +64,7 @@ def _cached_fetch(type_ids: list[int], local_cache: dict, redis_prefix: str, fuz
         else:
             still_missing.append(tid)
     if still_missing:
-        fresh = fuzzworks_fn(still_missing)
+        fresh = fetch(still_missing)
         to_cache = {}
         misses_to_cache = {}
         for tid, val in fresh.items():
@@ -76,8 +77,10 @@ def _cached_fetch(type_ids: list[int], local_cache: dict, redis_prefix: str, fuz
             if tid not in fresh:
                 local_cache[tid] = (_CACHE_MISS, now)
                 misses_to_cache[f"{redis_prefix}{tid}"] = _CACHE_MISS
-        cache_mset_json(to_cache, ttl=CACHE_TTL)
-        cache_mset_json(misses_to_cache, ttl=FAILURE_CACHE_TTL)
+        if to_cache:
+            cache_mset_json(to_cache, ttl=success_ttl)
+        if misses_to_cache:
+            cache_mset_json(misses_to_cache, ttl=FAILURE_CACHE_TTL)
     return result
 
 
@@ -109,74 +112,34 @@ _history_cache: dict[int, tuple[float, float]] = {}
 
 
 def fetch_daily_volume(type_ids: list[int]) -> dict[int, float]:
-    """Average daily traded UNITS over the last HISTORY_DAYS days, per type, from ESI market history
-    for The Forge (Jita's region). This is real trade VELOCITY — how much actually changes hands —
-    the honest basis for "how much can I sell over a run period" (unlike a single order-book depth
-    snapshot). Public endpoint, one call per type (parallelised), cached HISTORY_CACHE_TTL since
-    history only updates ~daily. Missing/failed IDs are omitted (caller falls back to depth)."""
-    if not type_ids:
-        return {}
-    now = time.monotonic()
-    result: dict[int, float] = {}
-    missing: list[int] = []
-    for tid in type_ids:
-        entry = _history_cache.get(tid)
-        ttl = FAILURE_CACHE_TTL if entry and _is_cached_miss(entry[0]) else HISTORY_CACHE_TTL
-        if entry and now - entry[1] < ttl:
-            if not _is_cached_miss(entry[0]):
-                result[tid] = entry[0]
-        else:
-            missing.append(tid)
-    if not missing:
-        return result
+    """Average daily traded units over HISTORY_DAYS, cached for HISTORY_CACHE_TTL.
+    Missing/failed history is omitted; a successful empty history has zero volume."""
+    return _cached_fetch(type_ids, _history_cache, "mkt:hist:", _fetch_history_batch,
+                         success_ttl=HISTORY_CACHE_TTL)
 
-    redis_keys = [f"mkt:hist:{tid}" for tid in missing]
-    redis_hits = cache_mget_json(redis_keys)
-    still_missing = []
-    for tid in missing:
-        v = redis_hits.get(f"mkt:hist:{tid}")
-        if v is not None:
-            _history_cache[tid] = (v, now)
-            if not _is_cached_miss(v):
-                result[tid] = v
-        else:
-            still_missing.append(tid)
-    if still_missing:
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            fetched = dict(zip(still_missing, pool.map(_fetch_one_history, still_missing)))
-        to_cache = {}
-        misses_to_cache = {}
-        for tid, vol in fetched.items():
-            if vol is None:
-                _history_cache[tid] = (_CACHE_MISS, now)
-                misses_to_cache[f"mkt:hist:{tid}"] = _CACHE_MISS
-                continue
-            _history_cache[tid] = (vol, now)
-            result[tid] = vol
-            to_cache[f"mkt:hist:{tid}"] = vol
-        if to_cache:
-            cache_mset_json(to_cache, ttl=HISTORY_CACHE_TTL)
-        if misses_to_cache:
-            cache_mset_json(misses_to_cache, ttl=FAILURE_CACHE_TTL)
-    return result
+
+def _fetch_history_batch(type_ids: list[int]) -> dict[int, float]:
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return {tid: value for tid, value in zip(type_ids, pool.map(_fetch_one_history, type_ids))
+                if value is not None}
 
 
 def _fetch_one_history(type_id: int) -> float | None:
-    # ESI (unlike the Fuzzwork fetches elsewhere in this module), so it goes through esi_http and
-    # counts against the shared error budget.
     from app import esi_http
     try:
-        rows = esi_http.get(
+        response = esi_http.get(
             f"markets/{THE_FORGE_REGION}/history/?datasource=tranquility&type_id={type_id}",
             timeout=10,
-        ).json()
+        )
+        response.raise_for_status()
+        rows = response.json()
+        if not isinstance(rows, list):
+            return None
+        # ESI returns oldest first; only the most recent trading days contribute.
+        vols = [float(r.get("volume", 0) or 0) for r in rows[-HISTORY_DAYS:]]
+        return sum(vols) / len(vols) if vols else 0.0
     except Exception:
         return None
-    if not rows:
-        return 0.0
-    recent = rows[-HISTORY_DAYS:]  # ESI returns oldest→newest; take the last N days
-    vols = [float(r.get("volume", 0) or 0) for r in recent]
-    return (sum(vols) / len(vols)) if vols else 0.0
 
 
 def fetch_market_data(type_ids: list[int]) -> dict[int, dict]:

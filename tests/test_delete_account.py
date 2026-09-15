@@ -114,7 +114,12 @@ def _seed_account(ctx: int, char_ids: list, name_prefix: str):
 
     for t in _CONTEXT_OWNED_TABLES:
         if _table_exists(con, t):
-            _seed_row(con, t, context_id=ctx)
+            extra = {"context_id": ctx}
+            if t == "pp_pi_program_ledger":
+                # The ledger belongs to the account, but its unique key is the original colony
+                # program. Two accounts cannot both seed the generic (0, 0, 0) key.
+                extra.update(character_id=char_ids[0], planet_id=5000, install_ts=1.0)
+            _seed_row(con, t, **extra)
 
     _seed_row(con, "pp_baskets", context_id=ctx, name="test basket")
     bid = con.execute("SELECT id FROM pp_baskets WHERE context_id=?", (ctx,)).fetchone()[0]

@@ -32,7 +32,7 @@ router = APIRouter()
 log = logging.getLogger(__name__)
 
 _ALLOWED_KINDS = ("structure", "region")
-_STRUCTURE_UNREADABLE = {"__market_unavailable__": True}
+_MARKET_UNREADABLE = {"__market_unavailable__": True}
 _MARKET_FAILURE_TTL = 60
 
 
@@ -431,6 +431,19 @@ def _agg_orders(orders: list[dict]) -> dict:
 
 # ── Structure market (authed, whole book) ────────────────────────────────────────────
 
+def _fetch_order_pages(url: str, client, token: str | None = None) -> list[dict]:
+    """A complete order book, or an exception. Partial books cannot be priced or cached."""
+    first = esi_http.get(f"{url}&page=1", client=client, token=token)
+    first.raise_for_status()
+    orders = list(first.json() or [])
+    pages = int(first.headers.get("X-Pages", "1") or 1)
+    for page in range(2, pages + 1):
+        response = esi_http.get(f"{url}&page={page}", client=client, token=token)
+        response.raise_for_status()
+        orders.extend(response.json() or [])
+    return orders
+
+
 def _fetch_structure_orders(context_id: int, structure_id: int) -> list[dict] | None:
     """All orders in an Upwell structure's market, or None if unreadable (no market character,
     expired token, or no docking/market access -> 401/403). None means 'fall through to the next
@@ -442,24 +455,12 @@ def _fetch_structure_orders(context_id: int, structure_id: int) -> list[dict] | 
     if not token:
         return None
     base = f"markets/structures/{structure_id}/?datasource=tranquility"
-    orders: list[dict] = []
     try:
         with esi_http.client(timeout=20) as client:
-            r = esi_http.get(f"{base}&page=1", client=client, token=token)
-            if r.status_code in (401, 403, 404):
-                return None
-            r.raise_for_status()
-            orders.extend(r.json() or [])
-            pages = int(r.headers.get("X-Pages", "1") or 1)
-            for p in range(2, pages + 1):
-                rp = esi_http.get(f"{base}&page={p}", client=client, token=token)
-                if rp.status_code != 200:
-                    break
-                orders.extend(rp.json() or [])
+            return _fetch_order_pages(base, client, token=token)
     except Exception:
         log.warning("structure market fetch failed for %s", structure_id, exc_info=True)
         return None
-    return orders
 
 
 def fetch_structure_market(context_id: int, structure_id: int) -> dict[int, dict]:
@@ -473,7 +474,7 @@ def fetch_structure_market(context_id: int, structure_id: int) -> dict[int, dict
     # Failure is per account: one account may lack structure access while another can read the
     # same book.  Successful books remain safely shared by structure ID.
     failure_key = f"mkt:struct:fail:{context_id}:{structure_id}"
-    if cache_get_json(failure_key) == _STRUCTURE_UNREADABLE:
+    if cache_get_json(failure_key) == _MARKET_UNREADABLE:
         return {}
     orders = _fetch_structure_orders(context_id, structure_id)
     if orders is None:
@@ -481,7 +482,7 @@ def fetch_structure_market(context_id: int, structure_id: int) -> dict[int, dict
         # order and dashboard pricing both traverse this path, that turned one 20-second failure
         # into another upstream call on every page load.  Keep the distinction from a readable,
         # genuinely empty book, but remember the failure briefly before falling through to Jita.
-        cache_set_json(failure_key, _STRUCTURE_UNREADABLE, ttl=_MARKET_FAILURE_TTL)
+        cache_set_json(failure_key, _MARKET_UNREADABLE, ttl=_MARKET_FAILURE_TTL)
         return {}
     by_type: dict[int, list] = {}
     for o in orders:
@@ -502,28 +503,33 @@ def fetch_region_market(region_id: int, type_ids: list[int]) -> dict[int, dict]:
     hits = cache_mget_json(list(keys.values()))
     result: dict[int, dict] = {}
     missing = []
-    for tid in type_ids:
+    for tid in keys:
         v = hits.get(keys[tid])
         if v is not None:
-            result[tid] = v
+            if v != _MARKET_UNREADABLE:
+                result[tid] = v
         else:
             missing.append(tid)
     if missing:
         to_cache = {}
+        failed = {}
         with esi_http.client(timeout=20) as client:
             for tid in missing:
                 try:
-                    r = esi_http.get(
+                    orders = _fetch_order_pages(
                         f"markets/{region_id}/orders/?datasource=tranquility"
                         f"&order_type=all&type_id={tid}", client=client,
                     )
-                    orders = r.json() if r.status_code == 200 else []
                 except Exception:
-                    orders = []
+                    failed[keys[tid]] = _MARKET_UNREADABLE
+                    continue
                 agg = _agg_orders(orders or [])
                 result[tid] = agg
                 to_cache[keys[tid]] = agg
-        cache_mset_json(to_cache, ttl=CACHE_TTL)
+        if to_cache:
+            cache_mset_json(to_cache, ttl=CACHE_TTL)
+        if failed:
+            cache_mset_json(failed, ttl=_MARKET_FAILURE_TTL)
     return result
 
 

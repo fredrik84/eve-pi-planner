@@ -23,7 +23,6 @@ import httpx
 
 from app import esi_http
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
-from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.sde import get_connection, ensure_once

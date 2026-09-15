@@ -26,6 +26,13 @@ Find a section: `grep -n '^## ' docs/pi.md` and read from that line — this fil
 
 ## Planning Algorithm
 
+PI feasibility matching visits candidate planets lazily. A slot already committed to a planet
+still has only that candidate, and planet identity remains `(system, planet_num)`. The matching
+count is unchanged; the planner no longer constructs a full candidate index for each check.
+System recommendations retain only each resource's top-K densities per system before combining
+systems: lower entries cannot contribute to a combination's top K. Duplicate triples are rejected
+before their resource lists are merged. Neither optimization changes scoring or candidate limits.
+
 ### Extractor slot distribution (Bresenham / proportional)
 
 P1 materials are required in different ratios depending on the product. Example for SHPC:

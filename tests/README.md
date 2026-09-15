@@ -21,3 +21,12 @@ docker compose exec -T web python3 tests/test_industry.py --url http://127.0.0.1
 
 The coverage map and notes about local fixture limitations are in
 [`docs/workflow.md`](../docs/workflow.md#test-suites).
+
+CI runs `test_service_refactor.py`, `test_production_allocation.py`, and
+`test_market_cache_contract.py` before publishing an image. These use mocks or in-memory fixtures;
+they need application dependencies but no application database, Redis, ESI, or market connection.
+
+`test_hybrid_setup.py` and `test_redeploy_candidates.py` require their documented local fixtures:
+run `scripts/seed_hybrid_fixture.py` and `scripts/seed_redeploy_fixture.py` in the local test
+container before those API suites. Account-deletion fixtures give each account its own colony
+program key, including in the account-owned historical ledger.

@@ -20,11 +20,11 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once
-from app.esi import require_context, session_context_id
+from app.esi import require_context
 from app.notifiers import make_notifier, CHANNEL_LABELS
 from app.alert_settings import ALERT_KINDS
 from app.alerts import compute_alerts

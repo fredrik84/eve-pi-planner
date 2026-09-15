@@ -310,6 +310,20 @@ reads for this are failing" marker, one amber dot.
 
 ## Local / alliance market pricing (`app/markets.py`, `local_market` flag)
 
+Structure and region order books use the same pagination reader. Every page must succeed before
+the book is aggregated or cached; a partial book is unavailable, while a successfully empty book
+has zero volume. Region failures are remembered for 60 seconds, separately from the normal
+successful-book lifetime. Repeated type IDs trigger one lookup per type.
+
+Jita prices, order-book aggregates and daily trading volume share the same L1/Redis/upstream cache
+logic. Price entries retain their 15-minute lifetime, history six hours, and failures one minute.
+A zero trading volume is a valid cached value. Failed history HTTP responses return an unavailable
+result rather than reaching list-processing code as error objects.
+
+Redis connections are lazy: an outage on a worker's first cache operation does not permanently
+disable its cache. Each later operation can reconnect. A malformed entry in a batch read is treated
+as a miss without discarding the other valid hits.
+
 Reactions pricing can follow one or more **markets** in a priority chain — a player-owned Upwell
 **structure** market and/or a public NPC **region** market — falling back to **Jita** (Fuzzwork,
 `app.market`) for anything not listed locally. Built because an alliance selling inputs below Jita

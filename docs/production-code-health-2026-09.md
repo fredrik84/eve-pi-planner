@@ -1,5 +1,8 @@
 # Reactions and Manufacturing code health — 2026-09-14
 
+Follow-up: [the 2026-09-15 service review](service-code-health-2026-09-15.md) adds a backend CI gate
+and fixes the full-Reactions suite's capacity fixture. The findings below record the original pass.
+
 The core Manufacturing suite is healthy, but the broader production test suite is not green.
 This pass fixed reproducible allocation defects and removed obsolete code. It did not establish
 that every planning path is correct or resolve the existing test failures listed below.

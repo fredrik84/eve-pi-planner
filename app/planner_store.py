@@ -17,12 +17,10 @@ dependency one-directional and cycle-free.
 """
 
 import json as _json
-import os as _os
 import secrets as _secrets
 import time as _time
 
 from fastapi import APIRouter, Body, Cookie, Depends, HTTPException
-from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once, add_columns
 from app.esi import require_context, session_context_id, PI_CHAR_SQL, natural_name_key

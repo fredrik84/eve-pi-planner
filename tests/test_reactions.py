@@ -53,7 +53,7 @@ def _cleanup():
 
 def _seed_session() -> str:
     """A tracked character with real reaction slots (5 levels of Mass Reactions -> 6 slots) and
-    no cached industry jobs — so _character_capacities reports every slot free, letting the
+    a current empty job snapshot — so _character_capacities reports every slot free, letting the
     assign tests actually commit real pp_reaction_assignments rows."""
     token = secrets.token_urlsafe(24)
     con = get_connection()
@@ -2289,11 +2289,18 @@ def _set_feature_state(key: str, state: str) -> str:
 
 def _clear_formula_evidence():
     con = get_connection()
-    for t in ("pp_char_blueprints", "pp_char_formula_jobs", "pp_char_industry_jobs"):
+    for t in ("pp_char_blueprints", "pp_char_formula_jobs"):
         try:
             con.execute(f"DELETE FROM {t} WHERE character_id=?", (FAKE_CID,))
         except Exception:
             pass
+    # Clearing observed formula evidence must not also remove the current capacity snapshot:
+    # order creation correctly refuses automatic placement when that snapshot is missing.
+    con.execute(
+        "INSERT INTO pp_char_industry_jobs (character_id,jobs_json,fetched_at) VALUES (?,?,?) "
+        "ON CONFLICT (character_id) DO UPDATE SET jobs_json=excluded.jobs_json,fetched_at=excluded.fetched_at",
+        (FAKE_CID, "[]", datetime.now(timezone.utc).timestamp()),
+    )
     con.commit()
     con.close()
 
