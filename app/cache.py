@@ -10,6 +10,7 @@ import functools
 import json
 import logging
 import os
+from app.latency import count, timed
 
 log = logging.getLogger(__name__)
 
@@ -30,18 +31,24 @@ def _client():
         return None
 
 
+@timed("redis_read")
 def cache_get_json(key: str):
     c = _client()
     if c is None:
+        count("redis_bypass")
         return None
     try:
         raw = c.get(key)
-        return json.loads(raw) if raw is not None else None
+        value = json.loads(raw) if raw is not None else None
+        count("redis_hit" if value is not None else "redis_miss")
+        return value
     except Exception:
+        count("redis_error")
         log.exception("cache_get_json failed for %s", key)
         return None
 
 
+@timed("redis_write")
 def cache_set_json(key: str, value, ttl: int = 300):
     c = _client()
     if c is None:
@@ -62,28 +69,35 @@ def cache_invalidate(key: str):
         log.exception("cache_invalidate failed for %s", key)
 
 
+@timed("redis_read")
 def cache_mget_json(keys: list[str]) -> dict[str, object]:
     """Batch GET (one round-trip, not N) — returns {key: value} for whichever keys had a
     cached, non-expired value; a miss is simply absent from the result, not an error."""
     c = _client()
     if c is None or not keys:
+        count("redis_bypass", len(keys))
         return {}
     try:
         raw_values = c.mget(keys)
     except Exception:
+        count("redis_error", len(keys))
         log.exception("cache_mget_json failed")
         return {}
     result = {}
     for key, raw in zip(keys, raw_values):
         if raw is None:
+            count("redis_miss")
             continue
         try:
             result[key] = json.loads(raw)
+            count("redis_hit" if result[key] is not None else "redis_miss")
         except (ValueError, TypeError):
+            count("redis_error")
             log.exception("invalid cached JSON for %s", key)
     return result
 
 
+@timed("redis_write")
 def cache_mset_json(items: dict, ttl: int = 300):
     """Batch SETEX via a pipeline (one round-trip, not N)."""
     c = _client()
@@ -136,7 +150,11 @@ def request_memo(key, build):
     """Compute `build()` once per request for `key`, or just call it when no scope is open."""
     store = _REQUEST_MEMO.get()
     if store is None:
+        count("memo_bypass")
         return build()
     if key not in store:
+        count("memo_miss")
         store[key] = build()
+    else:
+        count("memo_hit")
     return store[key]

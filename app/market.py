@@ -4,6 +4,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from app.cache import cache_mget_json, cache_mset_json
+from app.latency import count, timed
 
 FUZZWORKS_URL = "https://market.fuzzwork.co.uk/aggregates/"
 JITA_STATION = 60003760
@@ -45,9 +46,11 @@ def _cached_fetch(type_ids: list[int], local_cache: dict, redis_prefix: str, fet
         # type omitted from its response) made every page request immediately contact it again.
         ttl = FAILURE_CACHE_TTL if entry and _is_cached_miss(entry[0]) else success_ttl
         if entry and now - entry[1] < ttl:
+            count("market_l1_negative_hit" if _is_cached_miss(entry[0]) else "market_l1_hit")
             if not _is_cached_miss(entry[0]):
                 result[tid] = entry[0]
         else:
+            count("market_l1_miss")
             missing.append(tid)
     if not missing:
         return result
@@ -64,7 +67,7 @@ def _cached_fetch(type_ids: list[int], local_cache: dict, redis_prefix: str, fet
         else:
             still_missing.append(tid)
     if still_missing:
-        fresh = fetch(still_missing)
+        fresh = timed("market_upstream")(fetch)(still_missing)
         to_cache = {}
         misses_to_cache = {}
         for tid, val in fresh.items():

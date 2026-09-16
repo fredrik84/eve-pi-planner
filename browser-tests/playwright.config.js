@@ -25,13 +25,18 @@ module.exports = defineConfig({
   projects: [
     {
       name: 'desktop',
-      grepInvert: /@protocol/,
+      grepInvert: /@protocol|@latency/,
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'mobile',
-      grepInvert: /@protocol/,
+      grepInvert: /@protocol|@latency/,
       use: { ...devices['Pixel 7'] },
+    },
+    {
+      name: 'latency',
+      grep: /@latency/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', screenshot: 'off', video: 'off' },
     },
     {
       name: 'protocol',

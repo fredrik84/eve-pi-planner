@@ -75,3 +75,9 @@ steps that install, complete, remove, or clear EVE work out of the default smoke
 Browse to the report server above. The underlying HTML is in
 `browser-tests/artifacts/report/index.html`. A retained `trace.zip` can be opened at
 <https://trace.playwright.dev/> or from a Playwright container.
+
+## Latency benchmarks
+
+For cache-aware page load measurements and backend/database attribution, see
+[the latency benchmark guide](../docs/latency-benchmark.md). Local quick start:
+`BENCH_SAMPLES=10 bash scripts/run_latency_benchmark.sh` from the repository root.

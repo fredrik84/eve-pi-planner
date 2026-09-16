@@ -1041,7 +1041,11 @@ function _loadReactionsDashboard() {
   });
   const load = api('/api/reactions/jobs')
     .catch(e => { throw _rxErr(e, 'Load failed'); })
-    .then(data => { _rxLastDashboardData = data; _renderReactionsDashboard(data); })
+    .then(data => {
+      _rxLastDashboardData = data;
+      _renderReactionsDashboard(data);
+      window.__ppLatencyMark?.('reactions-live');
+    })
     .catch(err => {
       el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
     });

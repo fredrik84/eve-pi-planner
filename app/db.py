@@ -10,6 +10,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
+from app.latency import timed
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 _SQLITE_PATH = Path("data/sde.db")
@@ -278,6 +279,7 @@ class _PgCursor:
         self._cur = pg_cursor
         self._conn = pg_conn
 
+    @timed("db_execute")
     def execute(self, sql: str, params=()):
         sql = _pg_translate(sql)
         try:
@@ -294,19 +296,25 @@ class _PgCursor:
         desc = self._cur.description or []
         return _Row(zip((d[0] for d in desc), raw))
 
+    @timed("db_fetch")
     def fetchone(self):
         return self._row(self._cur.fetchone())
 
+    @timed("db_fetch")
     def fetchall(self):
         return [self._row(r) for r in self._cur.fetchall()]
 
+    @timed("db_fetch")
     def fetchmany(self, size=None):
         rows = self._cur.fetchmany(size) if size is not None else self._cur.fetchmany()
         return [self._row(r) for r in rows]
 
     def __iter__(self):
-        for r in self._cur:
-            yield self._row(r)
+        while True:
+            row = self.fetchone()
+            if row is None:
+                break
+            yield row
 
     @property
     def rowcount(self):
@@ -323,6 +331,7 @@ class _PgConn:
     def __init__(self, pg_conn):
         self._conn = pg_conn
 
+    @timed("db_execute")
     def execute(self, sql: str, params=()) -> _PgCursor:
         sql = _pg_translate(sql)
         cur = self._conn.cursor()
@@ -333,6 +342,7 @@ class _PgConn:
             raise
         return _PgCursor(cur)
 
+    @timed("db_execute")
     def executemany(self, sql: str, seq) -> _PgCursor:
         sql = _pg_translate(sql)
         cur = self._conn.cursor()
@@ -346,6 +356,7 @@ class _PgConn:
     def cursor(self) -> _PgCursor:
         return _PgCursor(self._conn.cursor(), self._conn)
 
+    @timed("db_commit")
     def commit(self):
         self._conn.commit()
 
@@ -492,6 +503,33 @@ def _pg_pool():
     return _PG_POOL
 
 
+class _TimedSQLiteCursor(sqlite3.Cursor):
+    execute = timed("db_execute")(sqlite3.Cursor.execute)
+    executemany = timed("db_execute")(sqlite3.Cursor.executemany)
+    executescript = timed("db_execute")(sqlite3.Cursor.executescript)
+    fetchone = timed("db_fetch")(sqlite3.Cursor.fetchone)
+    fetchall = timed("db_fetch")(sqlite3.Cursor.fetchall)
+    fetchmany = timed("db_fetch")(sqlite3.Cursor.fetchmany)
+    __next__ = timed("db_fetch")(sqlite3.Cursor.__next__)
+
+
+class _TimedSQLiteConnection(sqlite3.Connection):
+    def cursor(self, factory=_TimedSQLiteCursor):
+        return super().cursor(factory)
+
+    def execute(self, *args, **kwargs):
+        return self.cursor().execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        return self.cursor().executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        return self.cursor().executescript(*args, **kwargs)
+
+    commit = timed("db_commit")(sqlite3.Connection.commit)
+
+
+@timed("db_acquire")
 def get_connection():
     """Return a DB connection for user (pp_*) tables. Postgres when DATABASE_URL is set."""
     if _IS_POSTGRES:
@@ -517,7 +555,7 @@ def get_connection():
                 raise
         conn.autocommit = False
         return _PgConn(conn)
-    con = sqlite3.connect(str(_SQLITE_PATH))
+    con = sqlite3.connect(str(_SQLITE_PATH), factory=_TimedSQLiteConnection)
     con.row_factory = _sqlite_row_factory
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA busy_timeout=5000")

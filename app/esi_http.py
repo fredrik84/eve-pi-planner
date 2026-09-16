@@ -30,6 +30,7 @@ import time
 import httpx
 
 from app.cache import cache_get_json, cache_set_json
+from app.latency import timed
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ def _record(resp: httpx.Response) -> None:
         time.sleep(min(reset + 1, 90))
 
 
+@timed("esi_request")
 def request(method: str, url: str, *, token: str | None = None, client: httpx.Client | None = None,
             timeout: float = 20.0, **kw) -> httpx.Response:
     """One ESI call: paced, budget-aware, and identified.

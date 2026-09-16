@@ -116,6 +116,20 @@ def seed():
     print(f"Seeded browser protocol context {CONTEXT_ID}; session={SESSION_TOKEN}")
 
 
+def seed_latency_order():
+    """A small real SDE build so the benchmark exercises planning and localStorage reuse."""
+    con = get_connection()
+    try:
+        con.execute(
+            "INSERT INTO pp_industry_orders "
+            "(context_id, product_type_id, name, quantity, created_at) VALUES (?,?,?,?,?)",
+            (CONTEXT_ID, 587, "Latency fixture: Rifter", 10, datetime.now(timezone.utc).timestamp()),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
 if __name__ == "__main__":
     if "--restore" in sys.argv:
         restore_features()
@@ -123,3 +137,5 @@ if __name__ == "__main__":
         # Recover from an interrupted prior run before taking a fresh snapshot.
         restore_features()
         seed()
+        if "--latency" in sys.argv:
+            seed_latency_order()

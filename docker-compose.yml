@@ -31,6 +31,8 @@ services:
     environment:
       BASE_URL: ${BROWSER_BASE_URL:-http://web:8000}
       PP_SESSION: ${PP_SESSION:-}
+      LATENCY_TOKEN: ${LATENCY_TOKEN:-}
+      BENCH_SAMPLES: ${BENCH_SAMPLES:-5}
     volumes:
       - ./browser-tests/playwright.config.js:/work/playwright.config.js:ro
       - ./browser-tests/tests:/work/tests:ro

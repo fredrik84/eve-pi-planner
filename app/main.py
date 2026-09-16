@@ -49,8 +49,10 @@ from app.industry import router as industry_router, public_router as industry_pu
 from app.groups import router as groups_router
 from app.markets import router as markets_router
 from app.config_io import router as config_io_router
+from app.latency import LatencyMiddleware
 
 app = FastAPI(title="EVE PI Planner")
+app.add_middleware(LatencyMiddleware)
 
 
 @app.middleware("http")

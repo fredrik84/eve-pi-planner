@@ -60,6 +60,7 @@ jobs:
           python tests/test_service_refactor.py
           python tests/test_production_allocation.py
           python tests/test_market_cache_contract.py
+          python tests/test_latency.py
 
   build:
     needs: backend-tests

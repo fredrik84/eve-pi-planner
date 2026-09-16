@@ -353,6 +353,7 @@ async function indRefreshStatus() {
   if (!orders.length) {
     card.style.display = 'none';
     if (empty) empty.style.display = '';     // nothing to check — lead with the call to action
+    window.__ppLatencyMark?.('manufacturing-empty');
     return;
   }
   card.style.display = '';
@@ -369,6 +370,7 @@ async function indRefreshStatus() {
     _indProgress = cached.progress || null;
     _indCacheNames(cached.plan);
     _indPaintStatus(cached.plan, { local: true });
+    window.__ppLatencyMark?.('manufacturing-cached');
   } else {
     body.innerHTML = _indLoadingHtml('Checking your build…', 'Pulling job status and re-planning what is left.');
   }
@@ -378,13 +380,19 @@ async function indRefreshStatus() {
   let d;
   try {
     d = await apiSend('POST', '/api/industry/queue-plan', _indQueueBody());
-    if (d.empty) { card.style.display = 'none'; if (empty) empty.style.display = ''; return; }
+    if (d.empty) {
+      card.style.display = 'none';
+      if (empty) empty.style.display = '';
+      window.__ppLatencyMark?.('manufacturing-empty');
+      return;
+    }
     _indLastPlan = d;
     // Preview mode's fabricated progress must win over the real thing while it's on.
     if (_indSim === null) _indProgress = (d.progress && !d.progress.empty) ? d.progress : null;
     else await indLoadProgress();
     _indCacheNames(d);
     _indPaintStatus(d);
+    window.__ppLatencyMark?.('manufacturing-live');
     _indWritePlanCache(_indQueueSig(orders), d);
   } catch (e) {
     if (!cached) body.innerHTML = `<p class="pp-warn">${_esc(e.message || "Could not plan your queue.")}</p>`;
