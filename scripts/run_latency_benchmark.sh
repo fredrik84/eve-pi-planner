@@ -4,6 +4,9 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
 benchmark_container="eve-pi-latency-$$"
+benchmark_redis="eve-pi-latency-redis-$$"
+benchmark_network="eve-pi-latency-net-$$"
+benchmark_redis_args=()
 benchmark_token="$(openssl rand -hex 24)"
 case "${BENCH_DIAGNOSTICS:-1}" in
   1) benchmark_client_token="$benchmark_token" ;;
@@ -12,9 +15,21 @@ case "${BENCH_DIAGNOSTICS:-1}" in
 esac
 cleanup() {
   docker stop "$benchmark_container" >/dev/null 2>&1 || true
+  docker stop "$benchmark_redis" >/dev/null 2>&1 || true
+  docker network rm "$benchmark_network" >/dev/null 2>&1 || true
   docker compose exec -T web python3 scripts/seed_browser_fixture.py --restore >/dev/null || true
 }
 trap cleanup EXIT
+case "${BENCH_REDIS:-0}" in
+  1)
+    docker network create "$benchmark_network" >/dev/null
+    docker run -d --rm --name "$benchmark_redis" --network "$benchmark_network" \
+      redis:7-alpine redis-server --save '' --appendonly no >/dev/null
+    benchmark_redis_args=(-e "REDIS_URL=redis://$benchmark_redis:6379/0")
+    ;;
+  0) ;;
+  *) echo "BENCH_REDIS must be 0 or 1" >&2; exit 1 ;;
+esac
 docker compose cp scripts/seed_browser_fixture.py web:/srv/app/scripts/seed_browser_fixture.py
 docker compose exec -T web python3 scripts/seed_browser_fixture.py --latency
 # A disposable process avoids changing the normal local server's environment. Its application
@@ -22,8 +37,17 @@ docker compose exec -T web python3 scripts/seed_browser_fixture.py --latency
 # Disable lifecycle jobs so a benchmark worker cannot start duplicate background schedulers.
 docker compose run -d --rm --no-deps --name "$benchmark_container" \
   -e LATENCY_TOKEN="$benchmark_token" \
+  "${benchmark_redis_args[@]}" \
   -v "$project_dir/app:/srv/app/app:ro" -v "$project_dir/static:/srv/app/static:ro" \
   web python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --lifespan off >/dev/null
+if [[ "${BENCH_REDIS:-0}" == 1 ]]; then
+  docker network connect "$benchmark_network" "$benchmark_container"
+  for attempt in $(seq 1 30); do
+    if docker exec "$benchmark_redis" redis-cli ping | grep -q PONG; then break; fi
+    if [[ "$attempt" == 30 ]]; then exit 1; fi
+    sleep 1
+  done
+fi
 for attempt in $(seq 1 30); do
   if docker exec "$benchmark_container" python -c \
     'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/")' >/dev/null 2>&1; then

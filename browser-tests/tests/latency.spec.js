@@ -14,8 +14,13 @@ function distribution(values) {
 test('user page latency and cache matrix @latency', async ({ browser, baseURL }, testInfo) => {
   expect(Boolean(process.env.PP_SESSION), 'Set PP_SESSION for a configured account').toBe(true);
   const samples = Number(process.env.BENCH_SAMPLES || 5);
+  const expiryWait = Number(process.env.BENCH_EXPIRY_WAIT_SECONDS || 0);
+  expect(Number.isInteger(expiryWait) && expiryWait >= 0 && expiryWait <= 60,
+    'BENCH_EXPIRY_WAIT_SECONDS: 0–60').toBe(true);
+  const cacheStates = ['fresh-browser', 'repeat-visit'];
+  if (expiryWait) cacheStates.push('after-expiry-wait');
   expect(Number.isInteger(samples) && samples >= 1 && samples <= 50, 'BENCH_SAMPLES: 1–50').toBe(true);
-  test.setTimeout(samples * 4 * 90_000 + 30_000);
+  test.setTimeout(samples * 2 * (cacheStates.length * 90_000 + expiryWait * 1000) + 30_000);
   const results = [];
   const origin = new URL(baseURL).origin;
   // No account/character IDs, query strings, cookies, bodies or arbitrary URL paths in reports.
@@ -69,7 +74,12 @@ test('user page latency and cache matrix @latency', async ({ browser, baseURL },
           page.on('response', response => {
             if (response.status() >= 400) failures.push(`http-${response.status()}:${label(response.url())}`);
           });
-          for (const cacheState of ['fresh-browser', 'repeat-visit']) {
+          for (const cacheState of cacheStates) {
+            if (cacheState === 'after-expiry-wait') {
+              // Close the document so background polling cannot silently keep caches warm.
+              await page.goto('about:blank');
+              await new Promise(resolve => setTimeout(resolve, expiryWait * 1000));
+            }
             failures = [];
             cachedResponses = 0;
             const response = await page.goto(`/${route}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
@@ -125,7 +135,7 @@ test('user page latency and cache matrix @latency', async ({ browser, baseURL },
   } finally {
     const summary = [];
     for (const route of ['reactions', 'manufacturing']) {
-      for (const cacheState of ['fresh-browser', 'repeat-visit']) {
+      for (const cacheState of cacheStates) {
         const rows = results.filter(r => r.route === route && r.cacheState === cacheState && !r.failures.length);
         const api = rows.flatMap(r => r.resources).filter(r => r.endpoint.startsWith('/api/'));
         const endpoints = [...new Set(api.map(r => r.endpoint))].sort().map(endpoint => {
@@ -146,7 +156,8 @@ test('user page latency and cache matrix @latency', async ({ browser, baseURL },
     const report = {
       schemaVersion: 1, measuredAt: new Date().toISOString(), browser: browser.version(),
       requestedSamples: samples, diagnosticMode: Boolean(process.env.LATENCY_TOKEN),
-      complete: results.length === samples * 4 && results.every(r => !r.failures.length),
+      expiryWaitSeconds: expiryWait,
+      complete: results.length === samples * 2 * cacheStates.length && results.every(r => !r.failures.length),
       caveats: [
         'Sequential desktop Chromium, no network/CPU throttling; this runner location is not every user.',
         'Fresh browser clears HTTP cache and localStorage, NOT Redis, process, DB or upstream caches.',

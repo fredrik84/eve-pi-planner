@@ -6,6 +6,8 @@ Run the local, authenticated Reactions/Manufacturing benchmark:
 BENCH_SAMPLES=10 bash scripts/run_latency_benchmark.sh
 # Natural HTTP caching, without diagnostic response headers:
 BENCH_DIAGNOSTICS=0 BENCH_SAMPLES=10 bash scripts/run_latency_benchmark.sh
+# Private, disposable Redis; also revisit after the 20-second plan cache expires:
+BENCH_REDIS=1 BENCH_EXPIRY_WAIT_SECONDS=25 BENCH_SAMPLES=3 bash scripts/run_latency_benchmark.sh
 ```
 
 Requires the existing local Docker Compose `web` service and its SDE. The wrapper resets the
@@ -14,6 +16,11 @@ disposable worktree-backed server, and restores temporary feature overrides on e
 it alongside the browser protocol (they share that tenant). It does not seed real accounts,
 flush Redis, restart the normal web service, or run duplicate background schedulers. The fixture
 remains available afterward; the next fixture run resets it. Use only with local service data.
+
+`BENCH_REDIS=1` starts a private `redis:7-alpine` container on a temporary network, with no
+published ports or persistence. Only the disposable benchmark server uses it. Cleanup stops it
+and removes the temporary network; all benchmark Redis contents are discarded. Shared Redis is
+never flushed. With the option off, the local server's configured Redis behavior is unchanged.
 
 Results are attached as `latency.json` in `browser-tests/artifacts/results/` and in the existing
 Playwright HTML report (`browser-tests/artifacts/report/index.html`). Artifacts are gitignored
@@ -37,6 +44,11 @@ can have many hits/misses. Negative market-cache hits are successful avoidance o
 retry, not successful price data. No observed cache metric means **unknown/not reached**, not
 zero misses. Endpoint metric distributions include only requests that emitted that metric.
 
+`plan_l1_hit`, `plan_redis_hit`, and `plan_miss` identify the whole Manufacturing response cache.
+`recipe_graph_hit`, `recipe_graph_miss`, and `recipe_graph_load` distinguish static recipe reuse
+from actual graph construction. Concurrent cold graph reads share one construction per worker;
+the existing 15-minute safety expiry remains until the importer has a reliable SDE revision marker.
+
 DB timings cover calls through `app.db`, in both SQLite and PostgreSQL. They include driver and
 row-conversion overhead, not just DB-server CPU. Acquisition includes pool waiting, connection
 creation/liveness and SQLite setup; it can overlap setup queries. Implicit context-manager
@@ -56,6 +68,12 @@ Each sample pair uses a new browser context:
 
 1. **Fresh browser:** empty HTTP cache and localStorage, with an installed login cookie.
 2. **Repeat visit:** another navigation in the same context, retaining HTTP cache and localStorage.
+
+Optional `BENCH_EXPIRY_WAIT_SECONDS` (integer 0–60, default 0) adds **after-expiry-wait**: navigate
+to a blank page to stop document polling, wait the configured duration, and revisit in the same
+context. Use at least 25 seconds to probe the current 20-second plan/dashboard caches. The label
+records a wait, not proof that every cache expired; verify the hit/miss counters. Longer-lived
+reference/recipe caches remain warm. This increases runtime by two waits per sample pair.
 
 The server is **not reset between navigations**. A new browser is not a cold backend. The local
 wrapper starts a new process once, but its DB, Redis and upstream caches may already be warm,

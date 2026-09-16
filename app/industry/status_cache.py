@@ -13,6 +13,7 @@ import json
 import time
 
 from app.cache import cache_get_json, cache_set_json
+from app.latency import count
 
 STATUS_CACHE_TTL = 20
 _MAX_LOCAL = 256
@@ -41,12 +42,15 @@ def get_status(context_id: int, request_options: dict) -> dict | None:
     now = time.time()
     local = _LOCAL.get(key)
     if local and now - local[0] < STATUS_CACHE_TTL:
+        count("plan_l1_hit")
         return copy.deepcopy(local[1])
     if local:
         _LOCAL.pop(key, None)
     cached = cache_get_json(key)
     if cached is None:
+        count("plan_miss")
         return None
+    count("plan_redis_hit")
     _LOCAL[key] = (now, cached)
     return copy.deepcopy(cached)
 

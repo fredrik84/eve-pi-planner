@@ -33,6 +33,7 @@ services:
       PP_SESSION: ${PP_SESSION:-}
       LATENCY_TOKEN: ${LATENCY_TOKEN:-}
       BENCH_SAMPLES: ${BENCH_SAMPLES:-5}
+      BENCH_EXPIRY_WAIT_SECONDS: ${BENCH_EXPIRY_WAIT_SECONDS:-0}
     volumes:
       - ./browser-tests/playwright.config.js:/work/playwright.config.js:ro
       - ./browser-tests/tests:/work/tests:ro

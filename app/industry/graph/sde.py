@@ -1,5 +1,9 @@
 """The SDE recipe graphs and their cache, the EVE material formula, and reachability."""
 import math
+import threading
+import time
+
+from app.latency import count, timed
 
 
 # ── SDE recipe graph loaders ──────────────────────────────────────────────────────────────────
@@ -11,22 +15,27 @@ import math
 # for an SDE rebuild under a long-lived process; a deploy restarts the pod anyway.
 _GRAPH_CACHE: dict[str, tuple[float, dict]] = {}
 _GRAPH_TTL = 900.0
+_GRAPH_LOCK = threading.RLock()
 
 
 def _cached_graph(key: str, con, loader) -> dict[int, dict]:
-    import time as _t
-    hit = _GRAPH_CACHE.get(key)
-    now = _t.time()
-    if hit and now - hit[0] < _GRAPH_TTL:
-        return hit[1]
-    graph = loader(con)
-    _GRAPH_CACHE[key] = (now, graph)
-    return graph
+    # Coalesce cold/expired loads across request threads. Clear uses the same lock so
+    # an in-flight old load cannot repopulate the cache after explicit invalidation.
+    with _GRAPH_LOCK:
+        hit = _GRAPH_CACHE.get(key)
+        if hit and time.monotonic() - hit[0] < _GRAPH_TTL:
+            count("recipe_graph_hit")
+            return hit[1]
+        count("recipe_graph_miss")
+        graph = timed("recipe_graph_load")(loader)(con)
+        _GRAPH_CACHE[key] = (time.monotonic(), graph)
+        return graph
 
 
 def clear_graph_cache():
     """Drop the cached recipe graphs — for an SDE rebuild that has to take effect immediately."""
-    _GRAPH_CACHE.clear()
+    with _GRAPH_LOCK:
+        _GRAPH_CACHE.clear()
 
 
 def load_manufacturing_graph(con) -> dict[int, dict]:

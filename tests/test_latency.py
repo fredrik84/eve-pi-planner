@@ -4,10 +4,75 @@ import os
 import sqlite3
 import sys
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, ".")
 from app import cache, db, latency, market
+from app.industry.graph import sde as recipe_sde
+from app.industry import status_cache
+
+
+class RecipeCacheTests(unittest.TestCase):
+    def tearDown(self):
+        recipe_sde.clear_graph_cache()
+
+    def test_concurrent_loads_are_coalesced(self):
+        recipe_sde.clear_graph_cache()
+        entered, release = Event(), Event()
+
+        def build(_):
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError('loader not released')
+            return {1: {'inputs': []}}
+
+        loader = Mock(side_effect=build)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            first = pool.submit(recipe_sde._cached_graph, 'mfg', None, loader)
+            self.assertTrue(entered.wait(5))
+            others = [pool.submit(recipe_sde._cached_graph, 'mfg', None, loader) for _ in range(7)]
+            release.set()
+            value = first.result()
+            self.assertTrue(all(f.result() is value for f in others))
+        loader.assert_called_once()
+
+    def test_expiry_clear_and_failed_load(self):
+        recipe_sde.clear_graph_cache()
+        loader = Mock(side_effect=[{1: {}}, {2: {}}, RuntimeError('failed'), {3: {}}])
+        with patch.object(recipe_sde.time, 'monotonic', return_value=100):
+            self.assertEqual(recipe_sde._cached_graph('rx', None, loader), {1: {}})
+        with patch.object(recipe_sde.time, 'monotonic', return_value=100 + recipe_sde._GRAPH_TTL):
+            self.assertEqual(recipe_sde._cached_graph('rx', None, loader), {2: {}})
+        recipe_sde.clear_graph_cache()
+        with self.assertRaises(RuntimeError):
+            recipe_sde._cached_graph('rx', None, loader)
+        self.assertEqual(recipe_sde._cached_graph('rx', None, loader), {3: {}})
+
+    def test_clear_cannot_be_undone_by_inflight_load(self):
+        recipe_sde.clear_graph_cache()
+        entered, release, clearing = Event(), Event(), Event()
+
+        def build(_):
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError('loader not released')
+            return {1: {}}
+
+        def clear():
+            clearing.set()
+            recipe_sde.clear_graph_cache()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            load = pool.submit(recipe_sde._cached_graph, 'mfg', None, build)
+            self.assertTrue(entered.wait(5))
+            invalidation = pool.submit(clear)
+            self.assertTrue(clearing.wait(5))
+            release.set()
+            load.result()
+            invalidation.result()
+        self.assertEqual(recipe_sde._GRAPH_CACHE, {})
 
 
 class OperationTests(unittest.TestCase):
@@ -43,6 +108,24 @@ class OperationTests(unittest.TestCase):
                 latency.count('memo_hit')
         finally:
             latency._current.reset(token)
+
+    def test_recipe_and_plan_cache_counters(self):
+        recipe_sde.clear_graph_cache()
+        try:
+            recipe_sde._cached_graph('mfg', None, lambda _: {})
+            recipe_sde._cached_graph('mfg', None, lambda _: self.fail('unexpected reload'))
+        finally:
+            recipe_sde.clear_graph_cache()
+        with patch.object(status_cache, '_LOCAL', {}), \
+                patch.object(status_cache, '_key', return_value='test'), \
+                patch.object(status_cache, 'cache_get_json', side_effect=[None, {'ok': True}]):
+            self.assertIsNone(status_cache.get_status(1, {}))
+            result = status_cache.get_status(1, {})
+            result['ok'] = False
+            self.assertEqual(status_cache.get_status(1, {}), {'ok': True})
+        for name in ['recipe_graph_miss', 'recipe_graph_hit', 'recipe_graph_load',
+                     'plan_miss', 'plan_redis_hit', 'plan_l1_hit']:
+            self.assertEqual(self.measurements.values[name][1], 1, name)
 
     def test_postgres_counts_once_and_rolls_back_errors(self):
         raw = Mock()
