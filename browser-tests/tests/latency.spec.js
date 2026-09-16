@@ -1,6 +1,7 @@
 // Explicit opt-in project; ordinary smoke/protocol runs never run a benchmark.
 const { test, expect } = require('@playwright/test');
 const { installSession } = require('./helpers');
+const { installBrowseGuard } = require('./browse-guard');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
@@ -27,6 +28,8 @@ test('user page latency and cache matrix @latency', async ({ browser, baseURL },
   const label = url => {
     const parsed = new URL(url);
     if (parsed.origin !== origin) return 'external-resource';
+    // Distinguish dashboard loading from its concurrent background refresh.
+    if (parsed.pathname === '/api/reactions/jobs/refresh') return parsed.pathname;
     return parsed.pathname.replace(/\b\d+\b/g, ':id').split('/').slice(0, 4).join('/');
   };
 
@@ -37,6 +40,7 @@ test('user page latency and cache matrix @latency', async ({ browser, baseURL },
         try {
           const page = await context.newPage();
           await installSession(page);
+          if (process.env.BENCH_BROWSE_ONLY === '1') await page.addInitScript(installBrowseGuard);
           await page.addInitScript(({ token, origin }) => {
             window.__ppLatency = { marks: {}, longTasks: [] };
             performance.setResourceTimingBufferSize(2000);
@@ -101,6 +105,7 @@ test('user page latency and cache matrix @latency', async ({ browser, baseURL },
               }));
               return {
                 marks: window.__ppLatency.marks,
+                blockedWrites: window.__ppBlockedWrites || [],
                 documentTtfbMs: nav.responseStart - nav.requestStart,
                 documentDnsMs: nav.domainLookupEnd - nav.domainLookupStart,
                 documentConnectMs: nav.connectEnd - nav.connectStart,
@@ -114,6 +119,7 @@ test('user page latency and cache matrix @latency', async ({ browser, baseURL },
               };
             });
             const liveMs = measurement.marks[`${route}-live`] ?? measurement.marks[`${route}-empty`];
+            failures.push(...measurement.blockedWrites);
             const cachedMs = measurement.marks[`${route}-cached`] ?? null;
             measurement.resources = measurement.resources.map(({ url, ...r }) => ({ endpoint: label(url), ...r }));
             if (process.env.LATENCY_TOKEN && !measurement.resources.some(r => r.serverTiming.some(t => t.name === 'backend'))) {
@@ -156,6 +162,7 @@ test('user page latency and cache matrix @latency', async ({ browser, baseURL },
     const report = {
       schemaVersion: 1, measuredAt: new Date().toISOString(), browser: browser.version(),
       requestedSamples: samples, diagnosticMode: Boolean(process.env.LATENCY_TOKEN),
+      browseOnly: process.env.BENCH_BROWSE_ONLY === '1',
       expiryWaitSeconds: expiryWait,
       complete: results.length === samples * 2 * cacheStates.length && results.every(r => !r.failures.length),
       caveats: [

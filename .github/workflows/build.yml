@@ -43,6 +43,8 @@ jobs:
           node-version: '24'
       - name: Syntax-check every frontend file
         run: for f in static/*.js; do node --check "$f"; done
+      - name: Check browsing-only automation guard
+        run: node tests/test_browse_guard.js
       - name: no-undef
         run: node scripts/lint_js.mjs
 

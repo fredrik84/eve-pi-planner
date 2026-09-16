@@ -91,6 +91,38 @@ definition. Requests still running at collection time are not in completed resou
 
 ## Measuring an existing account/environment
 
+### Owner-authorized production browsing
+
+Operators with cluster exec access can run navigation-only checks for an account whose owner
+has explicitly approved normal browsing side effects:
+
+```bash
+python3 scripts/run_authenticated_benchmark.py --character 'Authorized character name' --samples 1
+```
+
+This resolves one account by exact character name and reuses its latest existing session. It
+does not create sessions, add an authentication endpoint, enable impersonation globally, or
+change account roles. The owner must already have logged in. Credentials are read through a
+read-only DB connection and passed in process memory/stdin, not command-line values, files,
+Docker environment configuration or reports. It does **not** impose a new expiry on the existing
+session or revoke the owner's session after the test. Production URL and namespace are fixed.
+
+Only the latency navigation project runs, with traces/screenshots/video disabled. A browser
+fetch/XHR guard allows GET/HEAD and exactly three automatic POSTs without query parameters:
+reaction job refresh, industry stale-data refresh, and industry queue planning. Explicit order,
+assignment, character and settings mutations, forced refreshes, and beacons are blocked and
+reported as failures. The test does not click action buttons or submit forms.
+
+This is a **runner safeguard, not a server-enforced read-only session**. Normal page loads can
+refresh ESI snapshots, reconcile saved plans and perform automatic reaction handoffs. The owner
+must authorize these normal-browsing effects; it is unsuitable when absolutely no data changes
+are permitted. Never run the mutation-heavy protocol suites with this account. A separate test
+account is still required for create/edit/delete flow coverage. Reports remain local/gitignored.
+
+The guard has an isolated test: `node tests/test_browse_guard.js`.
+
+### Supplying a session yourself
+
 Do **not** run the seeding wrapper against a deployed environment. Use the browser project only:
 
 ```bash
