@@ -85,6 +85,9 @@ service. A genuinely cold-server experiment needs separately isolated DB/Redis/p
 Manufacturing can display its cached last plan before the first server plan returns. Both times
 are recorded. `liveMs` means the **initial server-result paint**, which may itself use backend
 caches—not a guarantee that ESI has refreshed. Background freshness checks can repaint later.
+Reactions also records `statusMs`: jobs and slots are visible, but financial values are still
+loading. Its `liveMs` records the priced dashboard. `readyMs` takes the earliest of cached,
+structural and full-result paints; do not mistake structural readiness for prices being ready.
 `empty: true` explicitly identifies an empty queue; do not compare that to a populated account.
 Network idle (500ms quiet, bounded wait) is a secondary settling observation, not the readiness
 definition. Requests still running at collection time are not in completed resource timings.
@@ -160,6 +163,22 @@ p95 is not an SLO. Keep account workload, build, runner and cache mode fixed for
 No absolute speed threshold is enabled until representative baselines establish one.
 
 ## Regression checks
+
+Reactions cold loads request a price-free status view first, then populate financial tiles from
+the full response. Unknown values are null, displayed as spinners, never provisional zeroes.
+A failed price request preserves the job view and offers a retry. A warm full-dashboard cache
+satisfies the first request directly. Partial and full responses have separate caches with the
+same 20-second TTL and shared invalidation; this does not extend market-data freshness.
+
+Independent adjacent structure books overlap in a process-wide pool of three workers, with
+same-worker cache-miss locking and request-local reuse. Quotes still resolve in configured
+priority order, independently for buy and sell. Bounded lookahead can fetch up to two books
+that ultimately are not needed. Region requests and ESI pacing remain unchanged. The two-phase
+dashboard repeats structural reads/reconciliation on a cold miss; it improves visible readiness
+without claiming to remove all backend work.
+
+`python tests/test_cold_load.py` checks overlap, precedence, cache isolation and invalidation;
+`node tests/test_reaction_progressive.js` checks loaders, deferred values, failure and response races.
 
 `python tests/test_latency.py` checks disabled/authorized diagnostics, concurrency/thread context,
 exception cleanup, SQLite/Postgres timing, and cache hit/miss/negative-cache accounting without

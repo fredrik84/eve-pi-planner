@@ -13,12 +13,15 @@ the reading character is any character in the context that authorised the market
 (`_market_character`, same shape as esi_data._wallet_character for the wallet scope).
 """
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor, wait
+from contextvars import copy_context
 
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
 from app.sde import get_connection, ensure_once, add_columns
-from app.cache import cache_get_json, cache_set_json, cache_mget_json, cache_mset_json
+from app.cache import cache_get_json, cache_set_json, cache_mget_json, cache_mset_json, request_memo
 from app import esi_http
 from app.esi import (
     MARKET_SCOPE, _get_valid_token, require_context,
@@ -34,6 +37,13 @@ log = logging.getLogger(__name__)
 _ALLOWED_KINDS = ("structure", "region")
 _MARKET_UNREADABLE = {"__market_unavailable__": True}
 _MARKET_FAILURE_TTL = 60
+
+# A process-wide bound, not three new threads per request. Only independent structure books
+# overlap; pages within a book and ESI's shared error-budget pacing remain unchanged.
+_BOOK_WORKERS = 3
+_BOOK_POOL = ThreadPoolExecutor(max_workers=_BOOK_WORKERS, thread_name_prefix="market-book")
+_BOOK_LOCKS = [threading.Lock() for _ in range(64)]
+_READER_LOCKS = [threading.Lock() for _ in range(64)]
 
 
 # ── Storage ────────────────────────────────────────────────────────────────────────
@@ -448,10 +458,13 @@ def _fetch_structure_orders(context_id: int, structure_id: int) -> list[dict] | 
     """All orders in an Upwell structure's market, or None if unreadable (no market character,
     expired token, or no docking/market access -> 401/403). None means 'fall through to the next
     market', distinct from [] (readable but empty)."""
-    ch = _market_character(context_id)
-    if not ch:
-        return None
-    token = _get_valid_token(ch["character_id"])
+    # Parallel books for the same account must not concurrently rotate its OAuth token.
+    # Release before the actual order-book fetch so independent network waits overlap.
+    with _READER_LOCKS[int(context_id) % len(_READER_LOCKS)]:
+        ch = _market_character(context_id)
+        if not ch:
+            return None
+        token = _get_valid_token(ch["character_id"])
     if not token:
         return None
     base = f"markets/structures/{structure_id}/?datasource=tranquility"
@@ -464,6 +477,18 @@ def _fetch_structure_orders(context_id: int, structure_id: int) -> list[dict] | 
 
 
 def fetch_structure_market(context_id: int, structure_id: int) -> dict[int, dict]:
+    return request_memo(("structure_market", context_id, structure_id),
+                        lambda: _locked_structure_market(context_id, structure_id))
+
+
+def _locked_structure_market(context_id: int, structure_id: int) -> dict[int, dict]:
+    # Recheck Redis inside the lock: two page-load requests share the first reader's book.
+    # Striped locks bound memory regardless of how many structures have ever been followed.
+    with _BOOK_LOCKS[int(structure_id) % len(_BOOK_LOCKS)]:
+        return _fetch_structure_market_impl(context_id, structure_id)
+
+
+def _fetch_structure_market_impl(context_id: int, structure_id: int) -> dict[int, dict]:
     """{type_id: {buy_price, sell_price, buy_volume, sell_volume}} for one structure. The book is
     identical whoever reads it, so it's Redis-cached by structure_id (shared across accounts that
     follow the same structure) for CACHE_TTL. Unreadable -> {} (caller falls through to Jita)."""
@@ -535,6 +560,44 @@ def fetch_region_market(region_id: int, type_ids: list[int]) -> dict[int, dict]:
 
 # ── Priority resolution (the overlay reactions pricing uses) ──────────────────────────
 
+def _market_books(context_id, markets, wanted):
+    """Yield books in configured order while overlapping up to three adjacent structures.
+
+    Regions retain their exact per-type demand and position. Bounded lookahead may read up to
+    two lower-priority structure books that ultimately aren't needed; it never promotes them
+    over a higher-priority quote. They use normal shared-cache TTLs, not force refreshes.
+    """
+    index = 0
+    while index < len(markets):
+        ids = wanted()
+        if not ids:
+            return
+        market = markets[index]
+        if market["kind"] != "structure":
+            yield market, fetch_region_market(market["location_id"], ids)
+            index += 1
+            continue
+        batch = []
+        while (index < len(markets) and markets[index]["kind"] == "structure"
+               and len(batch) < _BOOK_WORKERS):
+            batch.append(markets[index])
+            index += 1
+        if len(batch) == 1:
+            yield batch[0], fetch_structure_market(context_id, batch[0]["location_id"])
+            continue
+        futures = {mk["location_id"]: _BOOK_POOL.submit(
+            copy_context().run, fetch_structure_market, context_id, mk["location_id"])
+            for mk in {mk["location_id"]: mk for mk in batch}.values()}
+        try:
+            # Finish the bounded batch before yielding: no orphan work after a request finishes.
+            books = {location: future.result() for location, future in futures.items()}
+        finally:
+            wait(futures.values())
+        for mk in batch:
+            if not wanted():
+                return
+            yield mk, books[mk["location_id"]]
+
 def resolve_market_data(context_id: int, type_ids: list[int]) -> dict[int, dict]:
     """Like app.market.fetch_market_data, but walks the account's followed markets in priority
     order and takes the first that quotes each type, falling back to Jita. Each returned entry
@@ -552,15 +615,11 @@ def resolve_market_data(context_id: int, type_ids: list[int]) -> dict[int, dict]
         return {}
     sell_pick: dict[int, tuple[dict, str]] = {}
     buy_pick: dict[int, tuple[dict, str]] = {}
-    for mk in effective_markets(context_id):
-        # Stop early only when BOTH sides are settled for every type.
-        if len(sell_pick) == len(type_ids) and len(buy_pick) == len(type_ids):
-            break
-        want = [t for t in type_ids if t not in sell_pick or t not in buy_pick]
-        if mk["kind"] == "structure":
-            book = fetch_structure_market(context_id, mk["location_id"])
-        else:
-            book = fetch_region_market(mk["location_id"], want)
+    def wanted():
+        return [t for t in type_ids if t not in sell_pick or t not in buy_pick]
+
+    for mk, book in _market_books(context_id, effective_markets(context_id), wanted):
+        want = wanted()
         for tid in want:
             m = book.get(tid)
             if not m:

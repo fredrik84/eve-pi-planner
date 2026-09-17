@@ -4277,6 +4277,7 @@ def _dashboard_cache_key(context_id: int) -> str:
 
 def _invalidate_dashboard_cache(context_id: int) -> None:
     cache_invalidate(_dashboard_cache_key(context_id))
+    cache_invalidate(f"rx:dash:status:{context_id}")
     # Manufacturing's status includes reaction handoff and reaction-job progress. A reaction write
     # therefore changes both dashboards; leaving the Manufacturing copy warm made the two pages
     # disagree until its TTL elapsed.
@@ -4288,7 +4289,7 @@ def _invalidate_dashboard_cache(context_id: int) -> None:
 
 
 @router.get("/api/reactions/jobs")
-def get_industry_jobs(context_id: int = Depends(require_context)):
+def get_industry_jobs(context_id: int = Depends(require_context), include_prices: bool = True):
     """Personal reaction-job status for the Reactions wizard's dashboard page — see
     `_get_industry_jobs_uncached` for the payload shape. Cached for `_DASHBOARD_CACHE_TTL`
     seconds, invalidated on every write that can change it (see `_invalidate_dashboard_cache`)."""
@@ -4296,12 +4297,20 @@ def get_industry_jobs(context_id: int = Depends(require_context)):
     cached = cache_get_json(cache_key)
     if cached is not None:
         return cached
+    if not include_prices:
+        status_key = f"rx:dash:status:{context_id}"
+        cached = cache_get_json(status_key)
+        if cached is not None:
+            return cached
+        result = _get_industry_jobs_uncached(context_id, include_prices=False)
+        cache_set_json(status_key, result, ttl=_DASHBOARD_CACHE_TTL)
+        return result
     result = _get_industry_jobs_uncached(context_id)
     cache_set_json(cache_key, result, ttl=_DASHBOARD_CACHE_TTL)
     return result
 
 
-def _get_industry_jobs_uncached(context_id: int) -> dict:
+def _get_industry_jobs_uncached(context_id: int, *, include_prices: bool = True) -> dict:
     """Personal reaction-job status for the Reactions wizard's dashboard page: currently
     running jobs (from the last refresh), a capacity summary (free slots right now, across
     every character that's opted into tracking), the per-character opt-in breakdown so the UI
@@ -4484,7 +4493,8 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
     # rows anyway as prices move. One bulk fetch across every distinct assigned type_id, same
     # pattern _build_opportunities already uses.
     all_assigned_type_ids = list({r["type_id"] for rows in assignments.values() for r in rows})
-    market_by_type = resolve_market_data(context_id, all_assigned_type_ids) if all_assigned_type_ids else {}
+    market_by_type = (resolve_market_data(context_id, all_assigned_type_ids)
+                      if include_prices and all_assigned_type_ids else {})
 
     # ── Step 4: per character — match running jobs to plan rows, build pending + stages ─────────
     now = _time.time()
@@ -4508,8 +4518,7 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
     # intermediate", replacing the old `input_cost == 0 and reward == 0` proxy.
     all_rows = [a for rows_ in assignments.values() for a in rows_]
     bound_job_ids = {int(a["esi_job_id"]) for a in all_rows if a.get("esi_job_id") is not None}
-    consumed_by_plan = _plan_intermediates(context_id, all_rows)
-    plan_totals = _plan_totals(context_id, all_rows, order_meta,
+    plan_totals = _plan_totals(context_id, all_rows if include_prices else [], order_meta,
                                 cycle_hours_by_type, output_qty_by_type, market_by_type)
     pending_isk_committed = plan_totals["isk_committed"]
     pending_net_profit = plan_totals["net_profit"]
@@ -4752,7 +4761,8 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
     # ── Step 6: fold in unplanned running jobs, then gate stages account-wide ───────────────────
     # Fold in running jobs that had no plan slot (see _unplanned_running_totals) — valued from our
     # own SDE recipe so in-game/corp jobs still count toward the committed totals.
-    up = _unplanned_running_totals(context_id, unplanned_running, output_qty_by_type, cycle_hours_by_type)
+    up = _unplanned_running_totals(context_id, unplanned_running if include_prices else [],
+                                  output_qty_by_type, cycle_hours_by_type)
     pending_isk_committed += up["isk_committed"]          # MATERIALS only, both halves
     pending_output_value += up["output_value"]
     pending_net_profit += up["net_profit"]
@@ -4794,7 +4804,8 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
     ]
 
     free_slots = max(0, total_slots - used_slots)
-    return {
+    result = {
+        "pricing_state": "ready" if include_prices else "loading",
         "tracked": tracked_any,
         "characters": characters,
         "under_production": under_production,
@@ -4832,6 +4843,18 @@ def _get_industry_jobs_uncached(context_id: int) -> dict:
         # much they are worth. Reported so the UI can say that rather than show a confident number.
         "unpriced_orders": plan_totals["unpriced_orders"],
     }
+    if not include_prices:
+        # Unknown is not zero. Internal zero accumulators simplify the structural assembly,
+        # but no provisional financial figure may escape to a consumer as an actual price.
+        for key in result:
+            if key.startswith("pending_"):
+                result[key] = None
+        result["unpriced_orders"] = None
+        for character in result["characters"]:
+            for pending in character.get("pending", []):
+                pending["surplus_isk"] = None
+                pending["recoverable_isk"] = None
+    return result
 
 
 # ── Character slot capacity (used by the advisor and by order allocation) ──────────────────

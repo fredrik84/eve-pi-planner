@@ -119,6 +119,7 @@ test('user page latency and cache matrix @latency', async ({ browser, baseURL },
               };
             });
             const liveMs = measurement.marks[`${route}-live`] ?? measurement.marks[`${route}-empty`];
+            const statusMs = measurement.marks[`${route}-status`] ?? null;
             failures.push(...measurement.blockedWrites);
             const cachedMs = measurement.marks[`${route}-cached`] ?? null;
             measurement.resources = measurement.resources.map(({ url, ...r }) => ({ endpoint: label(url), ...r }));
@@ -127,7 +128,8 @@ test('user page latency and cache matrix @latency', async ({ browser, baseURL },
             }
             const row = {
               route, sample: sample + 1, cacheState, serverCacheState: 'not-reset; observed counters only',
-              readyMs: cachedMs === null ? liveMs : Math.min(cachedMs, liveMs), liveMs, cachedMs,
+              readyMs: Math.min(...[cachedMs, statusMs, liveMs].filter(Number.isFinite)),
+              liveMs, cachedMs, statusMs,
               empty: measurement.marks[`${route}-empty`] !== undefined,
               browserCacheResponses: cachedResponses, settled, failures: [...failures], ...measurement,
             };

@@ -45,6 +45,8 @@ jobs:
         run: for f in static/*.js; do node --check "$f"; done
       - name: Check browsing-only automation guard
         run: node tests/test_browse_guard.js
+      - name: Check progressive reaction rendering
+        run: node tests/test_reaction_progressive.js
       - name: no-undef
         run: node scripts/lint_js.mjs
 
@@ -63,6 +65,7 @@ jobs:
           python tests/test_production_allocation.py
           python tests/test_market_cache_contract.py
           python tests/test_latency.py
+          python tests/test_cold_load.py
 
   build:
     needs: backend-tests

@@ -740,6 +740,7 @@ function _rxUnderProductionWarn(items) {
 // character, so the same number is stamped on every row of the pool. Summing rows would multiply it
 // by the job count; the map is what takes each group exactly once.
 function _rxEaseCostLine(data) {
+  if (data.pricing_state === 'loading' || data.pricing_state === 'error') return '';
   if (!_featureActive('reactions_ease_cost')) return '';
   const groups = new Map();
   (data.characters || []).forEach(c => (c.pending || []).forEach(a => {
@@ -1024,14 +1025,21 @@ async function _rxLoadFormulaPrices(inst, ids) {
 
 
 let _rxLastDashboardData = null;
+let _rxDashboardLoadId = 0;
 
 function _loadReactionsDashboard() {
   const el = document.getElementById('rxDashboardContent');
   if (!el) return;
+  const loadId = ++_rxDashboardLoadId;
+  const firstLoad = !_rxLastDashboardData;
   // Only show the loading flash on a genuinely first/cold load — a refresh after cancelling one
   // assignment updates the cached data in place instead (see _rxCancelAssignment), so this
   // full-reload path only runs on tab-open or after "Clear all", not on every small action.
   if (!_rxLastDashboardData) el.innerHTML = '<div class="pp-loading"><span class="pp-spinner"></span> Loading…</div>';
+  else if (_rxLastDashboardData.pricing_state === 'error') {
+    _rxLastDashboardData = { ..._rxLastDashboardData, pricing_state: 'loading' };
+    _renderReactionsDashboard(_rxLastDashboardData);
+  }
   // Returned so a caller that must not finish before the plan is re-read can wait on it — the
   // levelling pass runs on this endpoint, so "assigned" is not "settled" until it resolves.
   // The cadence is fetched alongside, not before: a failure there must not stop the plan loading,
@@ -1039,15 +1047,30 @@ function _loadReactionsDashboard() {
   if (_rxCadenceDays === null) _rxLoadCadence().then(() => {
     if (_rxLastDashboardData) _renderReactionsDashboard(_rxLastDashboardData);
   });
-  const load = api('/api/reactions/jobs')
-    .catch(e => { throw _rxErr(e, 'Load failed'); })
-    .then(data => {
-      _rxLastDashboardData = data;
-      _renderReactionsDashboard(data);
-      window.__ppLatencyMark?.('reactions-live');
-    })
+  const paint = data => {
+    if (loadId !== _rxDashboardLoadId) return;
+    _rxLastDashboardData = data;
+    _renderReactionsDashboard(data);
+    window.__ppLatencyMark?.(data.pricing_state === 'loading' ? 'reactions-status' : 'reactions-live');
+  };
+  const load = (async () => {
+    if (firstLoad) {
+      // A warm full response comes back here directly; only a genuine miss needs phase two.
+      const status = await api('/api/reactions/jobs?include_prices=false');
+      if (loadId !== _rxDashboardLoadId) return;
+      paint(status);
+      if (status.pricing_state !== 'loading') return;
+    }
+    paint(await api('/api/reactions/jobs'));
+  })()
     .catch(err => {
-      el.innerHTML = `<div class="pp-empty">${_esc(err.message)}</div>`;
+      if (loadId !== _rxDashboardLoadId) return;
+      if (_rxLastDashboardData) {
+        _rxLastDashboardData = { ..._rxLastDashboardData, pricing_state: 'error' };
+        _renderReactionsDashboard(_rxLastDashboardData);
+      } else {
+        el.innerHTML = `<div class="pp-empty">${_esc(_rxErr(err, 'Load failed').message)}</div>`;
+      }
     });
   // Lifetime ledger (forward-only turnover + net profit) — separate, cheap DB-only call; re-renders
   // the metrics once it lands so it never blocks the main dashboard.
@@ -1073,9 +1096,14 @@ function _rxRefreshJobs(force, btn) {
         if (status) status.innerHTML = '<span class="pp-spinner"></span> Rebuilding job status…';
         // The query token also prevents an intermediary/browser from reusing a GET response after
         // the refresh. The server invalidates its own dashboard cache on every successful pull.
+        const loadId = _rxDashboardLoadId;
         const data = await api('/api/reactions/jobs?refresh=' + Date.now());
-        _rxLastDashboardData = data;
-        _renderReactionsDashboard(data);
+        if (loadId === _rxDashboardLoadId) {
+          ++_rxDashboardLoadId; // Older initial-price responses must not overwrite this newer view.
+          _rxLastDashboardData = data;
+          _renderReactionsDashboard(data);
+          window.__ppLatencyMark?.('reactions-live');
+        }
       }
       const recovery = (res && res.automatic_recovery) || {};
       const assigned = (recovery.assigned || []).reduce((n, x) => n + (x.runs || 0), 0);
@@ -1575,12 +1603,20 @@ function _renderReactionsDashboard(data) {
   const totalSlots = reactionPool ? reactionPool.total : data.total_slots;
   const freeSlots = reactionPool ? reactionPool.available : data.free_slots;
   const usedSlots = totalSlots - freeSlots;
-  const overviewTiles = `<div class="an-stats">
-      ${_dashTile(_fmtIsk(data.pending_isk_committed), 'Materials committed')}
-      ${_dashTile(_fmtIsk(data.pending_total_cost), 'Full cost (incl. fees, freight, collateral)')}
-      ${_dashTile(_fmtIsk(data.pending_output_value), 'Expected output value (instant sell)')}
-      ${_dashTile(_fmtIsk(data.pending_net_profit_per_day), 'Expected profit / day',
-                  (data.pending_net_profit_per_day || 0) >= 0 ? 'an-ok' : 'an-bad')}
+  const pricesLoading = data.pricing_state === 'loading';
+  const pricesFailed = data.pricing_state === 'error';
+  const financialValue = value => pricesLoading
+    ? '<span aria-busy="true" aria-label="Loading price"><span class="pp-spinner" aria-hidden="true"></span></span>'
+    : pricesFailed ? 'Unavailable' : _fmtIsk(value);
+  const pricingNotice = pricesLoading
+    ? '<div class="pp-loading" role="status">Updating prices… Jobs and slots are available below.</div>'
+    : pricesFailed ? '<div class="pp-warn" role="status">Prices unavailable. <button type="button" onclick="_loadReactionsDashboard()">Retry prices</button></div>' : '';
+  const overviewTiles = pricingNotice + `<div class="an-stats">
+      ${_dashTile(financialValue(data.pending_isk_committed), 'Materials committed')}
+      ${_dashTile(financialValue(data.pending_total_cost), 'Full cost (incl. fees, freight, collateral)')}
+      ${_dashTile(financialValue(data.pending_output_value), 'Expected output value (instant sell)')}
+      ${_dashTile(financialValue(data.pending_net_profit_per_day), 'Expected profit / day',
+                  pricesLoading || pricesFailed ? '' : (data.pending_net_profit_per_day || 0) >= 0 ? 'an-ok' : 'an-bad')}
       ${_dashTile(`${usedSlots}<span class="an-of"> / ${totalSlots}</span>`, 'Slots used')}
       ${_dashTile(String(pendingCount), 'Jobs to install', pendingCount > 0 ? 'an-warn' : '')}
       ${_dashTile(timeLeftVal, timeLeftLbl)}
