@@ -1281,6 +1281,14 @@ jobs, while the untouched future generation is restored to its exact target. Com
 now show the total (`8 jobs`) rather than an additive badge (`+7`) so the UI cannot turn eight
 allocations into an apparent seven.
 
+The dashboard's recurrence warning offers **Refresh jobs and retry** directly. This uses the
+existing job-refresh endpoint, which updates completion/capacity and retries eligible automatic
+orders; it does not send a second recurrence release. If earlier batches are still running, the
+instruction is to let them finish and refresh again. **Review options** navigates to the order's
+Reactions route before opening its modal, so the controls are visible from the main dashboard.
+The modal offers the same refresh action and explains the secondary choices: skip the overdue
+release to a future cadence, or stop future recurrence. Existing in-game jobs continue.
+
 ## Idea, not backlog: make the ranking aware of what you already hold
 
 **Not planned, not scheduled, and deliberately not in TODO.md** — recorded here so the reasoning

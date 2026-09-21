@@ -187,10 +187,13 @@ function _renderReactionAlerts(data) {
   const blocked = items.filter(a => a.kind === 'recurring_order_blocked');
   const rows = [];
   if (blocked.length) {
-    const tally = blocked.map(a => `<a href="#" onclick="ppSelectTab('rx','orders');_rxOpenOrderDetail(${a.order_id});return false;"><b>${_esc(a.location || 'Order')}</b></a> — ${_esc(a.message || 'not enough free reaction slots')}`).join('<br>');
+    const tally = blocked.map(a => `<div style="margin-top:7px"><b>${_esc(a.location || 'Order')}</b> — ${_esc(a.message || 'Not enough free reaction slots.')}
+      <div style="margin-top:5px"><button onclick="_rxRefreshRecurringOrder(${a.order_id}, this)">Refresh jobs and retry</button>
+      <a href="/reactions/order/${a.order_id}" onclick="switchTab('reactions', {record: {kind: 'order', id: '${a.order_id}'}});return false;">Review options</a>
+      <span role="status" class="pp-card-hint"></span></div></div>`).join('');
     rows.push(`<div class="dash-issue dash-issue-high">
-        <div class="dash-issue-char">${blocked.length} recurring order${blocked.length === 1 ? '' : 's'} need a decision</div>
-        <ul class="dash-issue-items"><li class="dash-il-high">Automatic assignment could not fit. Free slots and retry, skip this cycle, or stop recurrence.<br>${tally}</li></ul>
+        <div class="dash-issue-char">${blocked.length} recurring order${blocked.length === 1 ? ' is' : 's are'} waiting</div>
+        <div class="dash-issue-items">Refresh jobs to update progress and retry automatically. If earlier batches are still running, let them finish, then refresh again.${tally}</div>
       </div>`);
   }
   // Good news first, and styled as such: a chain stage whose inputs have all finished is work you

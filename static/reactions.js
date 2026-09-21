@@ -3681,10 +3681,12 @@ function _renderRxOrderDetail(data) {
   const remaining = o.top_level_runs - o.assigned_runs;
   const recurringBlocked = o.recurring_error ? `
     <div class="rx-reconnect-note" style="margin-top:10px">
-      <b>⚠ This order is queued until capacity is available.</b><br>${_esc(o.recurring_error)}
+      <b>⚠ The next batch is waiting.</b><br>${_esc(o.recurring_error)}
+      ${o.recurring_interval_days ? '<p>Refresh jobs to update progress and retry automatically. If earlier batches are still running, let them finish, then refresh again. Existing jobs keep running. Skip moves the next release to a future cadence; Stop prevents future batches.</p>' : ''}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
-        <button onclick="${o.recurring_interval_days ? `_rxRecurringOrderAction(${o.id}, 'retry')` : `_rxRetryLinkedOrder(${o.id})`}">Retry now</button>
+        <button onclick="${o.recurring_interval_days ? `_rxRefreshRecurringOrder(${o.id}, this)` : `_rxRetryLinkedOrder(${o.id})`}">${o.recurring_interval_days ? 'Refresh jobs and retry' : 'Retry now'}</button>
         ${o.recurring_interval_days ? `<button class="pp-add-btn" onclick="_rxRecurringOrderAction(${o.id}, 'skip')">Skip this cycle</button><button class="pp-danger-btn" onclick="_rxRecurringOrderAction(${o.id}, 'stop')">Stop recurring</button>` : ''}
+        <span role="status" class="pp-card-hint"></span>
       </div>
     </div>` : '';
   const sourceTitle = o.source_state === 'running_after_finish' ? 'Running reactions were kept safe'
@@ -3742,6 +3744,33 @@ function _rxRetryLinkedOrder(orderId) {
       await _rxFetchOrderDetail(orderId); await _rxLoadOrders(); await _loadReactionsDashboard();
     })
     .catch(err => { if (status) status.textContent = err.message; });
+}
+
+async function _rxRefreshRecurringOrder(orderId, btn) {
+  const status = btn.parentElement.querySelector('[role="status"]');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Refreshing…';
+  if (status) status.textContent = 'Updating jobs and retrying eligible work…';
+  try {
+    // Refresh already retries automatic orders. A second recurrence POST could release twice.
+    await apiSend('POST', '/api/reactions/jobs/refresh');
+    const data = await api(`/api/reactions/orders/${orderId}`);
+    const message = data.order.recurring_error || 'Job status updated. No action is needed for this order.';
+    if (status) status.textContent = message;
+    toast(message, data.order.recurring_error ? 'info' : 'success');
+    if (_rxOpenOrderId === orderId) _renderRxOrderDetail(data);
+    if (currentTab() === 'dashboard') await onDashboardTabOpen();
+    else if (currentTab() === 'reactions') {
+      await _rxLoadOrders();
+      await _loadReactionsDashboard();
+    }
+  } catch (err) {
+    if (status) status.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 }
 
 function _rxRecurringOrderAction(orderId, action) {
