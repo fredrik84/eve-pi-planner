@@ -3673,6 +3673,26 @@ async function _rxFindMaxQtyByDeadline(typeId, availableHours, maxQty = null) {
   return { fits: true, qty: lo, report: loReport };
 }
 
+function _rxRecurringRecoveryHtml(orderId, error) {
+  // clone_recurring_cycle persists these waiting reasons in the existing recurrence error field.
+  const waiting = /^The previous recurring cycles must advance/.test(error || '')
+    || /^Waiting for Stage \d+ of the current cycle to finish\./.test(error || '');
+  const instruction = waiting
+    ? 'Keep recurrence enabled. Let running jobs finish; collect their output and start any ready stages in EVE. Job refresh will automatically retry the next batch when enough work has finished.'
+    : 'Refresh jobs to update progress and retry automatically. If assignment is still blocked, the updated reason will be shown.';
+  const action = waiting ? '_rxViewCurrentJobs()' : `_rxRefreshRecurringOrder(${orderId}, this)`;
+  return `<p>${instruction}</p><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:5px">
+    <button onclick="${action}">${waiting ? 'View current jobs' : 'Refresh jobs and retry'}</button>
+    <span role="status" class="pp-card-hint"></span></div>`;
+}
+
+function _rxViewCurrentJobs() {
+  _rxCloseOrderDetail();
+  switchTab('reactions');
+  ppSelectTab('rx', 'overview');
+  document.getElementById('rxOverviewPanel')?.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
 function _renderRxOrderDetail(data) {
   const o = data.order;
   const el = document.getElementById('rxOrderDetailContent');
@@ -3682,11 +3702,10 @@ function _renderRxOrderDetail(data) {
   const recurringBlocked = o.recurring_error ? `
     <div class="rx-reconnect-note" style="margin-top:10px">
       <b>⚠ The next batch is waiting.</b><br>${_esc(o.recurring_error)}
-      ${o.recurring_interval_days ? '<p>Refresh jobs to update progress and retry automatically. If earlier batches are still running, let them finish, then refresh again. Existing jobs keep running. Skip moves the next release to a future cadence; Stop prevents future batches.</p>' : ''}
+      ${o.recurring_interval_days ? _rxRecurringRecoveryHtml(o.id, o.recurring_error) + '<p>Only change the schedule if you want to: Skip moves the next release to a future cadence; Stop prevents future batches. Existing jobs keep running.</p>' : ''}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">
-        <button onclick="${o.recurring_interval_days ? `_rxRefreshRecurringOrder(${o.id}, this)` : `_rxRetryLinkedOrder(${o.id})`}">${o.recurring_interval_days ? 'Refresh jobs and retry' : 'Retry now'}</button>
+        ${!o.recurring_interval_days ? `<button onclick="_rxRetryLinkedOrder(${o.id})">Retry now</button>` : ''}
         ${o.recurring_interval_days ? `<button class="pp-add-btn" onclick="_rxRecurringOrderAction(${o.id}, 'skip')">Skip this cycle</button><button class="pp-danger-btn" onclick="_rxRecurringOrderAction(${o.id}, 'stop')">Stop recurring</button>` : ''}
-        <span role="status" class="pp-card-hint"></span>
       </div>
     </div>` : '';
   const sourceTitle = o.source_state === 'running_after_finish' ? 'Running reactions were kept safe'

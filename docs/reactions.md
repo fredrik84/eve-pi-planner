@@ -1281,13 +1281,14 @@ jobs, while the untouched future generation is restored to its exact target. Com
 now show the total (`8 jobs`) rather than an additive badge (`+7`) so the UI cannot turn eight
 allocations into an apparent seven.
 
-The dashboard's recurrence warning offers **Refresh jobs and retry** directly. This uses the
-existing job-refresh endpoint, which updates completion/capacity and retries eligible automatic
-orders; it does not send a second recurrence release. If earlier batches are still running, the
-instruction is to let them finish and refresh again. **Review options** navigates to the order's
-Reactions route before opening its modal, so the controls are visible from the main dashboard.
-The modal offers the same refresh action and explains the secondary choices: skip the overdue
-release to a future cadence, or stop future recurrence. Existing in-game jobs continue.
+The dashboard and order modal choose the next action from the recorded recurrence reason. A
+backlog or unfinished first stage offers **View current jobs**, not another retry: keep recurrence
+enabled, let running jobs finish, collect output and install ready stages in EVE. Job refresh
+automatically retries the next batch when enough work has finished. Other failures offer
+**Refresh jobs and retry**, using the existing job-refresh endpoint without sending a second
+recurrence release. **Review options** navigates to the order's Reactions route before opening its
+modal, so the controls are visible from the main dashboard. Skip and Stop are explicitly optional
+schedule changes, not requirements to clear a backlog; existing in-game jobs continue.
 
 ## Idea, not backlog: make the ranking aware of what you already hold
 
