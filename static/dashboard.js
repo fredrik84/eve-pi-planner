@@ -188,8 +188,8 @@ function _renderReactionAlerts(data) {
   const rows = [];
   if (blocked.length) {
     const tally = blocked.map(a => `<div style="margin-top:7px"><b>${_esc(a.location || 'Order')}</b> — ${_esc(a.message || 'Not enough free reaction slots.')}
-      <div style="margin-top:5px"><button onclick="_rxRefreshRecurringOrder(${a.order_id}, this)">Refresh jobs and retry</button>
-      <a href="/reactions/order/${a.order_id}" onclick="switchTab('reactions', {record: {kind: 'order', id: '${a.order_id}'}});return false;">Review options</a>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:5px"><button onclick="_rxRefreshRecurringOrder(${a.order_id}, this)">Refresh jobs and retry</button>
+      <a class="ind-link-btn" href="/reactions/order/${a.order_id}" onclick="switchTab('reactions', {record: {kind: 'order', id: '${a.order_id}'}});return false;">Review options</a>
       <span role="status" class="pp-card-hint"></span></div></div>`).join('');
     rows.push(`<div class="dash-issue dash-issue-high">
         <div class="dash-issue-char">${blocked.length} recurring order${blocked.length === 1 ? ' is' : 's are'} waiting</div>
