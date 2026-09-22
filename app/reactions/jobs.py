@@ -607,18 +607,6 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
             "JOIN pp_characters c ON c.character_id=a.character_id WHERE c.context_id=?",
             (context_id,))]
 
-        # Preserve completion before considering newly installed work. A delivered/ready bound
-        # job finishes this generation even if ESI still includes it in the current snapshot.
-        active_by_id = {job["job_id"]: job for job in active}
-        for row in plan_rows:
-            job = active_by_id.get(int(row.get("esi_job_id") or 0))
-            if (job and job["complete"] and int(row["type_id"]) == job["type_id"]
-                    and row.get("last_completed_at") is None):
-                row["last_completed_at"] = job["completed_at"]
-                con.execute("UPDATE pp_reaction_assignments SET last_completed_at=? WHERE id=?",
-                            (job["completed_at"], int(row["id"])))
-                changed += 1
-
         # A later stage in a recurring generation must never claim a still-running job from the
         # preceding generation merely because its product matches. This happened to order 46:
         # the previous cycle had one more live RCF job than plan rows, so the generic oldest-slot
@@ -654,15 +642,28 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
                      and stage < int(row.get("tier_order") or 0)]
             return all(stage_complete(group) for group in lower)
 
+        # Preserve completion before considering newly installed work. A delivered/ready bound
+        # job finishes this generation even if ESI still includes it in the current snapshot.
+        active_by_id = {job["job_id"]: job for job in active}
+        for row in sorted(plan_rows, key=lambda r: int(r.get("tier_order") or 0)):
+            job = active_by_id.get(int(row.get("esi_job_id") or 0))
+            if (job and job["complete"] and int(row["type_id"]) == job["type_id"]
+                    and row.get("last_completed_at") is None and slot_ready(row)):
+                row["last_completed_at"] = job["completed_at"]
+                con.execute("UPDATE pp_reaction_assignments SET last_completed_at=? WHERE id=?",
+                            (job["completed_at"], int(row["id"])))
+                changed += 1
+
         # Repair bindings written before the generation boundary existed. The ESI job remains an
         # orphan (and still consumes capacity); only the future cycle's false claim is removed.
         impossible = [r for r in plan_rows if r.get("esi_job_id") and not slot_ready(r)]
         if impossible:
             marks_sql = ",".join("?" * len(impossible))
-            con.execute(f"UPDATE pp_reaction_assignments SET esi_job_id=NULL WHERE id IN ({marks_sql})",
+            con.execute(f"UPDATE pp_reaction_assignments SET esi_job_id=NULL,last_completed_at=NULL WHERE id IN ({marks_sql})",
                         [int(r["id"]) for r in impossible])
             for row in impossible:
                 row["esi_job_id"] = None
+                row["last_completed_at"] = None
             changed += len(impossible)
         bound = [dict(r) for r in con.execute(
             "SELECT a.id,a.esi_job_id FROM pp_reaction_assignments a JOIN pp_characters c "

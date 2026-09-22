@@ -89,6 +89,15 @@ class RecurringIdentityTests(unittest.TestCase):
         J.bind_reaction_jobs_to_plan(1)
         self.assertIsNone(self.rows()[1]['esi_job_id'])
 
+    def test_legacy_wrong_binding_cannot_complete_a_future_stage(self):
+        self.row(1, 100, job=10, tid=57453)
+        self.row(2, 100, stage=1, job=11)
+        self.snapshot([self.job(10, tid=57453), self.job(11, status='ready')])
+        J.bind_reaction_jobs_to_plan(1)
+        top = self.rows()[1]
+        self.assertIsNone(top['esi_job_id'])
+        self.assertIsNone(top['last_completed_at'])
+
     def test_levelling_uses_bound_ids_and_leaves_future_batch_alone(self):
         self.row(1, 100, runs=111, job=10)
         self.row(2, 100, runs=124, job=11)
