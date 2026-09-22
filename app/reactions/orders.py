@@ -733,7 +733,7 @@ def retry_automatic_orders(context_id: int) -> dict:
                 result = _release_recurring_cycle(int(order["id"]), context_id)
                 assigned.append({"order_id": int(order["id"]),
                                  "runs": int(order["top_level_runs"]) if result.get("released") else 0})
-                if not result.get("released"):
+                if not result.get("released") and not (result.get("waiting") or result.get("backlog")):
                     blocked.append({"order_id": int(order["id"]),
                                     "detail": result["order"].get("recurring_error")})
                 continue
@@ -1015,6 +1015,10 @@ def _release_recurring_cycle(order_id: int, context_id: int) -> dict:
                 nxt += interval
             con.execute("UPDATE pp_reaction_orders SET recurring_error=NULL,recurring_next_at=? WHERE id=?",
                         (nxt, order_id))
+        elif release.get("waiting") or release.get("backlog"):
+            # Existing batches already represent this work. An unfinished pipeline is ordinary
+            # progress, not a failed assignment requiring the user to skip or stop recurrence.
+            con.execute("UPDATE pp_reaction_orders SET recurring_error=NULL WHERE id=?", (order_id,))
         else:
             detail = release.get("error") or "Not enough free reaction slots to assign the whole recurring batch."
             con.execute("UPDATE pp_reaction_orders SET recurring_error=? WHERE id=?", (detail, order_id))

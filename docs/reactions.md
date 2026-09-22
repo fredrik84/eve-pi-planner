@@ -1281,10 +1281,17 @@ jobs, while the untouched future generation is restored to its exact target. Com
 now show the total (`8 jobs`) rather than an additive badge (`+7`) so the UI cannot turn eight
 allocations into an apparent seven.
 
-The dashboard and order modal choose the next action from the recorded recurrence reason. A
-backlog or unfinished first stage offers **View current jobs**, not another retry: keep recurrence
-enabled, let running jobs finish, collect output and install ready stages in EVE. Job refresh
-automatically retries the next batch when enough work has finished. Other failures offer
+Completed order rows are history, not reusable slots for the next ESI job. Binding records a
+finished job before matching new work, and never reopens a completed order row. The leveller and
+stage-progress reader use the bound job ID for order-owned rows; positional same-product matching
+can otherwise rewrite a following batch or make surplus work look like its running stage. The
+capacity-only consumers still use product counts. These boundaries are covered by
+`tests/test_recurring_job_identity.py`, including an overlapping batch and an unrelated surplus job.
+
+A pipeline waiting for its existing stages no longer persists a recurrence assignment error or
+appears in automatic recovery's failed-order list. It keeps its cadence and is retried when job
+refresh detects enough progress. The dashboard and order modal retain **View current jobs** for
+previously recorded waiting reasons until the next retry clears them. Real assignment failures offer
 **Refresh jobs and retry**, using the existing job-refresh endpoint without sending a second
 recurrence release. **Review options** navigates to the order's Reactions route before opening its
 modal, so the controls are visible from the main dashboard. Skip and Stop are explicitly optional

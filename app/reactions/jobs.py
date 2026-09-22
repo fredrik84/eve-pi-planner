@@ -598,6 +598,7 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
                                    "character_id": int(snapshot["character_id"]),
                                    "runs": int(job.get("runs") or 0),
                                    "start_date": job.get("start_date") or "",
+                                   "completed_at": min(_reaction_job_end_timestamp(job) or now, now),
                                    "complete": _reaction_job_complete(job, now)})
         active_ids = {j["job_id"] for j in active}
         plan_rows = [dict(r) for r in con.execute(
@@ -605,6 +606,18 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
             "a.esi_job_id,a.last_completed_at FROM pp_reaction_assignments a "
             "JOIN pp_characters c ON c.character_id=a.character_id WHERE c.context_id=?",
             (context_id,))]
+
+        # Preserve completion before considering newly installed work. A delivered/ready bound
+        # job finishes this generation even if ESI still includes it in the current snapshot.
+        active_by_id = {job["job_id"]: job for job in active}
+        for row in plan_rows:
+            job = active_by_id.get(int(row.get("esi_job_id") or 0))
+            if (job and job["complete"] and int(row["type_id"]) == job["type_id"]
+                    and row.get("last_completed_at") is None):
+                row["last_completed_at"] = job["completed_at"]
+                con.execute("UPDATE pp_reaction_assignments SET last_completed_at=? WHERE id=?",
+                            (job["completed_at"], int(row["id"])))
+                changed += 1
 
         # A later stage in a recurring generation must never claim a still-running job from the
         # preceding generation merely because its product matches. This happened to order 46:
@@ -677,6 +690,7 @@ def bind_reaction_jobs_to_plan(context_id: int) -> int:
                 "JOIN pp_characters c ON c.character_id=a.character_id "
                 "LEFT JOIN pp_reaction_orders o ON o.id=a.order_id "
                 "WHERE c.context_id=? AND a.type_id=? AND a.esi_job_id IS NULL "
+                "AND (a.order_id IS NULL OR a.last_completed_at IS NULL) "
                 "ORDER BY COALESCE(o.priority,-1) DESC,"
                 "CASE WHEN a.last_completed_at IS NOT NULL THEN 0 ELSE 1 END,a.created_at,a.id",
                 (context_id, job["type_id"]),
@@ -1039,18 +1053,8 @@ def _insert_assignment_rows(con, character_id: int, type_id: int, name: str, run
         )
 
 
-def live_reaction_runs(context_id: int) -> dict[tuple[int, int], list[int]]:
-    """Every job this account has RUNNING in game, as (character_id, product_type_id) -> the run
-    count each of those jobs carries, in the order ESI reported them.
-
-    Opens its own connection, so it must be called BEFORE the request connection in
-    `get_industry_jobs` is opened, never inside it — see the two-connections rule there.
-
-    Count-aware on purpose: a product can hold several plan rows on one character (one per slot),
-    and only as many of them are covered as there are jobs actually running. `len(v)` is that count;
-    the list itself is what lets a row adopt the run count really installed rather than the one the
-    plan proposed.
-    """
+def _live_reaction_jobs(context_id: int) -> dict[int, list[dict]]:
+    """Current slot-occupying jobs, retaining ESI identities for generation-safe reconciliation."""
     con = get_connection()
     try:
         cached = {r["character_id"]: _json.loads(r["jobs_json"] or "[]")
@@ -1060,12 +1064,21 @@ def live_reaction_runs(context_id: int) -> dict[tuple[int, int], list[int]]:
                       "WHERE c.context_id = ?", (context_id,))}
     finally:
         con.close()
+    return {int(cid): [job for job in jobs or [] if _reaction_job_occupies_slot(job)]
+            for cid, jobs in cached.items()}
+
+
+def live_reaction_runs(context_id: int) -> dict[tuple[int, int], list[int]]:
+    """Running job counts by character/product for capacity-only consumers.
+
+    Callers reconciling saved plan rows must use ESI job identity instead of these positional lists.
+    Opens its own connection; call before holding another request connection.
+    """
     out: dict[tuple[int, int], list[int]] = {}
-    for cid, jobs in cached.items():
-        for job in jobs or []:
-            if _reaction_job_occupies_slot(job):
-                out.setdefault((int(cid), int(job.get("product_type_id") or 0)),
-                               []).append(int(job.get("runs") or 0))
+    for cid, jobs in _live_reaction_jobs(context_id).items():
+        for job in jobs:
+            out.setdefault((cid, int(job.get("product_type_id") or 0)),
+                           []).append(int(job.get("runs") or 0))
     return out
 
 
@@ -1424,6 +1437,12 @@ def chain_stage_state(rows: list[dict], jobs: list[dict], now: float,
                         done += 1
                     else:
                         running += 1
+                    continue
+                if r.get("order_id") is not None:
+                    # An unbound surplus job cannot stand in for a future order generation.
+                    # Completed order rows retain their history after ESI drops the job.
+                    if r.get("last_completed_at") is not None:
+                        done += 1
                     continue
                 # Recurring work can have a finished PRIOR cycle and an active CURRENT cycle of
                 # the same product in the ESI snapshot together. Current work wins: spending the
@@ -2224,7 +2243,7 @@ def level_product_runs(context_id: int) -> int:
     # ── Step 1: load every assignment row for this account ──────────────────────────────────────
     ensure_reaction_assignments_table()
     rows = _plan_rows(context_id, "a.id, a.character_id, a.type_id, a.name, a.runs, a.input_cost, a.reward, "
-                      "a.created_at, a.order_id, COALESCE(a.tier_order,0) AS tier_order, "
+                      "a.created_at, a.order_id, a.esi_job_id, COALESCE(a.tier_order,0) AS tier_order, "
                       # ...and what the LAST pass wrote down about what this layout cost, so an
                       # unchanged plan can be left genuinely untouched rather than re-stamped with
                       # the same four numbers on every dashboard load.
@@ -2248,28 +2267,36 @@ def level_product_runs(context_id: int) -> int:
     frozen: set[int] = set()
     orphan_running: dict[int, int] = {}
     try:
-        live_runs = live_reaction_runs(context_id)
-        live = {k: len(v) for k, v in live_runs.items()}
+        live_jobs = _live_reaction_jobs(context_id)
+        by_id = {int(j["job_id"]): j for jobs in live_jobs.values() for j in jobs if j.get("job_id")}
+        bound_ids = {int(r["esi_job_id"]) for r in rows if r.get("esi_job_id")}
+        live: dict[tuple[int, int], int] = {}
+        unbound_runs: dict[tuple[int, int], list[int]] = {}
+        for cid, jobs in live_jobs.items():
+            for job in jobs:
+                key = (cid, int(job.get("product_type_id") or 0))
+                live[key] = live.get(key, 0) + 1
+                if int(job.get("job_id") or 0) not in bound_ids:
+                    unbound_runs.setdefault(key, []).append(int(job.get("runs") or 0))
         adopt: list[tuple] = []
-        # Freeze the WHOLE (character, product, stage) group once any of its jobs is running — not
-        # just the matched rows. Freezing row-by-row left the untouched siblings alone in the pass,
-        # which re-levelled them against a requirement the frozen ones no longer contributed to and
-        # deleted one outright. Once you have started installing a product, its layout is settled.
-        started = {(int(cid), int(tid)) for (cid, tid), n in live.items() if n > 0}
+        # Keep an installed product's layout stable, but only its exact bound job can change an
+        # order row's run count. Extra/old jobs must not overwrite next week's pending rows.
+        started = set(live)
         for r in sorted(rows, key=lambda r: r["id"]):
             k = (int(r["character_id"]), int(r["type_id"]))
             if k in started:
                 frozen.add(int(r["id"]))
-            if live.get(k, 0) > 0:
-                live[k] -= 1
-                # ...and the row takes the run count the job REALLY carries. A plan that says 113
-                # where the reactor is running 120 is lying about what will be made, which is what
-                # the under-production warning and every materials figure are computed from.
-                got = live_runs.get(k) or []
-                real = got.pop(0) if got else None
-                if real and real != int(r["runs"] or 0):
-                    adopt.append((real, int(r["id"])))
-                    r["runs"] = real
+            job = by_id.get(int(r.get("esi_job_id") or 0))
+            real = None
+            if job and int(job.get("product_type_id") or 0) == k[1]:
+                real = int(job.get("runs") or 0)
+                live[k] = max(0, live.get(k, 0) - 1)
+            elif r.get("order_id") is None and not r.get("esi_job_id") and unbound_runs.get(k):
+                real = unbound_runs[k].pop(0)
+                live[k] = max(0, live.get(k, 0) - 1)
+            if real and real != int(r["runs"] or 0):
+                adopt.append((real, int(r["id"])))
+                r["runs"] = real
         if adopt:
             con = get_connection()
             try:

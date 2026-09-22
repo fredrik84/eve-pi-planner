@@ -182,7 +182,7 @@ def _stage_ready_alerts(context_id: int, muted: set, now: float) -> list[dict]:
     try:
         rows = [dict(r) for r in con.execute(
             "SELECT a.character_id, a.type_id, a.name, a.created_at, "
-            "a.esi_job_id, a.last_completed_at, "
+            "a.order_id, a.esi_job_id, a.last_completed_at, "
             "COALESCE(a.tier_order,0) AS tier_order, c.character_name "
             "FROM pp_reaction_assignments a JOIN pp_characters c ON c.character_id = a.character_id "
             "WHERE c.context_id=?", (context_id,))]
