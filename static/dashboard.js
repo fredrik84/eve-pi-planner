@@ -170,19 +170,18 @@ function _renderSyncWarn(data) {
 }
 
 // Reactions alerts (app.alerts._reaction_alerts), one per character per kind:
-//  • reaction_finishing_soon — soonest RUNNING job has less than the configured
-//    reaction_refill_hours left (a lead-time warning).
+// Running jobs belong in the completion countdown, not the actionable alert card.
 //  • reaction_completed — one or more jobs have FINISHED and are sitting idle; go collect the
 //    output and restart the slot.
 //  • reaction_stage_ready — a later stage of a chain can be started now: everything below it in
 //    that chain has finished. The one alert here that is an opportunity, not a problem.
 function _renderReactionAlerts(data) {
-  const items = data.reaction_alerts;
-  if (!items || !items.length) return '';
+  const items = (data.reaction_alerts || []).filter(a =>
+    ['reaction_completed', 'reaction_stage_ready', 'recurring_order_blocked'].includes(a.kind));
+  if (!items.length) return '';
   // ONE row per KIND (not per character) with an inline per-character tally — a whole fleet of
   // completed reactions collapses to a single line instead of one card each, which filled the screen.
   const done = items.filter(a => a.kind === 'reaction_completed');
-  const soon = items.filter(a => a.kind === 'reaction_finishing_soon');
   const ready = items.filter(a => a.kind === 'reaction_stage_ready');
   const blocked = items.filter(a => a.kind === 'recurring_order_blocked');
   const rows = [];
@@ -213,14 +212,6 @@ function _renderReactionAlerts(data) {
     rows.push(`<div class="dash-issue dash-issue-warn">
         <div class="dash-issue-char">${totalRuns.toLocaleString()} completed · ${done.length} character${done.length === 1 ? '' : 's'}</div>
         <ul class="dash-issue-items"><li class="dash-il-warn">Collect the output and restart — ${tally}</li></ul>
-      </div>`);
-  }
-  if (soon.length) {
-    const tally = soon.slice().sort((a, b) => (a.hours_left ?? 1e9) - (b.hours_left ?? 1e9))
-      .map(a => `${_esc(a.character_name)} (${_fmtHours(a.hours_left)})`).join(', ');
-    rows.push(`<div class="dash-issue dash-issue-warn">
-        <div class="dash-issue-char">${soon.length} finishing soon</div>
-        <ul class="dash-issue-items"><li class="dash-il-warn">Refill or start the next batch — ${tally}</li></ul>
       </div>`);
   }
   const nchar = new Set(items.map(a => a.character_name)).size;
