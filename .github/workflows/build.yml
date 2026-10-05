@@ -47,6 +47,8 @@ jobs:
         run: node tests/test_browse_guard.js
       - name: Check progressive reaction rendering
         run: node tests/test_reaction_progressive.js
+      - name: Check Setup Analysis overlap advice
+        run: node tests/test_analysis_overlap.js
       - name: no-undef
         run: node scripts/lint_js.mjs
 

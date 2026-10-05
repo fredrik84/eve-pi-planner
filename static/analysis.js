@@ -254,12 +254,12 @@ function _toggleWorking(cid, pid) {
   renderAnalysis();
 }
 
-// Overlap clusters for one material (P1 name): union-find the characters sharing a planet+hotspot in
-// the server's proximity pairs, so a spot where three alts all reach the same deposit is ONE cluster.
+// Group qualifying footprint pairs for scheduling. A connected component is not a shared hotspot:
+// A–B and B–C do not establish A–C. Keep the edges to name only a colony's direct neighbours.
 function _overlapClustersFor(p1name) {
   const groups = {};
   ((_redeploy && _redeploy.proximity) || []).forEach(p => {
-    if ((p.p1_name || p.p0_name) !== p1name) return;
+    if ((p.p1_name || p.p0_name) !== p1name || !(p.overlap_pct >= _OVERLAP_RESEAT_FLOOR)) return;
     const k = p.planet_id + '|' + (p.p0_name || '');
     (groups[k] = groups[k] || { planet_id: p.planet_id, location: p.location, p0_name: p.p0_name, p1_name: p.p1_name, planet_type: p.planet_type, edges: [] }).edges.push(p);
   });
@@ -274,12 +274,22 @@ function _overlapClustersFor(p1name) {
     Object.values(comps).forEach(members => {
       if (members.length < 2) return;
       const mset = new Set(members);
-      const ov = Math.max(...g.edges.filter(e => (e.characters || []).some(c => mset.has(c))).map(e => e.overlap_pct));
+      const edges = g.edges.filter(e => (e.characters || []).every(c => mset.has(c)));
+      const ov = Math.max(...edges.map(e => e.overlap_pct));
       out.push({ planet_id: g.planet_id, location: g.location, p0_name: g.p0_name, p1_name: g.p1_name,
-                 planet_type: g.planet_type, characters: members.slice().sort(), overlap_pct: ov });
+                 planet_type: g.planet_type, characters: members.slice().sort(), overlap_pct: ov, edges });
     });
   });
   return out;
+}
+
+// Report evidence for this colony, never a transitive neighbour or another pair's percentage.
+function _overlapForMember(cluster, character) {
+  const edges = (cluster?.edges || []).filter(e => e.characters.includes(character));
+  return {
+    neighbours: [...new Set(edges.flatMap(e => e.characters).filter(nm => nm !== character))].sort(),
+    overlap_pct: Math.max(0, ...edges.map(e => e.overlap_pct)),
+  };
 }
 
 // Reseat-first, escalation-only plan. For each SHORT material, if reseating every recoverable colony
@@ -326,7 +336,7 @@ function _redeployPlan(rows) {
       chosen.push({ action: 'relocate', user_flagged: true, character: c.char, character_id: c.character_id,
                     planet_id: c.planet_id, p0_name: c.p0, p1_name: r.name, cc_type: c.planet_type,
                     location: back.location || (c.system ? `${c.system}${c.planet_num != null ? ' P' + c.planet_num : ''}` : c.char),
-                    neighbours: cl ? cl.characters.filter(nm => nm !== c.char) : [],
+                    neighbours: _overlapForMember(cl, c.char).neighbours,
                     dest: richer, current_richness: back.current_richness, _forMat: r.name });
     });
     // 2) Reseat-first gate: only escalate further if reseating the recoverable colonies (not flagged,
@@ -352,7 +362,7 @@ function _redeployPlan(rows) {
                    location: d.location, p0_name: d.p0_name, p1_name: d.p1_name || r.name, dest: destFor(d),
                    cc_type: ptypeByKey[key], current_richness: d.current_richness, programs: d.programs,
                    reseats_confirmed: d.reseats_confirmed, reseat_tracked: d.reseat_tracked,
-                   neighbours: cl ? cl.characters.filter(nm => nm !== d.character) : [],
+                   neighbours: _overlapForMember(cl, d.character).neighbours,
                    rec: outByKey[key] || (extSupply / Math.max(producers.length, 1)) });
     });
     // Overlaps → move the weaker side to a clear area of the same planet (skip a colony already
@@ -362,11 +372,12 @@ function _redeployPlan(rows) {
       const mover = c.characters.slice().sort((a, b) =>
         (outByKey[c.planet_id + '|' + a] || 0) - (outByKey[c.planet_id + '|' + b] || 0))[0];
       if (used.has(c.planet_id + '|' + mover)) return;
-      const tied = c.characters.reduce((s, nm) => s + (outByKey[c.planet_id + '|' + nm] || 0), 0);
+      const overlap = _overlapForMember(c, mover);
+      const tied = [mover, ...overlap.neighbours].reduce((s, nm) => s + (outByKey[c.planet_id + '|' + nm] || 0), 0);
       cands.push({ action: 'move', character: mover, character_id: cidByKey[c.planet_id + '|' + mover],
                    planet_id: c.planet_id, location: c.location, p0_name: c.p0_name,
-                   p1_name: c.p1_name || r.name, overlap_pct: c.overlap_pct, cc_type: c.planet_type,
-                   neighbours: c.characters.filter(nm => nm !== mover), rec: tied * (c.overlap_pct / 100) });
+                   p1_name: c.p1_name || r.name, ...overlap, cc_type: c.planet_type,
+                   rec: tied * (overlap.overlap_pct / 100) });
     });
     cands.sort((a, b) => b.rec - a.rec);
     for (const c of cands) { if (gap <= 0) break; chosen.push({ ...c, _forMat: r.name }); gap -= c.rec; }
@@ -413,10 +424,10 @@ function _renderRedeployUrgent(rows) {
         </div>`;
     }
     const nb = (c.neighbours || []);                   // overlap → same-planet move
-    const nbTxt = nb.length ? ` away from ${nb.map(x => `<b>${_esc(x)}</b>`).join(', ')}` : '';
+    const nbTxt = nb.length ? ` used by ${nb.map(x => `<b>${_esc(x)}</b>`).join(', ')}` : '';
     return `<div class="an-redeploy-cl${working ? ' an-working' : ''}">
-        <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${ptype}${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">overlap ${c.overlap_pct}%</span>${pin}</div>
-        <div class="an-redeploy-fix">Delete the extractor and drop a fresh template in a clear area of the same planet${nbTxt} — the two fight over the same hotspots, so a plain reseat lands right back in it. No new command centre needed.${_rescanBtn(c)}</div>
+        <div class="an-redeploy-cl-h"><b>${_esc(c.location)}</b>${ptype}${mat ? ` <span class="an-redeploy-p0">${_esc(mat)}</span>` : ''} <span class="an-redeploy-tag">estimated footprint overlap ${c.overlap_pct}%</span>${pin}</div>
+        <div class="an-redeploy-fix">Check the extraction areas${nbTxt}: their estimated footprints overlap this colony’s for the same resource, but this does not confirm shared hotspots. Try reseating heads into a separate area first; if that cannot reach target, move the extractor to a clear area of the same planet. No new command centre needed.${_rescanBtn(c)}</div>
       </div>`;
   };
   // Group by CHARACTER — in EVE you're logged into one at a time, so all of a character's fixes (and
@@ -432,7 +443,7 @@ function _renderRedeployUrgent(rows) {
   }).join('');
   return `<div class="an-suggest an-suggest-redeploy-urgent">
       <div class="an-suggest-h">${n} fix${n === 1 ? '' : 'es'} to feed ${matList}</div>
-      <div class="an-sug-note">Reseating every colony back to its peak still wouldn't feed ${matList}, so ${n === 1 ? 'this one needs' : 'these need'} more than a reseat. Every fix stays on the SAME planet — <b>delete the extractor and drop a fresh template</b> in a different, clearer (or non-overlapping) area, keeping the command centre that’s already there (<b>no new CC</b>). Grouped by character so you can do each in a single login. Changing planets is a last resort (the one case that needs a new CC).</div>
+      <div class="an-sug-note">These colonies are candidates to help feed ${matList}. Check estimated overlaps in-game before rebuilding. Any same-planet move keeps the existing command centre (<b>no new CC</b>). Grouped by character so you can do each in a single login. Changing planets is a last resort (the one case that needs a new CC).</div>
       ${groupsHtml}
     </div>`;
 }

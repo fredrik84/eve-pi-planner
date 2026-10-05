@@ -286,12 +286,14 @@ diagnostics only (the avg-P0/hr admin mode, and deciding heads-limited vs refini
 ### Redeploy candidates (`redeploy_proximity` gates the overlap half)
 
 - **Overlap is measured on reachable footprints, not head positions or shared planets.** Two of your
-  characters on the same planet is normal distribution, not a problem; overlapping *reachable areas*
-  are, because the whole area depletes and reseating only moves heads within reach. Footprint =
+  characters on the same planet is normal distribution, not a problem. Footprints are an estimate,
+  not proof that current heads share hotspots or that reseating cannot help. Footprint =
   (centre `c` = the ECU pin's lat/lon, reach = farthest head + head radius) from
   `pp_char_planets.ext_heads`; overlap when `_gc_dist(a,b) < reachA + reachB` for the same P0 across
-  characters. Threshold is client-side and user-set (`localStorage.ppHotspotOverlap`, default 50,
-  Settings → General); the server returns every overlap above a 1% floor.
+  characters. The server returns every overlap above a 1% floor. Setup Analysis applies its 40%
+  threshold to each pair before grouping. Advice names only the selected colony’s direct neighbours
+  and uses its strongest direct overlap; a chain A–B–C does not establish A–C. Check the extraction
+  areas in-game before rebuilding.
 - **Depletion** = `pp_colony_yield.peak_day` trending down: window 6, min 5 programs, ≥15% decline
   start→current, ≤1 up-step tolerated. A thin-but-flat planet is deliberately not flagged. Reseat
   verdict: per-program decline < 8% **and** total < 45% → "a reseat still buys time"; past that,
