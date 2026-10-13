@@ -54,7 +54,7 @@ jobs:
 
   backend-tests:
     runs-on: ubuntu-latest
-    container: python:3.14-slim
+    container: python:3.15-slim
     timeout-minutes: 10
     steps:
       - name: Checkout
