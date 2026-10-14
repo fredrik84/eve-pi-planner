@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 ARG GIT_COMMIT=unknown
 ENV GIT_COMMIT=$GIT_COMMIT
