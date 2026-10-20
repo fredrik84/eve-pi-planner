@@ -1009,7 +1009,7 @@ document.addEventListener('keydown', e => {
   if (open.length) _dismissModal(open[open.length - 1]);
 });
 
-// ── Silent auto-refresh (Dashboard + Reactions) ────────────────────────────────
+// ── Silent auto-refresh (character health + Dashboard / Reactions) ─────────────
 // Values on these two views are time-derived (% complete meters, time-left, runtimes), so they go
 // stale as the clock advances even without new ESI data. On a user-configurable interval (Settings
 // → General, default 300s, 0 = off) we silently re-fetch and re-render the ACTIVE one of the two —
@@ -1017,6 +1017,7 @@ document.addEventListener('keydown', e => {
 // ESI rescan (just the cheap computed endpoint). Skipped when the page is hidden, when logged out,
 // or while a manual Rescan is running. Also fires once when the page becomes visible again, so
 // returning to a long-open tab snaps the numbers fresh.
+// Character health is refreshed on every page so a failed background scan is visible there too.
 const _AUTO_REFRESH_DEFAULT = 300;   // seconds
 let _lastAutoRefresh = 0;
 let _autoRefreshTimer = null;
@@ -1034,9 +1035,10 @@ function _applyAutoRefresh() {
 function _autoRefreshTick() {
   if (document.hidden || !_loggedIn) return;
   if (typeof _rescanning !== 'undefined' && _rescanning) return;  // don't fight a manual rescan
+  _lastAutoRefresh = Date.now();
+  refreshCharacterHealth();
   const tab = currentTab();
   if (tab !== 'dashboard' && tab !== 'reactions') return;
-  _lastAutoRefresh = Date.now();
   // Silent poll: re-render ONLY on a successful, still-logged-in response. A background poll can
   // occasionally come back not-ok or logged_in:false (a transient blip — the real session is fine,
   // proven by a manual tab switch recovering instantly); it must NOT clobber the view with a login

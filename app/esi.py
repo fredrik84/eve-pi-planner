@@ -1657,12 +1657,14 @@ def _refresh_token(character_id: int, refresh_token: str) -> str | None:
             # permanently dead character, and the red dot never caught up after all. Both readers
             # (`token_ok` in app/esi_data.py, the alert rescan's filter in app/notifications.py)
             # test falsiness, so '' and NULL mean the same thing to everything that asks.
-            con.execute(
-                "UPDATE pp_characters SET refresh_token='' WHERE character_id=?",
+            row = con.execute(
+                "UPDATE pp_characters SET refresh_token='' WHERE character_id=? RETURNING context_id",
                 (character_id,),
-            )
+            ).fetchone()
             con.commit()
             con.close()
+            if row:
+                cache_invalidate(charlist_key(row["context_id"]))
             return None
         resp.raise_for_status()
         data = resp.json()

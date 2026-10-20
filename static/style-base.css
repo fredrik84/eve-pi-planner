@@ -148,6 +148,12 @@ body.nav-collapsed .sidebar .tab.active::before { top: 6px; bottom: 6px; }
 
 main { flex: 1 1 auto; max-width: 1300px; margin: 0 auto; padding: 22px 24px 24px 14px; min-width: 0; }
 
+#characterHealthAlert:not([hidden]) { display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  margin-bottom: 18px; padding: 12px 16px; border: 1px solid #985343; border-radius: 6px;
+  background: #30201e; color: #f0d9a0; font-size: 13px; line-height: 1.5; }
+.character-health-message { flex: 1 1 240px; overflow-wrap: anywhere; }
+.character-health-message > div + div { margin-top: 6px; }
+
 /* ── Input grid ────────────────────────────────────────────────────────────── */
 .input-col { display: flex; flex-direction: column; gap: 6px; }
 

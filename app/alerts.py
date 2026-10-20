@@ -25,6 +25,7 @@ import time as _time
 
 from app.sde import get_connection
 from app.alert_settings import get_alert_settings
+from app.pi_sim import project_storage
 
 # Correctness-based kinds are always "high" — matches the severity dashboard() has always used
 # for these (a misrouted pin or wasted extraction is never merely a "warn").
@@ -396,13 +397,10 @@ def compute_alerts(context_id: int, rows=None, now: float | None = None) -> list
             if "storage_full" not in muted:
                 st = _json.loads(r["storage"] or "null")
                 if st:
-                    fill_h = st.get("fill_m3_h", 0) or 0
                     anchor = r["checkpoint_at"] or r["scanned_at"]
-                    el_h = max(0.0, (now - anchor) / 3600.0) if anchor else 0.0
-                    cap = st.get("cap_m3") or 1
-                    vol = min(cap, (st.get("vol_m3") or 0) + fill_h * el_h)
-                    pct = vol / cap * 100.0
-                    ttf = ((cap - vol) / fill_h) if fill_h > 0 and vol < cap else None
+                    projected = project_storage(st, ss, anchor, now)
+                    pct = projected["vol_m3"] / projected["cap_m3"] * 100.0
+                    ttf = projected["hours_until_full"]
                     if pct >= _alert["storage_warn_pct"]:
                         sev = "high" if (pct >= _alert["storage_high_pct"]
                                           or (ttf is not None and ttf < _alert["storage_high_ttf_hours"])) else "warn"

@@ -399,6 +399,41 @@ def test_live_dashboard_renders_expected_cards(base: str) -> bool:
     return ok
 
 
+def test_live_stopped_launchpads(base: str) -> bool:
+    print("\n  Stopped, emptied launchpads stay empty after a rescan")
+    now = time.time()
+    con = get_connection()
+    con.execute("DELETE FROM pp_char_planets WHERE character_id=?", (FAKE_CID,))
+    token = con.execute("SELECT token FROM pp_sessions WHERE context_id=?", (FAKE_CTX,)).fetchone()["token"]
+    con.commit()
+    con.close()
+    _insert_planet(1, 1, True, sim=json.dumps({"expiry": now - 2 * 86400}),
+                   storage=json.dumps({"fill_m3_h": 100, "vol_m3": 0, "cap_m3": 10000}),
+                   scanned_at=now - 86400)
+
+    def read():
+        req = urllib.request.Request(f"{base}/api/dashboard", headers={"Cookie": f"pp_session={token}"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+
+    data = read()
+    ok = check(not any(i["char"].startswith("Storage filling up") for i in data["issues"]),
+               "expired extractor with empty ESI contents has no false storage warning")
+    ok &= check(data["totals"]["empty_due_hours"] is None,
+                "stopped extraction does not schedule a haul deadline")
+    ok &= check(data["totals"]["empty_pads_hours"] is None,
+                "stopped extraction does not schedule a recurring haul")
+    con = get_connection()
+    con.execute("UPDATE pp_char_planets SET storage=? WHERE character_id=?",
+                (json.dumps({"fill_m3_h": 100, "vol_m3": 9000, "cap_m3": 10000}), FAKE_CID))
+    con.commit()
+    con.close()
+    data = read()
+    ok &= check(any(i["char"].startswith("Storage filling up") for i in data["issues"]),
+                "real stored cargo still warns when extraction has stopped")
+    return ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://localhost:8000")
@@ -415,6 +450,7 @@ def main() -> int:
         test_reaction_finishing_soon(),
         test_reaction_stage_ready(),
         test_live_dashboard_renders_expected_cards(base),
+        test_live_stopped_launchpads(base),
     ]
     _cleanup()
 

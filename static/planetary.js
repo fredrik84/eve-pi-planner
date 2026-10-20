@@ -350,7 +350,37 @@ function _applyPageRestriction() {
   }
 }
 
+function renderCharacterHealthAlert(loggedIn, chars) {
+  const el = document.getElementById('characterHealthAlert');
+  if (!el) return;
+  const real = loggedIn ? chars.filter(c => !c.is_dummy && c.character_id > 0) : [];
+  const dead = real.filter(c => !c.token_ok);
+  const failed = real.filter(c => c.token_ok && c.scan_failed_at);
+  const scopeLost = real.filter(c => c.token_ok && c.reactions_scope_lost);
+  const names = list => list.map(c => _esc(c.name)).join(', ');
+  const rows = [];
+  if (dead.length) rows.push(`<div><b>Reauthorization required: ${names(dead)}.</b> Character data cannot refresh until you reconnect in Settings → Characters.</div>`);
+  if (failed.length) rows.push(`<div><b>Data refresh failed: ${names(failed)}.</b> Displayed data may be out of date and alerts are paused until a refresh succeeds. Try Rescan again shortly.</div>`);
+  if (scopeLost.length) rows.push(`<div><b>Reaction tracking disconnected: ${names(scopeLost)}.</b> Reaction data is frozen and its alerts are paused. Reauthorize with reactions enabled in Settings → Characters.</div>`);
+  const html = rows.length ? `<div class="character-health-message">${rows.join('')}</div>
+    <button type="button" class="header-login-btn" onclick="openSettingsModal('characters')">Open Characters</button>` : '';
+  // Header cache-clock updates also reach here; don't re-announce an unchanged alert.
+  if (el.innerHTML !== html) el.innerHTML = html;
+  el.hidden = !rows.length;
+}
+
+async function refreshCharacterHealth() {
+  try {
+    const data = await api('/api/characters');
+    if (!data || !data.logged_in || !Array.isArray(data.characters)) return;
+    _ppCharsData = data.characters;
+    renderCharacters(data.characters, true);
+    renderHeaderSession(true, data.characters, data.session_character_id);
+  } catch (e) { /* keep the last known status until a read succeeds */ }
+}
+
 function renderHeaderSession(loggedIn, chars, sessionCharId) {
+  renderCharacterHealthAlert(loggedIn, chars);
   try { localStorage.setItem('ppNavLoggedIn', loggedIn ? '1' : '0'); } catch(e) {}
   try { localStorage.setItem('ppNavIsAdmin', _isAdmin ? '1' : '0'); } catch(e) {}
   try { localStorage.setItem('ppNavIsGroupMgr', _isGroupManager ? '1' : '0'); } catch(e) {}

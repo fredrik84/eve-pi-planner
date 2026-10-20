@@ -306,6 +306,28 @@ def drain_runs_dry(state: dict, now_ts: float | None = None) -> dict | None:
             "binding": binding, "onhand": onhand_now}
 
 
+def project_storage(storage: dict, state: dict | None, checkpoint_at: float | None,
+                    now_ts: float | None = None) -> dict:
+    """Project launchpad volume over the remaining extraction program, like project().
+
+    A fresh ESI read can still carry an old pin checkpoint. Extrapolating from that checkpoint
+    forever makes a stopped, emptied colony appear to fill again after every rescan.
+    """
+    if now_ts is None:
+        now_ts = datetime.now(timezone.utc).timestamp()
+    rate = storage.get("fill_m3_h", 0) or 0
+    cap = storage.get("cap_m3") or 1
+    expiry = (state or {}).get("expiry")
+    end = min(now_ts, expiry) if expiry is not None else now_ts
+    elapsed_h = max(0.0, (end - checkpoint_at) / 3600.0) if checkpoint_at else 0.0
+    vol = min(cap, (storage.get("vol_m3") or 0) + rate * elapsed_h)
+    active_rate = rate if expiry is None or now_ts < expiry else 0.0
+    ttf = (cap - vol) / active_rate if active_rate > 0 and vol < cap else None
+    if ttf is not None and expiry is not None and now_ts + ttf * 3600.0 > expiry:
+        ttf = None
+    return {"vol_m3": vol, "cap_m3": cap, "fill_m3_h": active_rate, "hours_until_full": ttf}
+
+
 def project(state: dict, now_ts: float | None = None) -> list[dict]:
     """Project a sim state forward to now → [{type_id, name, tier, amount}]. Production stops at
     the extraction program's expiry."""

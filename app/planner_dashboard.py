@@ -20,6 +20,7 @@ from app.alert_settings import get_alert_settings
 from app.alerts import compute_alerts, _extractor_program_lengths
 from app.planner import _compute_p1_fracs, _effective_fph, factory_drain
 from app.planner_advisor import _expansion_capacity
+from app.pi_sim import project_storage
 
 router = APIRouter()
 
@@ -319,18 +320,16 @@ def dashboard(pp_session: str = Cookie(default=None)):
         st = _json.loads(r["storage"] or "null")
         if not st:
             continue
-        fill_h = st.get("fill_m3_h", 0) or 0
+        anchor = r["checkpoint_at"] or r["scanned_at"]
+        projected = project_storage(st, _json.loads(r["sim_state"] or "null"), anchor, now)
+        fill_h = projected["fill_m3_h"]
         # Emptying cadence = how long a freshly-emptied launchpad takes to cap (10k m³ → extraction
         # stalls); track the fastest-filling pad. Deadline = soonest pad to cap from its CURRENT fill.
         if fill_h > 0 and st.get("cap_m3"):
             cad_h = st["cap_m3"] / fill_h
             if empty_pads_h is None or cad_h < empty_pads_h:
                 empty_pads_h, empty_pads_loc = cad_h, cloc
-        anchor = r["checkpoint_at"] or r["scanned_at"]
-        el_h = max(0.0, (now - anchor) / 3600.0) if anchor else 0.0
-        cap = st["cap_m3"] or 1
-        vol = min(cap, st["vol_m3"] + fill_h * el_h)
-        ttf = ((cap - vol) / fill_h) if fill_h > 0 and vol < cap else None
+        ttf = projected["hours_until_full"]
         if ttf is not None and (empty_due_h is None or ttf < empty_due_h):
             empty_due_h, empty_due_loc = ttf, cloc
 
