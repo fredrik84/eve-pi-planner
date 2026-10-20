@@ -438,6 +438,14 @@ new/overwrite chips); `submitPlanetImport` handles the `queued` response ("submi
 documents remote sensing (Agency → Resource Harvesting → Planets → Planetary Industry, hover a P0 →
 `Resource Density: %`), the spreadsheet format, and the review flow.
 
+The `planet_submission_reviews` flag (Planet DB group, admin-preview by default) enables a
+global dismissible banner for approved/rejected contributions, including historical reviews.
+`GET /api/planet-submissions/reviews` returns only the logged-in account's unacknowledged results
+(20 at a time); reading does not clear them. `POST /api/planet-submissions/{id}/acknowledge`
+sets `review_seen_at` only for that account's reviewed submission. Both endpoints enforce the
+flag on the server. Boot and the existing background refresh fetch results on every page;
+acknowledgment persists across browsers and sessions. No notification-channel setup is needed.
+
 ## Profiles & shares
 
 Both persist plan inputs. When adding a new `PlanRequest` field that a user sets, wire it into

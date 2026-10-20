@@ -10,6 +10,7 @@ them from the repository root so relative `app/` and `static/` reads resolve con
 # Browser-free JavaScript behavior
 node tests/test_routing_client.js
 node tests/test_character_health.js
+node tests/test_planet_submission_reviews.js
 
 # Tests that only need the repository
 python3 tests/test_setup_page.py
@@ -33,6 +34,10 @@ reauthorization, temporary failures, recovery, and navigation to Characters sett
 revoked tokens invalidate the character cache. Run it in the application container; it needs no
 database or ESI connection. `test_alerts.py` also checks the stopped-launchpad behavior through the
 live dashboard API with isolated fixture data.
+
+`test_planet_submission_reviews.py` uses a temporary database to check review alerts, account
+isolation, authentication, dismissal, and migration of existing submissions. Its JavaScript
+companion checks the global banner, refresh behavior, and failed requests.
 
 `test_hybrid_setup.py` and `test_redeploy_candidates.py` require their documented local fixtures:
 run `scripts/seed_hybrid_fixture.py` and `scripts/seed_redeploy_fixture.py` in the local test

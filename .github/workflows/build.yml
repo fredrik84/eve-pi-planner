@@ -49,6 +49,8 @@ jobs:
         run: node tests/test_reaction_progressive.js
       - name: Check Setup Analysis overlap advice
         run: node tests/test_analysis_overlap.js
+      - name: Check Planet DB review alerts
+        run: node tests/test_planet_submission_reviews.js
       - name: no-undef
         run: node scripts/lint_js.mjs
 
@@ -69,6 +71,7 @@ jobs:
           python tests/test_market_cache_contract.py
           python tests/test_latency.py
           python tests/test_cold_load.py
+          python tests/test_planet_submission_reviews.py
 
   build:
     needs: backend-tests

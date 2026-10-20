@@ -154,6 +154,11 @@ main { flex: 1 1 auto; max-width: 1300px; margin: 0 auto; padding: 22px 24px 24p
 .character-health-message { flex: 1 1 240px; overflow-wrap: anywhere; }
 .character-health-message > div + div { margin-top: 6px; }
 
+.planet-review { display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  margin-bottom: 18px; padding: 12px 16px; border: 1px solid var(--clr-border); border-radius: 6px;
+  background: #141720; color: var(--clr-text); font-size: 13px; line-height: 1.5; }
+.planet-review-message { flex: 1 1 240px; overflow-wrap: anywhere; }
+
 /* ── Input grid ────────────────────────────────────────────────────────────── */
 .input-col { display: flex; flex-direction: column; gap: 6px; }
 

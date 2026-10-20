@@ -305,6 +305,7 @@ async function loadCharacters() {
       renderHeaderSession(_loggedIn, data.characters || [], data.session_character_id);
       _applyTabGates();
       _applyLoginGates();
+      refreshPlanetSubmissionReviews();
       await loadProfiles();
     } catch (e) {
       console.error('Failed to load characters:', e);

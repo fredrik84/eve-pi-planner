@@ -1017,7 +1017,7 @@ document.addEventListener('keydown', e => {
 // ESI rescan (just the cheap computed endpoint). Skipped when the page is hidden, when logged out,
 // or while a manual Rescan is running. Also fires once when the page becomes visible again, so
 // returning to a long-open tab snaps the numbers fresh.
-// Character health is refreshed on every page so a failed background scan is visible there too.
+// Character health and Planet DB review results are refreshed on every page.
 const _AUTO_REFRESH_DEFAULT = 300;   // seconds
 let _lastAutoRefresh = 0;
 let _autoRefreshTimer = null;
@@ -1037,6 +1037,7 @@ function _autoRefreshTick() {
   if (typeof _rescanning !== 'undefined' && _rescanning) return;  // don't fight a manual rescan
   _lastAutoRefresh = Date.now();
   refreshCharacterHealth();
+  if (typeof refreshPlanetSubmissionReviews === 'function') refreshPlanetSubmissionReviews();
   const tab = currentTab();
   if (tab !== 'dashboard' && tab !== 'reactions') return;
   // Silent poll: re-render ONLY on a successful, still-logged-in response. A background poll can

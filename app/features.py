@@ -51,6 +51,11 @@ FEATURE_REGISTRY = [
                     "also lets users submit and browse planet data. The tab carries destructive "
                     "controls that are separately admin-gated.",
      "default": False},
+    {"key": "planet_submission_reviews", "label": "Planet submission review alerts", "group": "Planet DB",
+     "description": "Show a dismissible alert on every page when your Planet DB contribution "
+                    "is approved or rejected. Results remain available until acknowledged, "
+                    "including reviews completed while you were offline.",
+     "default": False},
     {"key": "factory_layout", "label": "Factory Layout tab", "group": "Planner",
      "description": "Show the Factory Layout tab — generates importable EVE PI templates for any "
                     "P1–P4 product.",

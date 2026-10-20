@@ -13,6 +13,7 @@ from app.cache import cache_get_json, cache_set_json, cache_invalidate
 from app.esi import require_context, is_admin, require_admin
 from app.notifiers import notify_admin_discord
 from app.geography import looks_like_jspace_system_name
+from app.features import feature_enabled_for
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -99,6 +100,10 @@ def ensure_tables():
             reviewed_at TEXT
         )
     """)
+    con.commit()
+    add_columns(con, "pp_planet_submissions", "review_seen_at TEXT")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_pp_planet_submission_reviews "
+                "ON pp_planet_submissions (context_id, review_seen_at)")
     con.commit()
     # Add solar_system_id if upgrading from older schema
     add_columns(con, "pp_planets", "solar_system_id INTEGER")
@@ -561,6 +566,41 @@ def import_planets(req: ImportRequest,
         notify_admin_discord("New planet submission", f"{len(rows)} planet(s) submitted by {submitter} — pending review in Admin → Planet submissions")
     con.close()
     return {"queued": True, "submitted": len(rows), "skipped": skipped, "errors": errors[:10]}
+
+
+@router.get("/api/planet-submissions/reviews")
+def get_planet_submission_reviews(context_id: int = Depends(require_context)):
+    """The caller's reviewed contributions, retained until explicitly acknowledged."""
+    if not feature_enabled_for("planet_submission_reviews", context_id):
+        return {"reviews": []}
+    ensure_tables()
+    with get_connection() as con:
+        reviews = con.execute(
+            "SELECT id, planet_count, status, created_at, reviewed_at "
+            "FROM pp_planet_submissions WHERE context_id=? "
+            "AND status IN ('approved', 'rejected') AND review_seen_at IS NULL "
+            "ORDER BY reviewed_at DESC, id DESC LIMIT 20",
+            (context_id,),
+        ).fetchall()
+    return {"reviews": [dict(row) for row in reviews]}
+
+
+@router.post("/api/planet-submissions/{sub_id}/acknowledge")
+def acknowledge_planet_submission(sub_id: int, context_id: int = Depends(require_context)):
+    """Dismiss only the caller's reviewed submission; repeated requests are harmless."""
+    if not feature_enabled_for("planet_submission_reviews", context_id):
+        raise HTTPException(status_code=404, detail="Not found")
+    ensure_tables()
+    with get_connection() as con:
+        n = con.execute(
+            "UPDATE pp_planet_submissions "
+            "SET review_seen_at=COALESCE(review_seen_at, CURRENT_TIMESTAMP) "
+            "WHERE id=? AND context_id=? AND status IN ('approved', 'rejected')",
+            (sub_id, context_id),
+        ).rowcount
+        if not n:
+            raise HTTPException(status_code=404, detail="Submission not found")
+    return {"acknowledged": True}
 
 
 @router.get("/api/planet-submissions")

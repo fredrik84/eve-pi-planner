@@ -3,6 +3,67 @@
 // Loaded as a separate <script> after planetary.js; functions are global, resolve at call
 // time. Shared state/util lives in planetary.js (loads first).
 
+// Review results are account-wide, so boot and the global background refresh load them
+// even when the Planet DB page is closed. Reading never acknowledges a result.
+let _planetReviewsInFlight = null;
+function renderPlanetSubmissionReviews(reviews) {
+  const el = document.getElementById('planetSubmissionReviews');
+  if (!el) return;
+  const html = reviews.map(r => {
+    const approved = r.status === 'approved';
+    const count = `${r.planet_count} planet${r.planet_count === 1 ? '' : 's'}`;
+    return `<div class="planet-review">
+      <div class="planet-review-message"><b>Your Planet DB submission #${_esc(r.id)} was ${approved ? 'approved' : 'rejected'}.</b>
+      <div>${_esc(count)} · Submitted ${_esc(r.created_at)} EVE time.</div>
+      <div>${approved ? 'Thank you for contributing to the Planet DB.' : 'This submission was not added to the Planet DB.'}</div></div>
+      <button type="button" class="header-login-btn" data-review-id="${_esc(r.id)}">Dismiss</button>
+    </div>`;
+  }).join('');
+  if (el.innerHTML !== html) {
+    el.innerHTML = html;
+    el.querySelectorAll('[data-review-id]').forEach(btn => {
+      btn.addEventListener('click', () => dismissPlanetSubmissionReview(btn.dataset.reviewId, btn));
+    });
+  }
+  el.hidden = !reviews.length;
+}
+
+async function refreshPlanetSubmissionReviews() {
+  if (!_loggedIn || !_featureActive('planet_submission_reviews')) {
+    renderPlanetSubmissionReviews([]);
+    return;
+  }
+  if (_planetReviewsInFlight) return _planetReviewsInFlight;
+  _planetReviewsInFlight = (async () => {
+    try {
+      const data = await api('/api/planet-submissions/reviews');
+      if (_loggedIn && _featureActive('planet_submission_reviews')) {
+        renderPlanetSubmissionReviews(data.reviews || []);
+      }
+    } catch (e) { /* preserve unread results during a temporary connection failure */ }
+  })();
+  try {
+    await _planetReviewsInFlight;
+  } finally {
+    _planetReviewsInFlight = null;
+  }
+}
+
+async function dismissPlanetSubmissionReview(id, btn) {
+  btn.disabled = true;
+  try {
+    await apiSend('POST', `/api/planet-submissions/${encodeURIComponent(id)}/acknowledge`);
+    // A poll started before acknowledgment may still contain the dismissed result.
+    // Let it finish before fetching the updated list (including any beyond the first 20).
+    if (_planetReviewsInFlight) await _planetReviewsInFlight;
+    await refreshPlanetSubmissionReviews();
+  } catch (e) {
+    toastError(e, 'Could not dismiss the review result');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ── Constellation filter ──────────────────────────────────────────────────────
 
 let _ppConstRegions = {};    // constellation -> region
