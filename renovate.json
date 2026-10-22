@@ -2,6 +2,11 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "automerge": true,
+  "automergeType": "pr",
+  "platformAutomerge": false,
+  "ignoreTests": false,
+  "dependencyDashboardApproval": false,
+  "ignoreUnstable": true,
   "labels": ["renovate"],
   "packageRules": [
     {
@@ -10,7 +15,7 @@
       "automerge": true
     },
     {
-      "matchManagers": ["dockerfile"],
+      "matchDatasources": ["docker"],
       "groupName": "docker base images",
       "automerge": true
     },
@@ -18,6 +23,17 @@
       "matchManagers": ["github-actions"],
       "groupName": "github actions",
       "automerge": true
+    },
+    {
+      "description": "Update the runtime and CI Python images together",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["python"],
+      "groupName": "python runtime"
+    },
+    {
+      "description": "Keep Playwright's test package and browser image on the same version",
+      "matchPackageNames": ["@playwright/test", "mcr.microsoft.com/playwright"],
+      "groupName": "playwright"
     }
   ]
 }

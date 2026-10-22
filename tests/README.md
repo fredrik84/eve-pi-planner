@@ -43,6 +43,11 @@ companion checks the global banner, refresh behavior, and failed requests.
 including a simulated three-week break through the real notification scheduler, program restarts,
 failed reads, existing send history and multiple notification channels. Run it in the app container.
 
+`test_upgrade_policy.py` guards dependency PR checks, the push-only publish/deploy boundary,
+matching runtime/CI Python versions, and matching Playwright package/browser-image versions.
+`test_optimizer.py --offline` exercises the native HiGHS solver without a running API or SDE;
+CI runs these synthetic cases on every dependency PR and branch push.
+
 `test_hybrid_setup.py` and `test_redeploy_candidates.py` require their documented local fixtures:
 run `scripts/seed_hybrid_fixture.py` and `scripts/seed_redeploy_fixture.py` in the local test
 container before those API suites. Account-deletion fixtures give each account its own colony

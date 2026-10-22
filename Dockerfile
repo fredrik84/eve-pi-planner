@@ -1,4 +1,4 @@
-FROM python:3.15-slim
+FROM python:3.15.1-slim
 
 ARG GIT_COMMIT=unknown
 ENV GIT_COMMIT=$GIT_COMMIT
@@ -6,7 +6,13 @@ ENV GIT_COMMIT=$GIT_COMMIT
 WORKDIR /srv/app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# HiGHS may need compiling before wheels reach a new Python release. Keep the
+# toolchain temporary; only its shared runtime libraries remain in the image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libstdc++6 libgomp1 \
+    && CMAKE_BUILD_PARALLEL_LEVEL=2 pip install --no-cache-dir -r requirements.txt \
+    && apt-get purge -y --auto-remove build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY scripts/ ./scripts/
 COPY app/     ./app/

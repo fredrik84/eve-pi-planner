@@ -232,6 +232,16 @@ Monkeypatching module constants there gives a what-if curve on real data in seco
 
 ## Deploying: `main` vs `dev`
 
+Dependency upgrades are automatic through Renovate, including stable Python releases. Renovate
+merges PRs itself (`platformAutomerge: false`) after their checks pass; no dashboard approval or
+overnight schedule is required. Prereleases are excluded. Pull requests run the isolated backend
+contracts and frontend checks; only pushes can publish images or deploy. Python's Dockerfile
+image and CI container are grouped into one update, as are Playwright's package and browser image.
+The runtime uses an explicit Python patch tag so each version change is reviewed and tested.
+When a new Python release has no HiGHS wheel yet, a temporary C++ toolchain builds the optimizer
+from source. The Docker build removes the compiler afterward and retains its shared runtime
+libraries. CI installs the same build tools before installing requirements.
+
 **Default to `main` only — `dev` is opt-in, not routine.** Each push (to either branch) triggers
 its own CI build + ArgoCD deploy + Discord notification chain, so pushing to both doubles the
 notification volume for one logical change. Normal changes (the vast majority) go straight to

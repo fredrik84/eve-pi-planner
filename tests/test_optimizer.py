@@ -174,6 +174,7 @@ def test_live_smoke(base: str) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://localhost:8000")
+    parser.add_argument("--offline", action="store_true", help="Run solver cases without the live API smoke test")
     args = parser.parse_args()
     base = args.url.rstrip("/")
 
@@ -184,8 +185,9 @@ def main() -> int:
         test_two_outputs_share_resource(),
         test_not_producible_missing_input(),
         test_empty_inventory(),
-        test_live_smoke(base),
     ]
+    if not args.offline:
+        results.append(test_live_smoke(base))
 
     print(f"\n{'='*60}")
     if all(results):

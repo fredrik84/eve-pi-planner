@@ -4,6 +4,8 @@ on:
   push:
     branches: [main, dev]
     tags: ['v*']
+  pull_request:
+    branches: [main, dev]
 
 # Serialize builds per ref (queue, don't cancel) so two close-together pushes can't race
 # their push-to-:latest step out of order — the loser used to leave `:latest` pointing at
@@ -56,25 +58,32 @@ jobs:
 
   backend-tests:
     runs-on: ubuntu-latest
-    container: python:3.15-slim
+    container: python:3.15.1-slim
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Install native dependency build tools
+        run: apt-get update && apt-get install -y --no-install-recommends build-essential
       - name: Install application dependencies
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: '2'
         run: pip install --no-cache-dir -r requirements.txt
       - name: Run isolated backend contracts
         run: |
           python tests/test_service_refactor.py
           python tests/test_production_allocation.py
+          python tests/test_optimizer.py --offline
           python tests/test_recurring_job_identity.py
           python tests/test_market_cache_contract.py
           python tests/test_latency.py
           python tests/test_cold_load.py
           python tests/test_planet_submission_reviews.py
           python tests/test_expired_reminders.py
+          python tests/test_upgrade_policy.py
 
   build:
+    if: github.event_name == 'push'
     needs: backend-tests
     runs-on: ubuntu-latest
     permissions:
