@@ -11,9 +11,10 @@ implement its own detection, so a push notification and what's shown on the Dash
 drift apart.
 
 The scheduler runs check_and_send_notifications() every 15 minutes. A due colony alert first
-triggers a re-read of the colony it is about, bounded by a whole-tick budget. The independent
-`alert_rescan_backoff` flag makes repeated alerts wait progressively longer — see docs/platform.md,
-"Check before nagging".
+triggers a re-read of the colony it is about, bounded by a whole-tick budget.
+Expired extractions always back off from daily to weekly reminders for the same program.
+The independent `alert_rescan_backoff` flag backs off other repeated alerts — see
+docs/platform.md, "Check before nagging".
 """
 import json as _json
 import logging
@@ -260,8 +261,9 @@ _NOTIFY_ADVISORY_LOCK_KEY = 918_273_647
 # stays drifted until the player manually reseats its program) are structural problems, not
 # time-decaying like an expiring extraction, so they get a much longer cooldown to avoid nagging
 # about the same unfixed issue every 15-minute scheduler tick.
+# Expired programs use their own daily-to-weekly policy in _expired_reminder_due.
 _COOLDOWN_HOURS = {
-    "expired": 2.0, "expiring": 2.0, "storage_full": 2.0, "factory_refill": 4.0,
+    "expiring": 2.0, "storage_full": 2.0, "factory_refill": 4.0,
     "ext_unrouted": 24.0, "fac_unfed": 24.0, "fac_output": 24.0, "p0_mismatch": 24.0,
     "schedule_sync": 24.0,
     # Time-decaying like expiring/storage_full (gets more urgent as the job's end_date
@@ -308,6 +310,45 @@ _BACKOFF_MAX_ROWS = 72        # far past the cap even at several channels; bound
 # real repeats inside a minute when the shortest base interval is two hours. (`resend-last` groups
 # by the minute for the same reason.)
 _SAME_SEND_WINDOW_S = 60
+_EXPIRED_REMINDER_BASE_H = 24.0
+_EXPIRED_REMINDER_CAP_H = 168.0
+
+
+def _send_timestamps(rows) -> list[float]:
+    """Oldest-first successful send times, counting multiple channels as one send."""
+    stamps = []
+    for r in reversed(rows):
+        try:
+            ts = datetime.fromisoformat(r["sent_at"]).timestamp()
+        except (TypeError, ValueError):
+            continue
+        if stamps and ts - stamps[-1] < _SAME_SEND_WINDOW_S:
+            continue
+        stamps.append(ts)
+    return stamps
+
+
+def _expired_reminder_due(con, context_id: int, alert: dict) -> bool:
+    """Notify a new expired program once, then remind after 1d, 2d, 4d and weekly.
+
+    The program's expiry identifies this occurrence. Silence during an outage, a failed
+    ESI read or a PI break cannot reset it. A restarted program has a later expiry, so
+    its first alert still fires immediately. Character + planet keeps two characters
+    extracting on the same planet independent. Existing send history works as-is.
+    """
+    since = datetime.fromtimestamp(alert["expiry"], tz=timezone.utc).isoformat()
+    rows = con.execute(
+        "SELECT sent_at FROM pp_notification_log "
+        "WHERE context_id=? AND event='expired' AND planet_id=? AND character=? "
+        "AND status='ok' AND sent_at >= ? ORDER BY sent_at DESC LIMIT ?",
+        (context_id, alert["planet_id"], alert["character_name"], since, _BACKOFF_MAX_ROWS),
+    ).fetchall()
+    stamps = _send_timestamps(rows)
+    if not stamps:
+        return True
+    interval_h = min(_EXPIRED_REMINDER_BASE_H * 2 ** min(len(stamps) - 1, 3),
+                     _EXPIRED_REMINDER_CAP_H)
+    return time.time() >= stamps[-1] + interval_h * 3600
 
 
 def _consecutive_cooldown_h(con, context_id: int, event: str, planet_id, base_h: float) -> float:
@@ -325,15 +366,7 @@ def _consecutive_cooldown_h(con, context_id: int, event: str, planet_id, base_h:
         "ORDER BY sent_at DESC LIMIT ?",
         (context_id, event, planet_id, _BACKOFF_MAX_ROWS),
     ).fetchall()
-    stamps = []
-    for r in reversed(rows):                       # oldest first
-        try:
-            ts = datetime.fromisoformat(r["sent_at"]).timestamp()
-        except Exception:
-            continue                               # an unparseable row breaks no chain it isn't in
-        if stamps and ts - stamps[-1] < _SAME_SEND_WINDOW_S:
-            continue                               # same send, another channel
-        stamps.append(ts)
+    stamps = _send_timestamps(rows)
     rung = 0
     for i in range(1, len(stamps)):
         expected = min(base_h * (2 ** rung), _BACKOFF_CAP_H)
@@ -347,7 +380,8 @@ def check_and_send_notifications():
 
     NOT pure DB math: a due colony alert triggers a bounded re-read of the colony it is about (see
     `_rescan_for_due_alerts`) and that read completes before a notifier is called. The
-    `alert_rescan_backoff` flag controls only the progressively longer repeat cooldown.
+    `alert_rescan_backoff` flag controls repeat cooldowns for kinds other than expired
+    extraction programs, whose daily-to-weekly reminders are always enforced.
 
     Guarded by a Postgres advisory lock (same pattern as scripts/build_sde.py /
     populate_geo.py). Every uvicorn worker in every pod replica runs its own APScheduler on its
@@ -411,10 +445,14 @@ def _due_alerts(con, context_id: int, notify_kinds: set, min_severity: str,
         # may now name its own key (`dedupe_id`), and only a genuinely keyless alert skips the
         # check.
         key = a.get("dedupe_id", a.get("planet_id"))
-        cooldown_h = (_consecutive_cooldown_h(con, context_id, a["kind"], key, base_h)
-                      if (smart and key is not None) else base_h)
-        if key is not None and _recently_notified(con, context_id, a["kind"], key, cooldown_h):
-            continue
+        if a["kind"] == "expired":
+            if not _expired_reminder_due(con, context_id, a):
+                continue
+        else:
+            cooldown_h = (_consecutive_cooldown_h(con, context_id, a["kind"], key, base_h)
+                          if (smart and key is not None) else base_h)
+            if key is not None and _recently_notified(con, context_id, a["kind"], key, cooldown_h):
+                continue
         a["_dedupe_key"] = key
         by_kind.setdefault(a["kind"], []).append(a)
     return by_kind
@@ -714,9 +752,10 @@ def _process_context(con, context_id: int):
 
     # Checking current colony state is a correctness boundary, not a rollout preference: a push
     # computed before its targeted rescan finishes tells users to fix work they already fixed.
-    # Keep the flag for the independent repeat-backoff policy, but always finish the bounded
-    # colony verification pass before any notifier is called. Reaction-job reads remain behind
-    # their own flag because they use a second ESI endpoint and scope.
+    # Expired programs always back off; the flag controls backoff for other kinds.
+    # Always finish the bounded colony verification pass before any notifier is called.
+    # Reaction-job reads remain behind their own flag because they use a second ESI endpoint
+    # and scope.
     smart = feature_enabled_for("alert_rescan_backoff", context_id)
     by_kind = _due_alerts(con, context_id, notify_kinds, min_severity, smart)
 

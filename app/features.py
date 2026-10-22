@@ -278,7 +278,8 @@ FEATURE_REGISTRY = [
      "default": False},
     {"key": "alert_rescan_backoff", "label": "Alerts: nag less each time",
      "group": "Notifications",
-     "description": "Back off repeated colony alerts that nobody has acted on. Every colony alert "
+     "description": "Back off repeated colony alerts other than expired extractions, which always "
+                    "use daily-to-weekly reminders for the same program. Every colony alert "
                     "is always re-read before sending; this flag controls the additional policy "
                     "that each repeat of an alert you have not acted on waits twice as long as "
                     "the last, up to twice a day, instead "

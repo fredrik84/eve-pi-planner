@@ -327,7 +327,8 @@ def _extractor_program_lengths(rows) -> tuple[list[dict], float | None]:
 def compute_alerts(context_id: int, rows=None, now: float | None = None) -> list[dict]:
     """Flat list of individual alert instances for this account: one dict per affected
     planet/kind — {kind, severity, character_id, character_name, planet_id, location,
-    hours_left, pct (storage_full only), prog_hours/norm_hours (schedule_sync only)}. Already
+    hours_left, expiry (expired only), pct (storage_full only),
+    prog_hours/norm_hours (schedule_sync only)}. Already
     filtered by the account's alert_settings thresholds and muted_kinds, so callers never need
     to re-check those.
 
@@ -386,6 +387,7 @@ def compute_alerts(context_id: int, rows=None, now: float | None = None) -> list
                         "kind": "expired", "severity": "high",
                         "character_id": cid, "character_name": ch,
                         "planet_id": planet_id, "location": loc, "hours_left": hours_left,
+                        "expiry": exp,
                     })
                 elif now <= exp < now + expiring_window_s and "expiring" not in muted:
                     alerts.append({

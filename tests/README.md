@@ -39,6 +39,10 @@ live dashboard API with isolated fixture data.
 isolation, authentication, dismissal, and migration of existing submissions. Its JavaScript
 companion checks the global banner, refresh behavior, and failed requests.
 
+`test_expired_reminders.py` checks the expired-program reminder sequence with an in-memory log,
+including a simulated three-week break through the real notification scheduler, program restarts,
+failed reads, existing send history and multiple notification channels. Run it in the app container.
+
 `test_hybrid_setup.py` and `test_redeploy_candidates.py` require their documented local fixtures:
 run `scripts/seed_hybrid_fixture.py` and `scripts/seed_redeploy_fixture.py` in the local test
 container before those API suites. Account-deletion fixtures give each account its own colony

@@ -151,11 +151,17 @@ anyone not on the rung.
   each (`_format_batch`, `_KIND_LABELS` for the per-kind title/noun), rather than firing one
   notification per planet — an earlier per-event version produced a wall of pings when several
   things expired close together. **Cooldown is per-kind** (`_COOLDOWN_HOURS`): 2h for the
-  time-decaying kinds (expiry/storage), 4h for factory refill, **24h for the correctness-based
+  time-decaying kinds (expiring/storage), 4h for factory refill, **24h for the correctness-based
   kinds** (`ext_unrouted` etc.) — those are persistent structural problems until the player fixes
   them, not something that resolves itself, so a short cooldown would just nag every 15 minutes
   about the same unfixed issue. Cooldown is checked **before** collecting each alert into its
   batch, so one recently-notified planet doesn't block others in the same run.
+- **Expired extraction reminders:** the first alert for a program is immediate. Further successful
+  notifications wait 24h, 48h, 4 days, then 7 days between reminders. This policy always applies,
+  including when `alert_rescan_backoff` is off. History is scoped to the account, character and
+  planet, and only sends after the program's actual expiry count. A restarted program's next
+  expiry starts fresh; a long silence or failed read does not. Existing log rows are reused, so
+  deployment does not send another round of first alerts. Multiple channels count as one send.
 - **`POST /api/notifications/resend-last`:** replays the most recent logged batch (grouped by
   `sent_at` to the minute, since all sends in one scheduler run land within seconds of each other)
   to all enabled channels, tagged `[Replay]`. Built because testing the real formatting meant
@@ -192,11 +198,12 @@ in-system ordinal is already stored. Both answers are immutable, so this is pure
 speed up the hand rescan. **Worst case is therefore 20 targets x 2 = 40 requests per 15-minute tick
 for the entire app**, whatever the number of accounts.
 
-Because a scan happens per *send*, and sends back off (below), an ignored problem costs about four
-reads on day one and two a day after — against ~96 per character per day for the blanket-timer
-alternative that was rejected.
+Because a scan happens per *send*, reminders backing off also reduces reads. Expired extraction
+programs now need at most one read per weekly reminder once their sequence reaches that interval;
+other kinds still cap at twice a day — against ~96 reads per character per day for the blanket
+timer alternative that was rejected.
 
-**Backoff on repeats.** `_consecutive_cooldown_h` doubles the kind's base interval per consecutive
+**Backoff on other repeats.** `_consecutive_cooldown_h` doubles the kind's base interval per consecutive
 send, capped at `_BACKOFF_CAP_H` (12h). Derived from `pp_notification_log` rather than stored: the
 log already records every send, and a counter column would be a second source of truth that drifts
 the first time a send fails. A gap longer than the interval then in force means the alert stopped
