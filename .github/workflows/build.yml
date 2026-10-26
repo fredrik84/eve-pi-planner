@@ -51,6 +51,8 @@ jobs:
         run: node tests/test_reaction_progressive.js
       - name: Check Setup Analysis overlap advice
         run: node tests/test_analysis_overlap.js
+      - name: Check refill quantities, runtimes and values
+        run: node tests/test_refill_deadline.js
       - name: Check Planet DB review alerts
         run: node tests/test_planet_submission_reviews.js
       - name: no-undef
@@ -80,6 +82,7 @@ jobs:
           python tests/test_cold_load.py
           python tests/test_planet_submission_reviews.py
           python tests/test_expired_reminders.py
+          python tests/test_pi_product_prices.py
           python tests/test_upgrade_policy.py
 
   build:

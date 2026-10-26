@@ -176,7 +176,7 @@ def list_planets():
 
 
 @router.get("/api/pi-products")
-def list_pi_products():
+def list_pi_products(include_prices: bool = False):
     pi_data = load_pi_data()
     products = [
         {"type_id": tid, "name": t["name"], "tier": t["pi_tier"]}
@@ -184,6 +184,11 @@ def list_pi_products():
         if t["pi_tier"] in (1, 2, 3, 4)
     ]
     products.sort(key=lambda p: (p["tier"], p["name"]))
+    if include_prices:
+        from app.market import fetch_prices
+        prices = fetch_prices([p["type_id"] for p in products])
+        for p in products:
+            p["sell_price"] = prices.get(p["type_id"])
     return {"products": products}
 
 

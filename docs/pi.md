@@ -399,6 +399,26 @@ ON) ignores `input_m3` and fills to a clean 30,000 m³ (3 LP), matching the usua
 you drop the next batch" workflow. Off = subtract the last-scan contents. m³/unit is 0.19 (verified);
 the under-fill people hit was the stale `input_m3`, not the volume constant.
 
+The refill readout distinguishes **Inventory lasts** (the entire pasted supply for the whole
+plan, including future drops) from **Refill lasts** (time until the first displayed factory
+runs dry after this drop). The latter uses each factory's own burn rate and the quantities in
+the selected Summary/All planets view; retained pad inputs count only when pads are not emptied.
+Missing required P1 means zero inventory endurance. Legacy plans without burn rates show an
+unknown duration.
+
+**Inventory value** covers all recognised pasted PI materials, including stock unused by the
+plan. **Refill value** covers only the displayed delivery quantities. Both use the same cached
+Jita sell estimates from `/api/pi-products?include_prices=true`; the default product picker makes
+no market request. Prices are loaded asynchronously, reused for 15 minutes, and unavailable
+prices or unrecognised inventory are never silently valued at zero. These are material values,
+separate from the estimated output value.
+
+**Total materials to bring** sums each material across all displayed products and factories,
+omits skipped deliveries, and shows both a copyable total and its multiplication (for example,
+13 × 13,157 = 171,041). Character filtering changes refill totals/value/duration without changing
+the global allocation or the whole-plan inventory duration. Whole-plan production estimates
+are omitted under a character filter because snapshots do not carry per-character output rates.
+
 ## Refill to a deadline (`refill_deadline`)
 
 "Fill it up" commits the next login to whenever a full pad happens to empty. **Run dry at…**

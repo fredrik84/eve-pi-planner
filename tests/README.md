@@ -11,6 +11,7 @@ them from the repository root so relative `app/` and `static/` reads resolve con
 node tests/test_routing_client.js
 node tests/test_character_health.js
 node tests/test_planet_submission_reviews.js
+node tests/test_refill_deadline.js
 
 # Tests that only need the repository
 python3 tests/test_setup_page.py
@@ -42,6 +43,11 @@ companion checks the global banner, refresh behavior, and failed requests.
 `test_expired_reminders.py` checks the expired-program reminder sequence with an in-memory log,
 including a simulated three-week break through the real notification scheduler, program restarts,
 failed reads, existing send history and multiple notification channels. Run it in the app container.
+
+`test_refill_deadline.js` runs the real refill allocation and rendering code: deadline ceilings,
+inventory versus delivered runtime/value, shared-material totals, character filters, retained pads,
+missing inputs/prices, and asynchronous price loading. `test_pi_product_prices.py` checks the
+optional public PI price batch without network or a database; run it in the app container.
 
 `test_upgrade_policy.py` guards dependency PR checks, the push-only publish/deploy boundary,
 matching runtime/CI Python versions, and matching Playwright package/browser-image versions.

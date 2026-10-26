@@ -58,7 +58,7 @@ function load(opts) {
   vm.runInContext(SRC, sandbox, { filename: 'static/refill.js' });
   const facs = (o.facs || [{}]).map((f, i) => ({
     loc: f.loc || `Char · SYS P${i + 1}`,
-    char: 'Char',
+    char: f.char || 'Char',
     shareByTid: f.shareByTid || { '100': 1 / (o.facs || [{}]).length, '200': 1 / (o.facs || [{}]).length },
     rateByTid: 'rateByTid' in f ? f.rateByTid : { '100': RATE, '200': RATE },
     runByTid: 'runByTid' in f ? f.runByTid : { '100': RUN, '200': RUN },
@@ -83,6 +83,8 @@ function load(opts) {
     _refillModel = __st.model; _p1TidToName = __st.names; _planConsumption = __st.consumption;
     _p1Stacks = __st.stacks; _planMeta = __st.meta; _refillMode = __st.mode;
     _refillDeadline = __st.deadline; _refillIgnorePads = __st.ignorePads;
+    _refillInventoryStacks = __st.stacks;
+    _refillPriceState = 'ready'; _refillPrices = { 100: 2, 200: 5, 300: 7 };
     updateP1Distribution();
   `, sandbox);
   const read = expr => vm.runInContext(expr, sandbox);
@@ -295,5 +297,116 @@ console.log('\nthe controls and the readout render, and say both clocks:');
   check(/whole runs/.test((els.refillHint || {}).innerHTML || ''), 'and the hint describes deadline mode, not fill-up');
 }
 
-console.log('\n' + (fails.length ? 'FAILED: ' + fails.join('; ') : 'all checks passed'));
-process.exit(fails.length ? 1 : 0);
+console.log('\nfull inventory and one delivered refill have separate values and runtimes:');
+{
+  const els = {};
+  const t = load({ mode: 'full', stacks: { 100: 1e6, 200: 1e6, 300: 100 },
+    dom: id => (els[id] = els[id] || { innerHTML: '', dataset: {}, value: '' }) });
+  const o = t.read('_refillOverview()');
+  check(o.inventoryHours === 50000, 'the whole stock supplies 50,000 hours');
+  check(near(o.refillHours, 3947.35, 0.01), 'one pad load lasts 3,947.35 hours, not the whole stock');
+  check(o.totals.find(t => t.tid === '100').quantity === 78947, 'only the delivered 78,947 units count as the refill');
+  check(t.read('_refillValue(_refillInventoryStacks)') === '7000700', 'inventory value includes the unused PI material');
+  check(t.read('_refillValue(Object.fromEntries(_refillOverview().totals.map(t => [t.tid,t.quantity])))') === '552629',
+    'refill value is 78,947 × (2 + 5), with hangar leftovers excluded');
+  const html = els.refillDays.innerHTML;
+  check(/Inventory lasts/.test(html) && /Refill lasts/.test(html), 'both durations are labelled');
+  check(/>50000<\/span>\s*<span class="refill-stat-lbl">Inventory lasts/.test(html)
+    && />3947\.35<\/span>\s*<span class="refill-stat-lbl">Refill lasts/.test(html),
+    'the rendered countdowns quote their own quantities');
+  check(/Inventory value/.test(html) && /Refill value/.test(html), 'input values are separate from output value');
+  check(/Total materials to bring/.test(els.refillTotals.innerHTML), 'the combined haul table renders');
+}
+
+console.log('\nmaterial totals multiply the shown amount and follow the character filter:');
+{
+  const els = {};
+  const t = load({ mode: 'full', stacks: { 100: 171041, 200: 171041 },
+    facs: Array.from({ length: 13 }, (_, i) => ({ char: i < 3 ? 'Alt' : 'Char' })),
+    dom: id => (els[id] = els[id] || { innerHTML: '', dataset: {}, value: '' }) });
+  check(t.uniform['100'] === 13157, 'the uniform quantity is 13,157');
+  check(t.read('_refillOverview().totals[0].quantity') === 171041, '13 × 13,157 is 171,041 units');
+  check(/13 × 13,157 = 171,041/.test(els.refillTotals.innerHTML), 'the multiplication is visible next to the copyable total');
+  vm.runInContext("_setRefillChar('Alt')", t.sandbox);
+  check(t.read('_refillOverview().totals[0].quantity') === 39471, 'the selected three factories need 39,471 units');
+  check(/3 × 13,157 = 39,471/.test(els.refillTotals.innerHTML), 'the displayed total follows the filter');
+  check(/Refill figures cover Alt/.test(els.refillDays.innerHTML), 'the readout refreshes and identifies its scope');
+}
+
+console.log('\nper-factory amounts, rates and retained contents decide refill endurance:');
+{
+  const t = load({ mode: 'full', ignorePads: false, stacks: { 100: 1e6, 200: 1e6 },
+    facs: [{ inputM3: 0 }, { inputM3: 19000 }] });
+  const uniform = t.read('_refillOverview()');
+  check(uniform.totals[0].quantity === 57894, 'Summary brings two drops of 28,947 units');
+  check(near(uniform.refillHours, 1447.35, 0.01), 'Summary runs until the empty factory exhausts its smaller drop');
+  vm.runInContext("_setRefillView('detailed')", t.sandbox);
+  const detailed = t.read('_refillOverview()');
+  check(detailed.totals[0].quantity === 107894, 'All planets sums 78,947 + 28,947 instead');
+  check(near(detailed.refillHours, 3947.35, 0.01), 'retained stock extends the fuller factory to the same duration');
+  vm.runInContext('_refillModel[0].facs[0].rateByTid = {100:960,200:960}', t.sandbox);
+  check(near(t.read('_refillOverview().refillHours'), 1973.675, 0.01), 'the faster factory uses its own burn rate');
+}
+
+console.log('\nshared materials sum across products and skipped factories need no delivery:');
+{
+  const t = load({ deadlineH: 48, ignorePads: false, stacks: { 100: 1e6, 200: 1e6 },
+    facs: [{ inputM3: 0 }, { inputM3: 10000 }] });
+  check(t.read('_refillOverview().totals[0].quantity') === 960, 'the skipped factory contributes zero to total delivery');
+  vm.runInContext(`
+    _refillModel.push({title:'Other product', cols:[{id:'100',name:'Electrolytes'}], facs:[
+      {char:'Other',loc:'Other',shareByTid:{100:1},rateByTid:{100:240},amt:{100:123},inputM3:0}
+    ]}); _refillView='detailed';
+  `, t.sandbox);
+  check(t.read('_refillOverview().totals.find(t=>t.tid === "100").quantity') === 1083,
+    'the same material used by two products is one summed haul quantity');
+  check(near(t.read('_refillOverview().refillHours'), 12.3, 0.001), 'the added factory has its own 12.3-hour run');
+}
+
+console.log('\nmissing materials, missing rates and missing prices are explicit:');
+{
+  const t = load({ mode: 'full', stacks: { 100: 1e6 } });
+  check(t.read('_refillOverview().inventoryHours') === 0, 'a missing required input means zero inventory endurance');
+  check(t.read('_refillOverview().refillHours') === 0, 'the unfed refill is not advertised as a long run');
+  vm.runInContext("_planConsumption={}; _refillModel[0].facs[0].rateByTid={}", t.sandbox);
+  check(t.read('_refillOverview().refillHours') === null, 'an old snapshot with no rates has an unknown runtime');
+  check(t.read('_refillValue({999:100})') === 'Unavailable', 'a missing price never becomes a zero-value material');
+  vm.runInContext("_refillPriceState='loading'", t.sandbox);
+  check(t.read('_refillValue({100:100})') === 'Loading prices…', 'loading prices have an explicit state');
+  vm.runInContext("_refillPriceState='error'", t.sandbox);
+  check(t.read('_refillValue({100:100})') === 'Unavailable', 'failed prices have an explicit state');
+}
+
+async function checkPriceLoading() {
+  const els = { inv: { value: '' } };
+  const t = load({ mode: 'full', dom: id => (els[id] = els[id] || { innerHTML: '', value: '' }) });
+  const calls = [];
+  let finish;
+  t.sandbox.api = url => { calls.push(url); return new Promise(resolve => { finish = resolve; }); };
+  t.sandbox._parseInventoryLine = line => { const p = line.split('\t'); return p.length === 2 ? [p[0], Number(p[1])] : null; };
+  els.inv.value = 'Water\t10\nWater\t15\nUnused PI\t100';
+  vm.runInContext("_refillPriceState='idle'; _p1NameToTid={water:'200'}; _loadRefillPrices(); _loadRefillPrices();", t.sandbox);
+  check(calls.length === 1 && calls[0] === '/api/pi-products?include_prices=true', 'concurrent opens share one market price request');
+  // Change the paste while the request is in flight: the current paste must win.
+  els.inv.value = 'Water\t20\nWater\t30\nUnused PI\t100';
+  finish({ products: [{ type_id: 200, name: 'Water', sell_price: 5 }, { type_id: 300, name: 'Unused PI', sell_price: 7 }] });
+  await t.read('_refillPriceRequest');
+  check(t.read('_p1Stacks[200]') === 50, 'the latest paste is parsed, including duplicate lines');
+  check(t.read('_refillValue(_refillInventoryStacks)') === '950', 'the current inventory is valued, including PI unused by the plan');
+  await vm.runInContext('_loadRefillPrices()', t.sandbox);
+  check(calls.length === 1, 'opening again within 15 minutes reuses cached prices');
+  els.inv.value = 'Water\t50\nUnknown item\t100';
+  vm.runInContext('syncRefillFromInventory()', t.sandbox);
+  check(/Inventory value unavailable: unrecognised materials \(Unknown item\)/.test(els.refillDays.innerHTML),
+    'unrecognised inventory cannot silently produce a partial value');
+  t.sandbox.api = async () => { throw new Error('offline'); };
+  vm.runInContext('_refillPricedAt=0', t.sandbox);
+  await vm.runInContext('_loadRefillPrices()', t.sandbox);
+  check(t.read('_refillPriceState') === 'error' && /Market prices could not be loaded/.test(els.refillDays.innerHTML),
+    'market failures preserve usable quantities and report values unavailable');
+}
+
+checkPriceLoading().then(() => {
+  console.log('\n' + (fails.length ? 'FAILED: ' + fails.join('; ') : 'all checks passed'));
+  process.exitCode = fails.length ? 1 : 0;
+}).catch(error => { console.error(error); process.exitCode = 1; });

@@ -111,7 +111,7 @@
 .dist-days { font-size: 13px; color: var(--clr-stat-label); margin-bottom: 16px; min-height: 1em; }
 .dist-days:empty { margin-bottom: 0; }
 .dist-days .dist-days-hint { color: var(--clr-caret); font-style: italic; }
-/* Refill stats bar: days before refill · units produced · sell value of the run */
+/* Inventory and delivered-refill values/runtimes. */
 .refill-lead { font-size: 13px; color: var(--clr-stat-label); margin-bottom: 9px; }
 .refill-lead b { color: var(--clr-text-bright); }
 .refill-stats-bar { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid #1c2030;
@@ -129,6 +129,10 @@
 /* .p1-dist-table inherits the base table look (dark card, uppercase th); only numbers differ. */
 .p1-dist-table th.dist-num, .p1-dist-table td.dist-num { text-align: right; font-variant-numeric: tabular-nums; }
 .p1-dist-loc { color: var(--clr-text); }
+.dist-material-totals { margin-top: 22px; overflow-x: auto; }
+.dist-material-totals:empty { margin-top: 0; }
+.dist-total-breakdown { display: block; margin-top: 4px; font-size: 11px; color: var(--clr-text-dim); white-space: nowrap; }
+.dist-material-totals td:last-child { white-space: nowrap; }
 .p1-amt { color: #46506a; font-weight: 600; }                 /* dash (no inventory entered) */
 .p1-amt.p1-amt-set { color: var(--clr-green); cursor: pointer; }       /* whole-unit count — click to copy */
 .p1-amt.p1-amt-set:hover { text-decoration: underline; }

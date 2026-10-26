@@ -12,6 +12,13 @@ let _p1NameToTid = {};     // lowercase P1 name -> type_id, for parsing the inve
 let _p1TidToName = {};     // type_id -> P1 name, for the "days of production" readout
 let _planConsumption = {}; // type_id -> units/day the plan's factories eat (full rate)
 let _planMeta = {};        // selected plan's production rate + sell value, for the refill stats bar
+let _refillPrices = {};
+let _refillInventoryTypes = {}; // all PI names, including stock unused by the selected plan
+let _refillInventoryStacks = {};
+let _refillUnpricedNames = [];
+let _refillPriceState = 'idle';
+let _refillPricedAt = 0;
+let _refillPriceRequest = null;
 let _refillModel = null;   // [{title, cols:[{id,name}], facs:[{loc, char, shareByTid, amt}]}]
 let _refillView = (() => { try { return localStorage.getItem('refillView') || 'summary'; } catch (e) { return 'summary'; } })();
 let _refillChar = (() => { try { return localStorage.getItem('refillChar') || ''; } catch (e) { return ''; } })();
@@ -311,16 +318,41 @@ async function renderPlanDistribution() {
         <div class="dist-hint" id="refillHint"></div>
         <div class="dist-days" id="refillDays"></div>
         <div class="plan-dist-tables" id="refillTables"></div>
+        <div class="dist-material-totals" id="refillTotals"></div>
       </div>
     </section>`;
   el.dataset.sel = snap.id;
   _renderRefillControls();
+  _loadRefillPrices();
   syncRefillFromInventory();  // compute amounts from the shared inventory paste, then render
+}
+
+// Prices are public game data. Fetch one cached batch per 15 minutes, never per inventory edit,
+// and re-parse the CURRENT paste on completion so switching plans cannot apply an old split.
+function _loadRefillPrices() {
+  if (_refillPriceRequest) return _refillPriceRequest;
+  if (_refillPriceState === 'ready' && Date.now() - _refillPricedAt < 15 * 60000) return Promise.resolve();
+  _refillPriceState = 'loading';
+  _refillPriceRequest = api('/api/pi-products?include_prices=true').then(data => {
+    if (!Array.isArray(data.products) || !data.products.length) throw new Error('No PI prices');
+    _refillPrices = {};
+    _refillInventoryTypes = {};
+    data.products.forEach(p => {
+      _refillInventoryTypes[p.name.toLowerCase()] = String(p.type_id);
+      if (p.sell_price > 0) _refillPrices[String(p.type_id)] = p.sell_price;
+    });
+    _refillPriceState = 'ready';
+    _refillPricedAt = Date.now();
+  }).catch(() => { _refillPriceState = 'error'; }).finally(() => {
+    _refillPriceRequest = null;
+    syncRefillFromInventory();
+  });
+  return _refillPriceRequest;
 }
 
 // Character = the part of a factory loc before " · " (e.g. "Ekaoni · 0-U2M4 P6" → "Ekaoni").
 function _refillCharOf(loc) { return (loc.split(' · ')[0] || '').trim(); }
-function _setRefillChar(v) { _refillChar = v; try { localStorage.setItem('refillChar', v); } catch (e) {} _renderRefillTables(); }
+function _setRefillChar(v) { _refillChar = v; try { localStorage.setItem('refillChar', v); } catch (e) {} _renderRefillTables(); _updateRefillDays(); }
 // The two views hand out DIFFERENT amounts, so the readout under them (when each factory runs dry)
 // is view-specific too — it has to be re-rendered with them.
 function _setRefillView(v) { _refillView = v; try { localStorage.setItem('refillView', v); } catch (e) {} _renderRefillControls(); _renderRefillTables(); _updateRefillDays(); }
@@ -489,6 +521,101 @@ function _renderRefillTables() {
         <table class="p1-dist-table">${head}<tbody>${body}</tbody></table>
       </div>`;
   }).join('');
+  _renderRefillTotals();
+}
+
+// Every total and runtime must use the quantity the selected view actually tells you to drop.
+function _refillDrop(f, tid) {
+  if (f.skip || !(tid in f.shareByTid)) return 0;
+  const amount = _refillView === 'detailed' ? f.amt[tid] : _refillUniform[tid];
+  return amount > 0 ? amount : 0;
+}
+
+function _refillOverview() {
+  const items = _planConsumptionItems();
+  const perDay = Object.fromEntries(items.map(it => [it.tid, it.perDay]));
+  const facs = (_refillModel || []).flatMap(g => g.facs).filter(f => !_refillChar || f.char === _refillChar);
+  const totals = {};
+  let refillHours = Infinity, ratesKnown = true;
+  facs.forEach(f => {
+    const tids = Object.keys(f.shareByTid);
+    const rates = Object.fromEntries(tids.map(t => [t, (f.rateByTid || {})[t] || (perDay[t] || 0) * f.shareByTid[t]]));
+    const totalRate = Object.values(rates).reduce((a, rate) => a + rate, 0);
+    const inPad = !_refillIgnorePads && f.inputM3 > 0 ? f.inputM3 / _P1_VOL_M3 : 0;
+    tids.forEach(t => {
+      const amount = _refillDrop(f, t);
+      const entry = totals[t] || (totals[t] = { tid: t, name: _p1TidToName[t] || ('P1 ' + t), quantity: 0, drops: {} });
+      entry.quantity += amount;
+      if (amount > 0) entry.drops[amount] = (entry.drops[amount] || 0) + 1;
+      if (!(rates[t] > 0)) { ratesKnown = false; return; }
+      const retained = totalRate > 0 ? inPad * rates[t] / totalRate : 0;
+      refillHours = Math.min(refillHours, (retained + amount) / rates[t] * 24);
+    });
+  });
+  // A missing required material is zero hours, not an infinitely lasting partial recipe.
+  const inventoryHours = items.length ? Math.min(...items.map(it => (_p1Stacks[it.tid] || 0) / it.perDay * 24)) : null;
+  return { facs, totals: Object.values(totals).sort((a, b) => a.name.localeCompare(b.name)), inventoryHours,
+           refillHours: ratesKnown && Number.isFinite(refillHours) ? refillHours : null };
+}
+
+function _refillValue(stacks) {
+  if (_refillPriceState !== 'ready') return _refillPriceState === 'loading' ? 'Loading prices…' : 'Unavailable';
+  let value = 0;
+  for (const [tid, quantity] of Object.entries(stacks)) {
+    if (!(quantity > 0)) continue;
+    if (!(_refillPrices[tid] > 0)) return 'Unavailable';
+    value += quantity * _refillPrices[tid];
+  }
+  return _fmtIsk(value);
+}
+
+function _refillStat(value, label, title = '') {
+  return `<div class="refill-stat"${title ? ` title="${_esc(title)}"` : ''}><span class="refill-stat-val">${value}</span>
+    <span class="refill-stat-lbl">${label}</span></div>`;
+}
+
+function _refillStatsTiles(overview) {
+  const inventoryValue = _refillPriceState === 'ready' && _refillUnpricedNames.length ? 'Unavailable' : _refillValue(_refillInventoryStacks);
+  const tiles = [
+    _refillStat(inventoryValue, 'Inventory value', 'Pasted PI materials at estimated Jita sell prices; includes materials unused by this plan.'),
+    _refillStat(_refillValue(Object.fromEntries(overview.totals.map(t => [t.tid, t.quantity]))), 'Refill value', 'Only the materials to bring to the shown factories, at estimated Jita sell prices.'),
+    _refillStat(overview.inventoryHours == null ? '—' : _fmtHours(overview.inventoryHours), 'Inventory lasts', 'How long the entire pasted P1 stock can supply the whole plan, including future refills.'),
+    _refillStat(overview.refillHours == null ? '—' : _fmtHours(overview.refillHours), 'Refill lasts', 'Time until the first shown factory runs dry after this drop; includes retained pad contents when pads are not emptied.'),
+  ];
+  // A character filter lacks per-character product output rates, so do not attribute a whole
+  // plan's production to a subset of its factories.
+  if (!_refillChar && overview.refillHours > 0) {
+    const days = overview.refillHours / 24, m = _planMeta || {};
+    if (m.productsPerDay) tiles.push(_refillStat(Math.round(m.productsPerDay * days).toLocaleString(), `${_esc(m.unitLabel || 'units')} before next drop`));
+    if (m.iskPerDay) tiles.push(_refillStat(_fmtIsk(m.iskPerDay * days), 'Output value (est.)'));
+  }
+  return tiles;
+}
+
+function _refillStatsNotes() {
+  const notes = ['Values are Jita sell estimates. Inventory includes all pasted PI materials; refill value covers only the materials to bring.'];
+  if (_refillChar) notes.push(`Refill figures cover ${_esc(_refillChar)}; inventory duration covers the whole plan.`);
+  if (!_refillIgnorePads) notes.push('Refill duration includes retained pad contents, estimated in each factory’s input ratio.');
+  if (_refillPriceState === 'ready' && _refillUnpricedNames.length)
+    notes.push(`Inventory value unavailable: unrecognised materials (${_refillUnpricedNames.slice(0, 3).map(_esc).join(', ')}).`);
+  if (_refillPriceState === 'error') notes.push('Market prices could not be loaded. Quantities and durations are still available.');
+  return notes.map(n => `<div class="refill-stat-note">${n}</div>`).join('');
+}
+
+function _renderRefillTotals() {
+  const el = document.getElementById('refillTotals');
+  if (!el) return;
+  const totals = _refillOverview().totals;
+  if (!totals.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="dist-line-head">Total materials to bring${_refillChar ? `<span class="dist-line-count">${_esc(_refillChar)}</span>` : ''}</div>
+    <table class="p1-dist-table"><thead><tr><th>Material</th><th class="dist-num">Total refill</th><th class="dist-num">Value (est.)</th></tr></thead>
+    <tbody>${totals.map(t => {
+      const drops = Object.entries(t.drops).sort((a, b) => Number(b[0]) - Number(a[0]));
+      const breakdown = drops.map(([amount, count]) => `${count} × ${Number(amount).toLocaleString()}`).join(' + ');
+      return `<tr><td class="p1-dist-loc">${_esc(t.name)}</td><td class="dist-num"><b class="p1-amt p1-amt-set" onclick="copyP1Amount(this)" title="Click to copy total">${t.quantity.toLocaleString()}</b>
+        ${breakdown ? `<span class="dist-total-breakdown">${breakdown} = ${t.quantity.toLocaleString()}</span>` : ''}</td>
+        <td class="dist-num">${_refillValue({ [t.tid]: t.quantity })}</td></tr>`;
+    }).join('')}</tbody></table>`;
 }
 
 // _parseInventoryLine (name/qty parser, tab- or 2+-space columns, both category-position
@@ -500,11 +627,16 @@ function _renderRefillTables() {
 function syncRefillFromInventory() {
   const inv = document.getElementById('inv');
   _p1Stacks = {};
+  _refillInventoryStacks = {};
+  _refillUnpricedNames = [];
   for (const line of (inv ? inv.value : '').split('\n')) {
     const parsed = _parseInventoryLine(line);
     if (!parsed) continue;
     const tid = _p1NameToTid[parsed[0].toLowerCase()];
     if (tid) _p1Stacks[tid] = (_p1Stacks[tid] || 0) + parsed[1];   // sum duplicate lines (e.g. pads paste + inventory paste)
+    const inventoryTid = _refillInventoryTypes[parsed[0].toLowerCase()] || tid;
+    if (inventoryTid) _refillInventoryStacks[inventoryTid] = (_refillInventoryStacks[inventoryTid] || 0) + parsed[1];
+    else if (parsed[1] > 0) _refillUnpricedNames.push(parsed[0]);
   }
   updateP1Distribution();
 }
@@ -717,50 +849,46 @@ function _deadlineSplit(allFacs, perDay) {
 // bend to be honest — a deadline the pads can't reach, factories to skip, the cost of rounding to
 // whole runs, and P1 you're short of.
 function _renderDeadlineStats(el) {
-  const d = _deadlineInfo, m = _planMeta || {};
+  const d = _deadlineInfo;
   if (d.past) {
     el.innerHTML = `<span class="dist-days-hint">That deadline has already passed — pick a time in the future.</span>`;
     return;
   }
   // Summary hands out the uniform amount, All planets the per-factory one — report the dry-out of
   // whichever is on screen, never the other one's.
-  const endurance = (_refillView === 'detailed') ? d.endurance : d.uniformEndurance;
+  const overview = _refillOverview();
+  const endurance = overview.refillHours ?? ((_refillView === 'detailed') ? d.endurance : d.uniformEndurance);
+  const allSkipped = overview.facs.length > 0 && overview.facs.every(f => f.skip);
   const dryAt = Date.now() + endurance * 3600000;
   const drift = d.hours - endurance;
-  const lead = d.allSkipped
+  const lead = allSkipped
     ? `<div class="refill-lead">Nothing to drop — every factory is already stocked past your deadline.</div>`
     : drift > 0.05
       // Deliberately NOT attributed to rounding: capacity and a short stock land here too, and
       // each says so in its own note below. The rounding's share is stated separately.
       ? `<div class="refill-lead">Drop this and the first factory runs dry <b>${_fmtHours(drift)}</b> before your deadline — at <b>${_esc(_fmtDeadlineBoth(dryAt))}</b>.</div>`
       : `<div class="refill-lead">Drop this and the factories run dry at <b>${_esc(_fmtDeadlineBoth(d.deadline))}</b>.</div>`;
-  const runHours = Math.min(d.hours, endurance);
-  const tiles = [
-    `<div class="refill-stat"><span class="refill-stat-val">${_fmtHours(d.hours)}</span>
-       <span class="refill-stat-lbl">until your deadline</span></div>`,
-  ];
-  if (m.productsPerDay)
-    tiles.push(`<div class="refill-stat"><span class="refill-stat-val">${Math.round(m.productsPerDay * runHours / 24).toLocaleString()}</span>
-       <span class="refill-stat-lbl">${_esc(m.unitLabel || 'units')} produced</span></div>`);
-  if (m.iskPerDay)
-    tiles.push(`<div class="refill-stat"><span class="refill-stat-val">${_fmtIsk(m.iskPerDay * runHours / 24)}</span>
-       <span class="refill-stat-lbl">sell value of the run</span></div>`);
+  const tiles = _refillStatsTiles(overview);
+  tiles.push(_refillStat(_fmtHours(d.hours), 'Until your deadline'));
   const notes = [];
-  if (d.capped.length) {
+  const shown = new Set(overview.facs.map(f => f.loc));
+  const capped = d.capped.filter(f => shown.has(f.loc));
+  const skipped = d.skip.filter(f => shown.has(f.loc));
+  if (capped.length) {
     // Capacity is a hard ceiling — the soonest reachable deadline is the honest answer, not a
     // number that won't fit in the pads.
-    const soonest = Math.min(...d.capped.map(c => c.hours));
-    notes.push(`${d.capped.length} factor${d.capped.length > 1 ? 'ies' : 'y'} can't hold that much P1 — filled to the pads instead.
+    const soonest = Math.min(...capped.map(c => c.hours));
+    notes.push(`${capped.length} factor${capped.length > 1 ? 'ies' : 'y'} can't hold that much P1 — filled to the pads instead.
       The soonest deadline they can reach is <b>${_esc(_fmtDeadlineBoth(Date.now() + soonest * 3600000))}</b> (${_fmtHours(soonest)} from now).`);
   }
-  if (d.skip.length)
-    notes.push(`${d.skip.length} factor${d.skip.length > 1 ? 'ies are' : 'y is'} already stocked past your deadline — skip ${d.skip.length > 1 ? 'them' : 'it'} and come back in <b>${_fmtHours(d.comeBackH)}</b>.`);
+  if (skipped.length)
+    notes.push(`${skipped.length} factor${skipped.length > 1 ? 'ies are' : 'y is'} already stocked past your deadline — skip ${skipped.length > 1 ? 'them' : 'it'} and come back in <b>${_fmtHours(Math.min(...skipped.map(f => f.hours)))}</b>.`);
   if (d.roundDriftH > 0.05 && !d.allSkipped)
     notes.push(`<b>${_fmtHours(d.roundDriftH)}</b> of that is the rounding to whole factory runs — the alternative is a quantity you can't type.`);
   if (d.stockCapped)
     notes.push(`You don't have enough pasted P1 for this deadline — short ${d.shortfall.slice(0, 3).map(s => `<b>${s.short.toLocaleString()}</b> ${_esc(s.name)}`).join(', ')}. The split is scaled to what you have.`);
   el.innerHTML = `${lead}<div class="refill-stats-bar">${tiles.join('')}</div>`
-    + notes.map(n => `<div class="refill-stat-note">${n}</div>`).join('');
+    + notes.map(n => `<div class="refill-stat-note">${n}</div>`).join('') + _refillStatsNotes();
 }
 
 // Normalise the snapshot's consumption (new = list with names; legacy = {tid: units}) to
@@ -774,52 +902,24 @@ function _planConsumptionItems() {
           .map(t => ({ tid: t, name: _p1TidToName[t] || ('P1 ' + t), perDay: c[t] }));
 }
 
-// How long the P1 you pasted lasts before you must refill the factories: each P1 is eaten at
-// units_per_day (full rate), so the run lasts until the pasted input you have least of (relative
-// to its consumption) runs out. Computed over what you actually pasted.
+// Keep the entire hangar supply separate from the one load actually being delivered.
 function _updateRefillDays() {
   const el = document.getElementById('refillDays');
   if (!el) return;
   if (_deadlineInfo) { _renderDeadlineStats(el); return; }
   const items = _planConsumptionItems();
-  if (!items.length) {  // older snapshot saved before this feature — prompt a re-save
-    el.innerHTML = `<span class="dist-days-hint">Re-save this plan in Planetary Planning to see how long your P1 lasts before a refill.</span>`;
-    return;
-  }
-  const pasted = items.filter(it => (_p1Stacks[it.tid] || 0) > 0);
-  if (!pasted.length) {  // nothing relevant pasted yet → tell the user it's here
-    el.innerHTML = `<span class="dist-days-hint">Paste your P1 in the Inventory box above to see how long it lasts before a refill.</span>`;
-    return;
-  }
-  let minDays = Infinity, binding = null;
-  for (const it of pasted) {
-    const d = _p1Stacks[it.tid] / it.perDay;
-    if (d < minDays) { minDays = d; binding = it; }
-  }
-  const m = _planMeta || {};
-  const unitsMade = Math.round((m.productsPerDay || 0) * minDays);
-  const sellValue = (m.iskPerDay || 0) * minDays;
-  const lead = `<div class="refill-lead">With what you pasted, <b>${_esc(binding.name)}</b> runs out first.</div>`;
-  const tiles = [
-    `<div class="refill-stat"><span class="refill-stat-val">${_fmtHours(minDays * 24)}</span>
-       <span class="refill-stat-lbl">before refill</span></div>`,
-  ];
-  if (m.productsPerDay)
-    tiles.push(`<div class="refill-stat"><span class="refill-stat-val">${unitsMade.toLocaleString()}</span>
-       <span class="refill-stat-lbl">${_esc(m.unitLabel || 'units')} produced</span></div>`);
-  if (m.iskPerDay)
-    tiles.push(`<div class="refill-stat"><span class="refill-stat-val">${_fmtIsk(sellValue)}</span>
-       <span class="refill-stat-lbl">sell value of the run</span></div>`);
-  // Older snapshot without the production rate → tell the user how to get the extra tiles.
-  const rateNote = (!m.productsPerDay && !m.iskPerDay)
-    ? `<div class="refill-stat-note">Re-save this plan in Planetary Planning to also see units produced &amp; sell value.</div>`
-    : '';
-  // Required inputs you didn't paste — they'd cap the run too, so flag them.
+  const overview = _refillOverview();
+  const binding = items.slice().sort((a, b) => ((_p1Stacks[a.tid] || 0) / a.perDay) - ((_p1Stacks[b.tid] || 0) / b.perDay))[0];
+  const lead = !items.length
+    ? 'Re-save this plan in Planetary Planning to include its consumption rates.'
+    : !items.some(it => (_p1Stacks[it.tid] || 0) > 0)
+      ? 'Paste your P1 in the Inventory box above to calculate a refill.'
+      : `Your full inventory lasts until <b>${_esc(binding.name)}</b> runs out. Refill lasts shows when the first shown factory empties after this drop.`;
   const missing = items.filter(it => !((_p1Stacks[it.tid] || 0) > 0));
   const missNames = missing.length <= 3 ? ` (${missing.map(x => _esc(x.name)).join(', ')})` : '';
   const missNote = missing.length
-    ? `<div class="refill-stat-note">${missing.length} plan input${missing.length > 1 ? 's' : ''} not pasted${missNames} — they'd cap the run too.</div>`
+    ? `<div class="refill-stat-note">${missing.length} required input${missing.length > 1 ? 's' : ''} not pasted${missNames} — inventory duration is zero until all inputs are available.</div>`
     : '';
-  el.innerHTML = `${lead}<div class="refill-stats-bar">${tiles.join('')}</div>${rateNote}${missNote}`;
+  el.innerHTML = `<div class="refill-lead">${lead}</div><div class="refill-stats-bar">${_refillStatsTiles(overview).join('')}</div>${missNote}${_refillStatsNotes()}`;
 }
 
