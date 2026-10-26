@@ -401,12 +401,10 @@ function renderDashboard(data) {
   _loadAccountValue();
 }
 
-// Lifetime "account value" tiles — the total value your account has PRODUCED. These live at the
-// END of the Overview grid rather than in a card of their own (2026-07-29): three numbers didn't
-// warrant a separate section above the fold, and they read better beside the other headline stats. PI is an estimate from recent
-// extraction history (refined to P1; PI has no ISK input cost, so it's turnover ≈ net); reactions is
-// the exact forward-only ledger (turnover + net profit). Two cheap DB-backed calls, filled async so
-// they never block the dashboard; the card stays hidden until at least one has a number.
+// Lifetime earnings tiles sit at the end of the Overview grid beside the other headline stats.
+// PI estimates production value from recent extraction history (refined to P1, with no ISK input
+// cost); reactions uses net profit from the forward-only completion ledger. Two cheap DB-backed
+// calls fill the tiles asynchronously so they never block the dashboard.
 function _loadAccountValue() {
   const grid = document.getElementById('dashOverviewStats');
   if (!grid) return;
@@ -422,12 +420,9 @@ function _loadAccountValue() {
     if (pi && pi.value > 0)
       tiles.push(_dashTile(_fmtIsk(pi.value), 'PI produced (est.)', 'an-ok',
                            'Estimated from recent extraction history. PI has no ISK input cost, so turnover ≈ net.'));
-    if (rx && rx.jobs > 0) {
-      tiles.push(_dashTile(_fmtIsk(rx.turnover), 'Reactions turnover', '',
-                           'Exact forward-only ledger of completed reaction jobs.'));
-      tiles.push(_dashTile(_fmtIsk(rx.net_profit), 'Reactions net profit', 'an-ok',
-                           'Output value minus materials and job fees, locked in at completion.'));
-    }
+    if (rx && rx.jobs > 0)
+      tiles.push(_dashTile(_fmtIsk(rx.net_profit), 'Reactions net profit', rx.net_profit < 0 ? 'an-bad' : 'an-ok',
+                           'Lifetime output value minus materials, job fees, freight and collateral, valued at completion.'));
     if (!tiles.length) return;   // nothing produced yet — the Overview just stays as it is
     grid.insertAdjacentHTML('beforeend',
       tiles.join('').replace(/class="an-stat"/g, 'class="an-stat dash-acct-tile"'));
