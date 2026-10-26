@@ -403,16 +403,17 @@ function renderDashboard(data) {
 
 // Lifetime earnings tiles sit at the end of the Overview grid beside the other headline stats.
 // PI estimates production value from recent extraction history (refined to P1, with no ISK input
-// cost); reactions uses net profit from the forward-only completion ledger. Two cheap DB-backed
-// calls fill the tiles asynchronously so they never block the dashboard.
+// cost); reactions and manufacturing use net profit from their forward-only completion ledgers.
+// Cheap DB-backed calls fill the tiles asynchronously so they never block the dashboard.
 function _loadAccountValue() {
   const grid = document.getElementById('dashOverviewStats');
   if (!grid) return;
   Promise.all([
     api('/api/pi-lifetime').catch(() => null),
     api('/api/reactions/lifetime').catch(() => null),
-  ]).then(([pi, rx]) => {
-    // Two async calls landing in a grid that was already painted — a second dashboard render can
+    api('/api/industry/lifetime').catch(() => null),
+  ]).then(([pi, rx, mfg]) => {
+    // Async calls landing in a grid that was already painted — a second dashboard render can
     // have another pair in flight, so clear our own tiles before adding them rather than stacking
     // duplicates onto the end of the Overview.
     grid.querySelectorAll('.dash-acct-tile').forEach(el => el.remove());
@@ -423,6 +424,9 @@ function _loadAccountValue() {
     if (rx && rx.jobs > 0)
       tiles.push(_dashTile(_fmtIsk(rx.net_profit), 'Reactions net profit', rx.net_profit < 0 ? 'an-bad' : 'an-ok',
                            'Lifetime output value minus materials, job fees, freight and collateral, valued at completion.'));
+    if (mfg && mfg.jobs > 0)
+      tiles.push(_dashTile(_fmtIsk(mfg.net_profit), 'Industry net profit', mfg.net_profit < 0 ? 'an-bad' : 'an-ok',
+                           'Lifetime manufacturing output value minus materials and job fees, valued at completion.'));
     if (!tiles.length) return;   // nothing produced yet — the Overview just stays as it is
     grid.insertAdjacentHTML('beforeend',
       tiles.join('').replace(/class="an-stat"/g, 'class="an-stat dash-acct-tile"'));
