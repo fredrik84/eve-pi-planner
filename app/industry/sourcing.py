@@ -108,12 +108,6 @@ def enable_bound_sources(context_id: int, keys: list[str]) -> None:
     remember_source_default(context_id, keys)
 
 
-def enable_bound_source(context_id: int, key: str) -> None:
-    """Single-box form of `enable_bound_sources`, kept because every existing caller says it that
-    way."""
-    enable_bound_sources(context_id, [key] if key else [])
-
-
 def _manual(context_id: int, order_id: int) -> dict[int, float]:
     ensure_sourcing_table()
     con = get_connection()

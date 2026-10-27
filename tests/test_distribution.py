@@ -183,7 +183,6 @@ def run_case(base_url: str, case: dict) -> bool:
         print(f"\n  Unassigned slots: {unassigned}")
 
     # ── Out-of-system assignments ───────────────────────────────────────────
-    chosen = case["body"].get("chosen_systems", [])
     real_oos = [o for o in out_of_sys if not o["is_replace"]]
     if real_oos:
         print(f"\n  WARNING: {len(real_oos)} non-replace extractors outside chosen systems:")

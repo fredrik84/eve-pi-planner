@@ -14,7 +14,6 @@ thing I need is hidden" as usefully as they can report "it's missing", and the r
 
 Run: python3 tests/test_setup_page.py
 """
-import re
 import sys
 
 sys.path.insert(0, ".")

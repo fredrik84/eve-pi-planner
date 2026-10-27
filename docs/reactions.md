@@ -20,7 +20,7 @@ Find a section: `grep -n '^## ' docs/reactions.md` and read from that line — t
 - **Landing a stage in one go (`_align_stage_jobs`)** — why the spread matters more than the total, and what moves to close it
 - **One request, one answer (`request_memo`)** — why an order report was rebuilding the same evidence five times
 - **An order's runs follow capacity, not fairness (reverted experiment)** — why hosts get different run counts, and what the even split cost
-- **An order stops at the character not worth a login (`reactions_pack_hosts`)** — the marginal-gain rule, why it needs no cadence, and two earlier attempts that did nothing
+- **Customer host packing** — allocation packs the peak concurrent jobs onto the fewest suitable characters; the obsolete `reactions_pack_hosts` toggle has been retired
 - **One run count per product per stage (`level_stage_runs`)** — why levelling across assigns is sound, and what it deliberately doesn't touch
 - **One run count per product, across every character (`reactions_level_runs`)** — the cross-character leveller: how the number is chosen, why it also saves slots, and the one thing it still can't merge
 - **The leveller has to respect the formula cap too** — why a re-split could ask for a job you cannot install
@@ -66,7 +66,7 @@ other direction too. Applied by the Suggest bin-pack (`advisor.py`), the custome
 
 Two rules it must not break: **a missing key means unknown, and unknown never refuses** (no
 evidence, or an incomplete blueprint picture, caps nothing — the same rule
-`_assigned_slot_capacity` and `_print_limits` follow); and **chain tiers are sequential**, so the
+`_print_limits` follows); and **chain tiers are sequential**, so the
 cap is per tier and one formula may serve tier 0 and then tier 1.
 
 ## The shopping list buys a chain once (`_shopping_roots`)
@@ -1157,7 +1157,8 @@ defaulted to 168h, was never persisted, and was re-picked from scratch every tim
 while the ceiling that reshapes the very plan it produces sat unset on the card below. The normal
 path was therefore: pick Weekly, plan a week, then have `level_product_runs` re-shape it against no
 ceiling at all. The dropdown is now seeded from the stored cadence and writes back when changed
-(`_rxSyncWizardCadence` / `_rxWizCadenceChanged`), and `SuggestRequest.cadence_hours` is optional —
+(`_rxSyncWizardCadence`), while its change action opens General settings. The hidden select carries
+that saved rhythm to the request; it is not a second editor. `SuggestRequest.cadence_hours` is optional —
 omitted means "the account's rhythm" (`_resolve_cadence_hours`), with weekly still the fallback when
 none is set. A cadence the presets cannot express (2.5 days) becomes an option rather than being
 rounded onto one; silently changing the rhythm to fit a dropdown is the same disagreement in a

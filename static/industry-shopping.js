@@ -501,11 +501,9 @@ function _indShoppingSections(d, model, allowForce) {
   list.forEach(s => { byId[s.type_id] = s; });
   _indShopStageData = {};
   let sections = '';
-  let listed = 0;
   model.cols.forEach(col => {
     const rows = col.buys.map(e => byId[e.type_id]).filter(Boolean);
     if (!rows.length) return;
-    listed += rows.length;
     _indShopStageData[col.t] = rows.map(r => ({ name: r.name, qty: _indToBuy(r) }));
     const stageCost = rows.reduce((a, s) => a + (s.line_cost || 0), 0);
     sections += `<div class="ind-shop-stage" id="ind-shop-stage-${col.t}">`

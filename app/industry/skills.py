@@ -35,7 +35,6 @@ FEATURE_KEY = "required_skills"
 # distinguish from "untrained but injected" through ESI (it reports trained_skill_level and simply
 # omits skills the character has never injected). A level-0 requirement is therefore treated as
 # always satisfied rather than guessed at — see _missing_for().
-MAX_SKILL_LEVEL = 5
 
 
 def _feature_on(context_id: int | None = None) -> bool:
@@ -190,7 +189,8 @@ def _placeholder_ids(context_id: int) -> set[int]:
 
 def _missing_for(char: dict, required: list[tuple[int, int]]) -> list[dict]:
     """Which of `required` this character falls short on. A level-0 requirement is satisfied by
-    definition (see MAX_SKILL_LEVEL note) — flagging it would produce a gap nobody can close."""
+    definition (ESI cannot distinguish an injected level-0 skill) — flagging it would produce a
+    gap nobody can close."""
     out = []
     for skill_id, need in required:
         if need <= 0:
@@ -310,9 +310,3 @@ def analyze_plan_skills(context_id: int, requirements: list[dict], mfg: dict, rx
         },
         "eligibility": {"capable": capable, "unknown": unknown},
     }
-
-
-def plan_skill_gaps(context_id: int, requirements: list[dict], mfg: dict, rx: dict) -> dict | None:
-    """Just the gap report — the thin wrapper callers use when they don't also need eligibility."""
-    res = analyze_plan_skills(context_id, requirements, mfg, rx)
-    return None if res is None else res["gaps"]

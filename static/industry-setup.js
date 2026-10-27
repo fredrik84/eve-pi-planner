@@ -386,14 +386,6 @@ async function indToggleSourceItems(key) {
 
 // The "why" behind the paste rules is real and belongs where someone goes looking for it, not in
 // front of the box every time (reported 2026-08-08: "extremely long winded").
-function indTogglePasteHelp(a) {
-  const box = a && a.closest('.ind-paste') && a.closest('.ind-paste').querySelector('.ind-paste-help');
-  if (!box) return;
-  const open = box.style.display === 'none';
-  box.style.display = open ? '' : 'none';
-  a.textContent = open ? 'Hide details' : 'Details';
-}
-
 function indOpenPaste() {
   const f = document.getElementById('indPasteForm');
   if (f) { f.style.display = ''; const t = document.getElementById('indPasteText'); if (t) t.focus(); }

@@ -23,6 +23,7 @@ from app.esi import require_context
 from app.industry._router import router
 from app.industry.graph import BuildOptions, build_plan, prepare_plan_inputs
 from app.industry.schedule import plan_queue, plan_queue_per_order
+from app.industry.settings import _parse_ids
 
 _VALID_MODES = ("parallel", "serial")
 _VALID_STATUSES = ("queued", "done", "cancelled")
@@ -144,14 +145,6 @@ def _parse_map(value) -> dict:
         return d if isinstance(d, dict) else {}
     except Exception:
         return {}
-
-
-def _parse_ids(value) -> list[int]:
-    """The overrides column holds a JSON array; '' / NULL / anything unparseable means none."""
-    try:
-        return [int(v) for v in json.loads(value or "[]")]
-    except Exception:
-        return []
 
 
 def order_source_keys(row) -> list[str]:

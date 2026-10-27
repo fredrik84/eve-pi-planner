@@ -183,7 +183,7 @@ def main():
             check(len(mine) == 1, "build_structures() returns it (the source of the 's:' options)")
             check(mine[0].get("mfg_bonus", {}).get("me", 0) > 0,
                   f"it carries a real ME bonus ({mine[0].get('mfg_bonus')}) — hull + rigs + derived security")
-            rx = _add(name="ZZ Manual Tatara", hull="tatara", system="ZZmanual-Null")
+            _add(name="ZZ Manual Tatara", hull="tatara", system="ZZmanual-Null")
             trow = [x for x in _rows() if x["name"] == "ZZ Manual Tatara"][0]
             check(trow["build_rx"] == 1 and trow["build_mfg"] == 0,
                   "a refinery hull defaults to reactions, an engineering complex to manufacturing")

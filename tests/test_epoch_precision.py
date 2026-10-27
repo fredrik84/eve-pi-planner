@@ -12,7 +12,6 @@ pp_job_runs under a greppable fake job name.
     kubectl -n dev exec -i <pod> -- python3 - < tests/test_epoch_precision.py
 """
 import sys
-import time
 
 try: import _bootstrap  # noqa: F401
 except ModuleNotFoundError: from tests import _bootstrap  # noqa: F401

@@ -133,11 +133,11 @@ def test_one_number_two_doors():
         check(abs(_reaction_cadence_hours(CTX) - 36.0) < 1e-9,
               "...and what the leveller caps jobs at")
 
-        # Clearing it is a real state, not an error: no ceiling is the documented default.
+        # Clearing returns to the shared weekly default, just like an unset account.
         api_set_reaction_cadence(ReactionCadenceUpdate(max_reaction_job_days=None), CTX)
-        check(get_max_reaction_job_days(CTX) in (None, 0),
-              "clearing the cadence clears the one stored value")
-        check(_reaction_cadence_hours(CTX) == 0.0, "...and no ceiling is applied")
+        check(get_max_reaction_job_days(CTX) == 7.0,
+              "clearing the cadence restores the shared weekly default")
+        check(_reaction_cadence_hours(CTX) == 168.0, "...and the leveller uses that same week")
     finally:
         set_max_reaction_job_days(CTX, was_days)
         _set_feature_state("reactions_cadence", was_rx)
@@ -248,14 +248,16 @@ def test_the_wizard_dropdown_is_the_stored_setting():
         set_max_reaction_job_days(CTX, was_days)
         _set_feature_state("reactions_cadence", was_rx)
 
-    # The other half of "one number" lives in the browser: the dropdown is seeded from the stored
-    # value and writes back when changed. Pinned as source, because the alternative is a browser
-    # test suite we do not have (TODO 2e-residual) and the wiring is exactly what silently rots.
+    # The wizard reads the saved rhythm. Editing it belongs to General settings; its hidden
+    # select only carries that value to the suggestion request.
     html = open("static/index.html").read()
     js = open("static/reactions.js").read()
-    sel = html[html.find('id="wizRCadence"'):html.find('id="wizRCadence"') + 300]
-    check("_rxWizCadenceChanged" in sel,
-          "the wizard's cadence dropdown writes its pick back to the stored setting")
+    select = re.search(r'<select[^>]*id="wizRCadence"[^>]*>', html)
+    check(bool(select and 'display:none' in select.group(0)),
+          "the wizard carries the stored cadence without asking for the same setting again")
+    schedule = html[html.find('id="wizRCadenceSummary"'):html.find('id="wizRCadenceSummary"') + 300]
+    check("openSettingsModal('general')" in schedule,
+          "the schedule's change action opens the owning General settings page")
     check("function _rxSyncWizardCadence" in js and "_rxSyncWizardCadence()" in js,
           "...and is seeded from it, rather than defaulting to Weekly every time")
     # Quote style must not be able to defeat this, and neither must a passing mention in a comment.

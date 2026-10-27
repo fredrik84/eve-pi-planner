@@ -2,7 +2,7 @@
 
 The rule this module changes, deliberately and in one place: **absent evidence never serialises
 work**. A product nobody has said anything about stays uncapped everywhere else in this package
-(`formula_concurrency_caps`, `_assigned_slot_capacity`, `_print_limits`) precisely so the tool
+(`formula_concurrency_caps`, `_print_limits`) precisely so the tool
 never refuses work the player can really do. That is right while the app genuinely does not know.
 
 It stops being right once the user has stated their whole library. A real account declared ~238

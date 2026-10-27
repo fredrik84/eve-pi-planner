@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `no-undef` over static/*.js — the one lint rule this codebase needs, and the reason it needs it.
+ * Shared-script lint over static/*.js: undefined names and unused function-local variables.
  *
  * A dead `if (!r.ok)` left behind by the fetch()->api() migration referenced a variable that no
  * longer existed, so EVERY successful reaction assign threw a ReferenceError, was caught, and was
@@ -12,9 +12,10 @@
  *
  * The wrinkle this script exists for: the frontend is plain <script> files sharing ~800 implicit
  * globals, so a naive run reports every cross-file helper as undefined. So: scrape the top-level
- * declarations out of all of static/*.js, feed them in as globals, and enable ONLY no-undef.
- * Deliberately not a general lint setup — style rules over a codebase this size would be noise,
- * and the point is a guard that starts from green and stays there.
+ * declarations out of all of static/*.js and feed them in as globals for the undefined-name check.
+ * Unused locals also catch abandoned rendering work. Top-level declarations and arguments are
+ * excluded: other scripts and HTML handlers consume globals, and callbacks often need positional
+ * arguments. This remains a behavior check, not a formatting rule set.
  *
  * Usage: node scripts/lint_js.mjs   (exits non-zero on any finding)
  */
@@ -57,7 +58,10 @@ ${[...globals].sort().map(g => `      ${JSON.stringify(g)}`).join(",\n")}
     )),
   },
   linterOptions: { reportUnusedDisableDirectives: false },
-  rules: { "no-undef": "error" },
+  rules: {
+    "no-undef": "error",
+    "no-unused-vars": ["error", { vars: "local", args: "none", caughtErrors: "none", ignoreRestSiblings: true }],
+  },
 }];
 `);
 
