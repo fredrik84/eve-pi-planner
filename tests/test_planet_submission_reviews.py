@@ -20,6 +20,18 @@ class SubmissionReviewsTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        self.set_up_database()
+        self.ensure_tables = planetary.ensure_tables.__wrapped__
+        self.ensure_tables()
+        self.stack.enter_context(patch.object(planetary, "ensure_tables"))
+        self.gate = self.stack.enter_context(
+            patch.object(planetary, "feature_enabled_for", return_value=True))
+        self.app = FastAPI()
+        self.app.include_router(planetary.router)
+        self.app.dependency_overrides[planetary.require_context] = lambda: 111
+        self.client = self.stack.enter_context(TestClient(self.app))
+
+    def set_up_database(self):
         folder = self.stack.enter_context(tempfile.TemporaryDirectory())
         self.stack.enter_context(patch.object(db, "_IS_POSTGRES", False))
         self.stack.enter_context(patch.object(db, "_SQLITE_PATH", Path(folder) / "test.db"))
@@ -32,15 +44,6 @@ class SubmissionReviewsTests(unittest.TestCase):
                 finally:
                     self.close()
         self.stack.enter_context(patch.object(db, "_TimedSQLiteConnection", ClosingConnection))
-        self.ensure_tables = planetary.ensure_tables.__wrapped__
-        self.ensure_tables()
-        self.stack.enter_context(patch.object(planetary, "ensure_tables"))
-        self.gate = self.stack.enter_context(
-            patch.object(planetary, "feature_enabled_for", return_value=True))
-        self.app = FastAPI()
-        self.app.include_router(planetary.router)
-        self.app.dependency_overrides[planetary.require_context] = lambda: 111
-        self.client = self.stack.enter_context(TestClient(self.app))
 
     def seed(self, status="pending", owner=111):
         with db.get_connection() as con:
@@ -145,6 +148,18 @@ class SubmissionReviewsTests(unittest.TestCase):
         self.assertEqual(self.ack(sub_id).status_code, 404)
         self.gate.return_value = True
         self.assertEqual([r["id"] for r in self.reviews()], [sub_id])
+
+    def test_repeated_dismissal_preserves_first_acknowledgment(self):
+        sub_id = self.seed("approved")
+        self.assertEqual(self.ack(sub_id).status_code, 200)
+        first_seen = "2026-10-20T12:34:56"
+        with db.get_connection() as con:
+            con.execute("UPDATE pp_planet_submissions SET review_seen_at=? WHERE id=?", (first_seen, sub_id))
+        self.assertEqual(self.ack(sub_id).status_code, 200)
+        with db.get_connection() as con:
+            stored = con.execute("SELECT review_seen_at FROM pp_planet_submissions WHERE id=?", (sub_id,)).fetchone()
+        self.assertEqual(stored["review_seen_at"], first_seen)
+        self.assertEqual(self.reviews(), [])
 
     def test_bounded_results_do_not_lose_older_reviews(self):
         ids = [self.seed("approved") for _ in range(21)]

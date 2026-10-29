@@ -603,7 +603,8 @@ def acknowledge_planet_submission(sub_id: int, context_id: int = Depends(require
     with get_connection() as con:
         n = con.execute(
             "UPDATE pp_planet_submissions "
-            "SET review_seen_at=COALESCE(review_seen_at, CURRENT_TIMESTAMP) "
+            # The column is TEXT; datetime('now') also translates to UTC text on Postgres.
+            "SET review_seen_at=COALESCE(review_seen_at, datetime('now')) "
             "WHERE id=? AND context_id=? AND status IN ('approved', 'rejected')",
             (sub_id, context_id),
         ).rowcount

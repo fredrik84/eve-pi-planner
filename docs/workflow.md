@@ -460,6 +460,8 @@ global dismissible banner for approved/rejected contributions, including histori
 sets `review_seen_at` only for that account's reviewed submission. Both endpoints enforce the
 flag on the server. Boot and the existing background refresh fetch results on every page;
 acknowledgment persists across browsers and sessions. No notification-channel setup is needed.
+The dismissal timestamp is UTC text on both database backends. The endpoint contracts run in CI
+against SQLite and PostgreSQL, including repeat dismissals that preserve the first acknowledgment.
 
 ## Profiles & shares
 

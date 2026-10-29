@@ -64,6 +64,16 @@ jobs:
     runs-on: ubuntu-latest
     container: python:3.15.2-slim
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test-password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -87,6 +97,10 @@ jobs:
           python tests/test_expired_reminders.py
           python tests/test_pi_product_prices.py
           python tests/test_upgrade_policy.py
+      - name: Run Planet DB review contracts against PostgreSQL
+        env:
+          PLANET_REVIEWS_TEST_DSN: postgresql://postgres:test-password@postgres/postgres
+        run: python tests/test_planet_submission_reviews_postgres.py
 
   build:
     if: github.event_name == 'push'

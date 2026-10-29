@@ -40,6 +40,9 @@ live dashboard API with isolated fixture data.
 `test_planet_submission_reviews.py` uses a temporary database to check review alerts, account
 isolation, authentication, dismissal, and migration of existing submissions. Its JavaScript
 companion checks the global banner, refresh behavior, and failed requests.
+`test_planet_submission_reviews_postgres.py` runs the same endpoint contracts against PostgreSQL
+when `PLANET_REVIEWS_TEST_DSN` points to a disposable test database. Each test creates and removes
+its own schema. CI runs both database variants to catch timestamp type errors that SQLite accepts.
 
 `test_planet_import.py` checks planet-type detection across all eight types with blank or
 zero-filled CSV/spreadsheet cells, small positive readings, explicit types, ambiguity warnings,
