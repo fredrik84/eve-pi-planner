@@ -108,6 +108,36 @@ class SubmissionReviewsTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/planet-submissions").status_code, 403)
         self.assertEqual(self.client.post(f"/api/planet-submissions/{sub_id}/approve").status_code, 403)
 
+    def test_zero_filled_paste_survives_submission_preview_and_approval(self):
+        names = sorted({name for resources in planetary.PLANET_P0_MAP.values() for name in resources})
+        values = ["42" if name in planetary.PLANET_P0_MAP["Storm"] else "0" for name in names]
+        text = "\t".join(["System", "Planet", *names]) + "\n" + "\t".join(["Test", "1", *values])
+        with db.get_connection() as con:
+            con.execute("CREATE TABLE system_geo (system TEXT, constellation TEXT)")
+            con.execute("INSERT INTO system_geo VALUES ('Test', 'Fixture')")
+        with patch.object(planetary, "is_admin", return_value=False), \
+                patch.object(planetary, "_submitter_name", return_value="Fixture"), \
+                patch.object(planetary, "notify_admin_discord"):
+            response = self.client.post("/api/planets/import", json={"text": text})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"queued": True, "submitted": 1, "skipped": 0, "errors": []})
+        with db.get_connection() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM pp_planets").fetchone()[0], 0)
+        self.app.dependency_overrides[planetary.require_admin] = lambda: 999
+        response = self.client.get("/api/planet-submissions")
+        self.assertEqual(response.status_code, 200, response.text)
+        submission = response.json()["submissions"][0]
+        self.assertEqual(submission["planets"][0]["planet_type"], "Storm")
+        with patch.object(planetary, "_invalidate_planetdb_cache"):
+            response = self.client.post(f"/api/planet-submissions/{submission['id']}/approve")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"approved": True, "imported": 1, "skipped": 0, "errors": []})
+        with db.get_connection() as con:
+            row = con.execute("SELECT * FROM pp_planets").fetchone()
+            self.assertEqual(row["planet_type"], "Storm")
+            self.assertEqual(row["suspended_plasma"], 42)
+            self.assertEqual(row["reactive_gas"], 0)
+
     def test_disabled_feature_preserves_unread_results(self):
         sub_id = self.seed("approved")
         self.gate.return_value = False

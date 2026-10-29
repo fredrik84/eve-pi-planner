@@ -83,6 +83,7 @@ jobs:
           python tests/test_latency.py
           python tests/test_cold_load.py
           python tests/test_planet_submission_reviews.py
+          python tests/test_planet_import.py
           python tests/test_expired_reminders.py
           python tests/test_pi_product_prices.py
           python tests/test_upgrade_policy.py

@@ -437,7 +437,10 @@ blank/0 cell keeps the current value and a sparse paste never wipes good data; r
 
 Parsing was split out of `import_planets` into `_parse_planet_rows(text, con) -> (rows, skipped,
 errors)` (no writes) + `_write_planet_rows(con, rows)` so both the direct path and approval reuse
-it. Admin review endpoints (admin-gated via `require_admin`):
+it. Without an explicit Type column, only positive P0 readings identify the planet type;
+blank and zero-filled cells both mean no resource. An entirely blank/zero row requires an
+explicit Type. `tests/test_planet_import.py` covers inference and preservation of stored densities.
+Admin review endpoints (admin-gated via `require_admin`):
 `GET /api/planet-submissions?status=pending` (re-parses each `raw_text` for a preview, flags each
 planet `exists` new-vs-overwrite against live `pp_planets`),
 `POST /api/planet-submissions/{id}/approve` (re-parses + `_write_planet_rows`, marks `approved`),

@@ -41,6 +41,10 @@ live dashboard API with isolated fixture data.
 isolation, authentication, dismissal, and migration of existing submissions. Its JavaScript
 companion checks the global banner, refresh behavior, and failed requests.
 
+`test_planet_import.py` checks planet-type detection across all eight types with blank or
+zero-filled CSV/spreadsheet cells, small positive readings, explicit types, ambiguity warnings,
+and non-destructive merging. It uses an in-memory database and runs in the app container and CI.
+
 `test_expired_reminders.py` checks the expired-program reminder sequence with an in-memory log,
 including a simulated three-week break through the real notification scheduler, program restarts,
 failed reads, existing send history and multiple notification channels. Run it in the app container.

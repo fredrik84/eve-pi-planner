@@ -324,7 +324,7 @@ function showPlanetImport() {
     'Accepts tab-separated or comma-separated export.\n\n' +
     'Columns: System, Planet, then one column per P0 resource (header drives mapping).\n' +
     'Type and Constellation are optional — Constellation is derived from the system name, ' +
-    'and Type is inferred from which P0 columns the planet fills.';
+    'and Type is inferred from positive P0 values. Leave unavailable resources blank or enter 0.';
   document.getElementById('ppImportText').focus();
 }
 
