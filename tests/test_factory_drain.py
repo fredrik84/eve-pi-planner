@@ -239,7 +239,6 @@ def test_model_fallback():
         return
     fracs = _compute_p1_fracs(out, pi)
     rate_hr = _effective_fph(out, pi)
-    pid = min(fracs, key=lambda p: p)
     inputs = [{"type_id": p, "amount": rate_hr * f * 12} for p, f in fracs.items()]   # 12h each
     dr = factory_drain(out, inputs, T0, drain=None, now=T0)
     check(dr is not None and dr["source"] == "model",

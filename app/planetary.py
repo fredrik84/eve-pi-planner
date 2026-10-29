@@ -351,7 +351,7 @@ def _parse_planet_rows(text: str, con) -> tuple[list[dict], int, list[str]]:
 
     # ── Detect format ────────────────────────────────────────────────────────
     # Split first line; if it contains recognisable P0 header names → column-map mode.
-    # Otherwise → positional mode (6 compact values per row keyed by planet type).
+    # Otherwise → positional mode (5 compact values per row keyed by planet type).
     sep = "\t" if "\t" in lines[0] else ","
     first_parts = [p.strip() for p in lines[0].split(sep)]
 
@@ -390,7 +390,7 @@ def _parse_planet_rows(text: str, con) -> tuple[list[dict], int, list[str]]:
         # guarantees this table exists before traffic is served, so a failure here is a real
         # regression, not a routine routing quirk. Log it instead of swallowing silently.
         log.exception("system_geo lookup failed (constellation auto-fill degraded to none)")
-    # planet type ↔ its P0 column set (infer type from which P0 columns are present)
+    # Planet type ↔ its P0 column set (infer type from positive resource readings).
     type_p0_sets = {t: frozenset(c for c in (_p0_col(n) for n in names) if c)
                     for t, names in PLANET_P0_MAP.items()}
     p0set_to_type = {s: t for t, s in type_p0_sets.items()}
@@ -432,21 +432,31 @@ def _parse_planet_rows(text: str, con) -> tuple[list[dict], int, list[str]]:
             skipped += 1
             continue
 
+        # Parse header-mapped readings once, before rounding for storage: zero-filled
+        # cells mean no resource, while even a small positive reading identifies one.
+        p0_readings: dict[str, float] = {}
+        if use_column_map:
+            for db_col, col_idx in p0_header_map.items():
+                if col_idx < len(parts) and parts[col_idx]:
+                    try:
+                        p0_readings[db_col] = float(parts[col_idx])
+                    except ValueError:
+                        pass
+
         # Planet type: explicit ("Scorched Barren" → "Barren"), else inferred from
-        # which P0 columns the row fills (each planet type has a unique P0 set).
+        # positive P0 readings (each planet type has a unique five-resource set).
         ptype_key = None
         if ptype_raw:
             ptype_key = next((k for k in PLANET_P0_MAP if ptype_raw.lower().endswith(k.lower())), None)
         elif use_column_map:
-            present = frozenset(db_col for db_col, idx in p0_header_map.items()
-                                if idx < len(parts) and parts[idx].strip())
-            ptype_key = p0set_to_type.get(present)   # exact 6-P0 match → unique
+            present = frozenset(db_col for db_col, value in p0_readings.items() if value > 0)
+            ptype_key = p0set_to_type.get(present)   # exact five-resource match → unique
             if ptype_key is None and present:
                 cands = sorted(t for t, s in type_p0_sets.items() if present <= s)
                 if len(cands) == 1:
                     ptype_key = cands[0]
                 elif len(cands) >= 2:
-                    # Ambiguous: this planet reports only 5 of its 6 P0s and those 5 are
+                    # Ambiguous: this planet reports only four of its five P0s and those four are
                     # shared by two types (e.g. Lava/Plasma, Gas/Storm). Best-guess the
                     # first and warn — the missing P0 is blank (unusable) either way, so
                     # extraction planning is unaffected; only the type label is a guess.
@@ -462,15 +472,9 @@ def _parse_planet_rows(text: str, con) -> tuple[list[dict], int, list[str]]:
         p0_vals: dict[str, int] = {col: 0 for col in P0_COLUMNS}
 
         if use_column_map:
-            # Use header positions — works with sparse 15-column spreadsheet format
-            for db_col, col_idx in p0_header_map.items():
-                if col_idx < len(parts) and parts[col_idx]:
-                    try:
-                        p0_vals[db_col] = round(float(parts[col_idx]))
-                    except ValueError:
-                        pass
+            p0_vals.update((col, round(value)) for col, value in p0_readings.items())
         else:
-            # Positional: 6 compact values in alphabetical order for this planet type
+            # Positional: 5 compact values in alphabetical order for this planet type
             p0_names = PLANET_P0_MAP[ptype_key]
             for i, p0_name in enumerate(p0_names):
                 col_idx = 4 + i
@@ -599,7 +603,8 @@ def acknowledge_planet_submission(sub_id: int, context_id: int = Depends(require
     with get_connection() as con:
         n = con.execute(
             "UPDATE pp_planet_submissions "
-            "SET review_seen_at=COALESCE(review_seen_at, CURRENT_TIMESTAMP) "
+            # The column is TEXT; datetime('now') also translates to UTC text on Postgres.
+            "SET review_seen_at=COALESCE(review_seen_at, datetime('now')) "
             "WHERE id=? AND context_id=? AND status IN ('approved', 'rejected')",
             (sub_id, context_id),
         ).rowcount

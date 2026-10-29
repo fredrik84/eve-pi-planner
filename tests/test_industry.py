@@ -8,7 +8,6 @@ aggregation, and the cost/time totals.
 Run: python3 tests/test_industry.py
 """
 import json
-import math
 import inspect
 import glob
 import os
@@ -991,7 +990,6 @@ def test_fifo_wins_contested_slots():
     con = _seed_con()
     mfg, rx = load_manufacturing_graph(con), load_reaction_graph(con)
     P = BuildParams(mfg_skill_time_mult=1.0, rx_skill_time_mult=1.0)
-    prices, adj = _prices(SELL), ADJ
 
     # Two INDEPENDENT products (110 Cog shares no inputs with 101 Gadget) — dependency must not be
     # what decides the order, otherwise the test proves nothing about FIFO.
@@ -1065,7 +1063,7 @@ def test_missing_blueprints_are_reported():
     check("owned blueprint clears its own flag", "Widget" not in miss2)
     check("the still-unowned one stays flagged", "Gadget" in miss2)
     check("owned blueprint detail is carried", 
-          (byid2 := {r["type_id"]: r for r in res2["requirements"]})[100]["blueprint"]["kind"] == "bpo")
+          {r["type_id"]: r for r in res2["requirements"]}[100]["blueprint"]["kind"] == "bpo")
 
     # Materials must not move just because a blueprint is or isn't owned — the blueprint charge is
     # its own line, not something folded into materials.
@@ -2878,8 +2876,8 @@ def test_a_build_can_be_gathered_from_several_boxes():
         check("a box nobody bound is not counted",
               A.source_quantities_multi(1, ["cont:1", "cont:2"]).get(200) == 140.0)
         check("no boxes means no stock", A.source_quantities_multi(1, []) == {})
-        check("the single-box helper still answers as it always did",
-              A.source_quantities(1, "cont:2") == {200: 40.0})
+        check("a single selected box is counted on its own",
+              A.source_quantities_multi(1, ["cont:2"]) == {200: 40.0})
         # Labels for the panel: name AND where, in bind order, with a vanished box still listed.
         labels = A.source_labels(1, ["cont:2", "cont:1", "cont:404"])
         check("bound boxes come back in the order they were bound",
@@ -3006,7 +3004,7 @@ def test_binding_a_set_remembers_it_without_switching_it_on_for_everyone():
 
         # The legacy path — a caller that only sends `source_key` has made no claim to owning its
         # plan's sources, so it keeps the behaviour it has always had.
-        S.enable_bound_source(1, "cont:2")
+        S.enable_bound_sources(1, ["cont:2"])
         check("the old single-key bind still enables the box account-wide",
               A.owned_quantities(1) == {200: 20.0})
         check("an empty bind remains a no-op", S.enable_bound_sources(1, []) is None)
@@ -3836,8 +3834,7 @@ def test_an_owned_copy_only_covers_the_runs_it_has():
     builder they are ready to start when they are not. An ORIGINAL genuinely does cover any batch."""
     print("test_an_owned_copy_only_covers_the_runs_it_has")
     mfg = {1: {"base_time": 3600, "max_runs": 100, "output_qty": 1, "inputs": []}}
-    agg_of = lambda: {1: {"build": True, "runs": 20, "activity": "manufacturing"}}
-    prices, adj, names = _prices({1: 5_000_000.0}), {1: 1.0}, {1: "Widget"}
+    prices, adj = _prices({1: 5_000_000.0}), {1: 1.0}
     pools = {"manufacturing": 5, "reaction": 5}
     acquire = {1: {"kind": "bpc", "price": 10_000_000.0, "runs_per_copy": 5, "live": True,
                    "listings": [{"runs": 5, "price": 10_000_000.0}] * 8}}
@@ -4099,7 +4096,6 @@ def test_stale_caches_refresh_themselves_on_the_way_in():
     whether or not it worked — age only advances on SUCCESS, so a permanently-failing character would
     otherwise be retried on every single tab open forever."""
     print("test_stale_caches_refresh_themselves_on_the_way_in")
-    import inspect
     from app.industry import freshness as F
 
     check("the thresholds are per cache, not one global number",
@@ -4257,10 +4253,8 @@ def test_binding_a_container_lets_the_planner_spend_it():
     additive and one tick to undo, while auto-disabling could switch off a source the user turned on
     themselves or that another order still draws from."""
     print("test_binding_a_container_lets_the_planner_spend_it")
-    import inspect
     from app.industry import sourcing as S
     from app.industry import assets as A
-    from app.industry import orders as O
     from app.industry import settings as SET
 
     con, restore = _patch_db(A)
@@ -4278,23 +4272,23 @@ def test_binding_a_container_lets_the_planner_spend_it():
         SET.get_connection = A.get_connection
         try:
             SET.ensure_industry_settings_table.__wrapped__()
-            S.enable_bound_source(1, "cont:9")
+            S.enable_bound_sources(1, ["cont:9"])
             check("binding a build to it lets the planner spend it",
                   A.owned_quantities(1) == {200: 400.0})
             # ...and the next build starts with the same answer already filled in, because a builder
             # running a can per build otherwise answers this question on every single order.
             check("the container is remembered as the account's default",
                   SET.get_settings(1)["last_source_key"] == "cont:9")
-            S.enable_bound_source(1, "cont:11")
+            S.enable_bound_sources(1, ["cont:11"])
             check("and the default follows the most recent choice",
                   SET.get_settings(1)["last_source_key"] == "cont:11")
         finally:
             S.get_connection, SET.get_connection = real_s, real_set
 
         # Unbinding is the caller passing an empty key. It must be a no-op, not a switch-off.
-        S.enable_bound_source(1, "")
+        S.enable_bound_sources(1, [])
         check("unbinding leaves the source alone", A.owned_quantities(1) == {200: 400.0})
-        check("a key that doesn't exist is harmless", S.enable_bound_source(1, "cont:404") is None)
+        check("a key that doesn't exist is harmless", S.enable_bound_sources(1, ["cont:404"]) is None)
     finally:
         restore()
 

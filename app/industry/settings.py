@@ -200,7 +200,7 @@ def _get_settings_uncached(context_id: int) -> dict:
 
 
 def _parse_ids(value) -> list[int]:
-    """The blacklist column holds a JSON array; '' / NULL / anything unparseable means no list."""
+    """Stored type-id arrays (blacklists and order overrides); malformed data means no list."""
     try:
         return [int(v) for v in json.loads(value or "[]")]
     except Exception:

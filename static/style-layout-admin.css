@@ -412,28 +412,7 @@ body.nav-collapsed .sidebar-donate-ico { display: block; }
 .settings-note::before { content: "!"; font-weight: 700; color: #d3bd6a; flex: 0 0 auto; }
 .settings-note b { color: #d8c98d; }
 
-/* How a number above was derived — NOT a warning. The distinction is whether the reader has
-   anything to do: `.settings-note` means the figure is wrong until you act on it ("no system set,
-   so fees are left out"); this means the figure is right and here is its basis. Four of these were
-   wearing the warning styling on the reactions overview, which taught the eye to skip the ! that
-   actually mattered. No icon, no fill, grey not amber — present for whoever asks "priced how?",
-   invisible to everyone else. */
-.stat-footnote {
-  font-size: 11.5px; line-height: 1.5; color: #5a6a88;
-  margin: 6px 0 0; padding: 0 2px;
-}
-.stat-footnote b { color: #7d8dab; font-weight: 600; }
-/* The one part of a footnote that is not just prose: it goes where the action is. Inherits the
-   footnote's size rather than setting its own (unlike .ind-link-btn, which is fixed at 12px) so it
-   sits IN the sentence instead of on top of it. */
-.stat-footnote-link {
-  background: none; border: 0; padding: 0; cursor: pointer;
-  font: inherit; color: var(--clr-accent);
-  text-decoration: underline; text-underline-offset: 2px;
-}
-.stat-footnote-link:hover { color: #fff; }
-
-/* An order with no agreed price, marked where the reader lands after following that footnote. */
+/* An order with no agreed price, marked in the orders list. */
 .rx-order-unpriced { border-left: 2px solid #6d5f2e; }
 .rx-order-noprice {
   font-size: 10.5px; font-weight: 600; color: #d3bd6a;

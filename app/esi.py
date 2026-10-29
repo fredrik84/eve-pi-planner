@@ -76,8 +76,6 @@ STRUCTURES_SCOPE     = "esi-universe.read_structures.v1"
 # grants the OAuth scope regardless, but the corp jobs call itself 401s/403s without the role
 # (same "best-effort, skip don't error" shape as the wallet flow's role check).
 CORP_INDUSTRY_JOBS_SCOPE = "esi-industry.read_corporation_jobs.v1"
-# INDUSTRY_JOBS_SCOPES is defined below as an alias of the unified REACTIONS_SCOPES (see there) —
-# it used to be a jobs-only set disjoint from MARKET_SCOPES, which caused the market/jobs scope silo.
 
 # Local/alliance market pricing (Reactions tab), requested only on the dedicated "connect for
 # market pricing" login (?market=1). MARKET_SCOPE reads a player-owned Upwell structure's market
@@ -145,7 +143,6 @@ DIRECTOR_SCOPES = f"{REACTIONS_SCOPES} {CORP_ASSETS_SCOPE} {CORP_DIVISIONS_SCOPE
 # All opt-in "connect a character" flows request this ONE superset so re-authing a character for
 # any tool never drops the scopes another relies on. Wallet stays deliberately separate.
 MARKET_SCOPES = REACTIONS_SCOPES
-INDUSTRY_JOBS_SCOPES = REACTIONS_SCOPES
 INDUSTRY_SCOPES = REACTIONS_SCOPES
 
 # Wallet-only toons (corp-wallet scope, no planets scope) aren't PI characters. AND this into any
@@ -1236,14 +1233,6 @@ def require_context(pp_session: str = Cookie(default=None)) -> int:
     sess = _session_lookup(pp_session)
     if sess:
         return sess[1]
-    raise HTTPException(status_code=401, detail="Not authenticated — please log in via EVE SSO")
-
-
-def require_session(pp_session: str = Cookie(default=None)) -> int:
-    """FastAPI dependency: return character_id or raise 401."""
-    sess = _session_lookup(pp_session)
-    if sess:
-        return sess[0]
     raise HTTPException(status_code=401, detail="Not authenticated — please log in via EVE SSO")
 
 

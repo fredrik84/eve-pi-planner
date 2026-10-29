@@ -375,7 +375,7 @@ is the source of truth for the current flag set — don't duplicate the list her
 
 ## Frontend lint (`scripts/lint_js.mjs`, CI job `lint-js`)
 
-**One rule: `no-undef`.** A dead `if (!r.ok)` left by the fetch()→api() migration referenced a
+**Undefined names and unused locals.** A dead `if (!r.ok)` left by the fetch()→api() migration referenced a
 variable that no longer existed, so every SUCCESSFUL reaction assign threw a ReferenceError, was
 caught, and was reported to the user as failed — and the assign endpoint appended, so each retry
 added another full set of rows (two suggestions → 27 rows on a 10-slot character). `node --check`
@@ -383,8 +383,10 @@ passes it: valid syntax, fails only when the line runs.
 
 The frontend is plain `<script>` files sharing ~900 implicit globals, so a naive run reports every
 cross-file helper as undefined. The script scrapes top-level `function`/`let`/`const`/`var` names
-out of all of `static/*.js`, feeds them in as globals, adds the browser set, and enables nothing
-else — style rules over this much JS would be noise, and the point is a guard that starts green.
+out of all of `static/*.js`, feeds them in as globals, and adds the browser set. `no-unused-vars`
+also checks function-local variables, catching discarded render work such as the old second
+blueprint batch list. Top-level globals, callback arguments, caught errors and unused rest siblings
+are excluded so HTML handlers and cross-file calls remain valid. There are no formatting rules.
 Run it locally with `node scripts/lint_js.mjs`. It does **not** gate the deploy: this repo pushes
 straight to main, and a lint step that can fail on an npx download must not block a hotfix. It
 exists to make the failure visible, which is all the original bug needed.
@@ -435,7 +437,10 @@ blank/0 cell keeps the current value and a sparse paste never wipes good data; r
 
 Parsing was split out of `import_planets` into `_parse_planet_rows(text, con) -> (rows, skipped,
 errors)` (no writes) + `_write_planet_rows(con, rows)` so both the direct path and approval reuse
-it. Admin review endpoints (admin-gated via `require_admin`):
+it. Without an explicit Type column, only positive P0 readings identify the planet type;
+blank and zero-filled cells both mean no resource. An entirely blank/zero row requires an
+explicit Type. `tests/test_planet_import.py` covers inference and preservation of stored densities.
+Admin review endpoints (admin-gated via `require_admin`):
 `GET /api/planet-submissions?status=pending` (re-parses each `raw_text` for a preview, flags each
 planet `exists` new-vs-overwrite against live `pp_planets`),
 `POST /api/planet-submissions/{id}/approve` (re-parses + `_write_planet_rows`, marks `approved`),
@@ -455,6 +460,8 @@ global dismissible banner for approved/rejected contributions, including histori
 sets `review_seen_at` only for that account's reviewed submission. Both endpoints enforce the
 flag on the server. Boot and the existing background refresh fetch results on every page;
 acknowledgment persists across browsers and sessions. No notification-channel setup is needed.
+The dismissal timestamp is UTC text on both database backends. The endpoint contracts run in CI
+against SQLite and PostgreSQL, including repeat dismissals that preserve the first acknowledgment.
 
 ## Profiles & shares
 

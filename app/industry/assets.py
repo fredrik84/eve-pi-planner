@@ -386,12 +386,6 @@ def _split_by_source(rows, hangar_flags, hangar_key, hangar_name, cont_key=None)
         p = _parent(a)
         return a if p is None else root_of(p, depth + 1)
 
-    def hangar_of(a, depth=0):
-        """The hangar flag at the top of this item's chain (for naming a container's parent)."""
-        if depth > 12:
-            return None
-        return root_of(a, depth).get("location_flag")
-
     sources: dict[str, dict] = {}
     stock: dict[str, dict[int, float]] = {}
     containers: set[int] = set()
@@ -788,34 +782,14 @@ def _net_reserved(context_id: int, pool: dict[int, float]) -> dict[int, float]:
         return pool
 
 
-def source_quantities(context_id: int, key: str) -> dict[int, float]:
-    """{type_id: qty} in ONE source, enabled or not.
-
-    Deliberately ignores the enabled flag: this answers "what is in that container", which is a
-    question about a specific box the user pointed at, not about the pool the planner may spend.
-    """
-    ensure_asset_tables()
-    con = get_connection()
-    try:
-        rows = con.execute(
-            "SELECT type_id, qty FROM pp_asset_stock WHERE context_id = ? AND key = ?",
-            (context_id, key),
-        ).fetchall()
-    except Exception:
-        return {}
-    finally:
-        con.close()
-    return {int(r["type_id"]): float(r["qty"] or 0) for r in rows}
-
-
 def source_quantities_multi(context_id: int, keys: list[str]) -> dict[int, float]:
     """{type_id: qty} pooled across SEVERAL named sources — a build's reaction stock and its
     manufacturing stock legitimately sit in different stations.
 
     No double counting is possible on the sum itself (an item belongs to exactly one source by
     construction, and the key set is de-duplicated first), so the boxes simply add up.
-    Like `source_quantities`, this deliberately ignores the enabled flag: it asks what is in the
-    boxes the user pointed at, not what the planner may spend.
+    Deliberately ignores the enabled flag: it asks what is in the boxes the user pointed at,
+    then applies the account's outstanding reservations.
     """
     ensure_asset_tables()
     uniq = list(dict.fromkeys(k for k in (keys or []) if k))

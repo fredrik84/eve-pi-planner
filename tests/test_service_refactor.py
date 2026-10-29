@@ -19,6 +19,16 @@ def response(data, page_count=1, status=200):
                           request=httpx.Request("GET", "https://example.invalid/orders"))
 
 
+class StoredTypeIdTests(unittest.TestCase):
+    def test_order_overrides_and_account_rules_accept_the_same_stored_values(self):
+        from app.industry import orders, settings
+        for stored, expected in ((None, []), ("", []), ("garbage", []), ("null", []),
+                                 ('[34, "35"]', [34, 35]), ('[34, "bad"]', [])):
+            for parse in (orders._parse_ids, settings._parse_ids):
+                with self.subTest(stored=stored, parser=parse.__module__):
+                    self.assertEqual(parse(stored), expected)
+
+
 class CacheTests(unittest.TestCase):
     def tearDown(self):
         cache._client.cache_clear()

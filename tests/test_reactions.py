@@ -2497,7 +2497,7 @@ def test_a_declared_holding_is_known_without_full_esi_coverage() -> bool:
     con.close()
     if not check(len(rx) >= 2, "the SDE knows some reactions to test with"):
         return ok
-    declared_formula, declared_product = rx[0]["reaction_id"], rx[0]["output_type_id"]
+    declared_product = rx[0]["output_type_id"]
     scanned_formula, scanned_product = rx[1]["reaction_id"], rx[1]["output_type_id"]
 
     prev_cap = _set_feature_state("reactions_formula_cap", "public")

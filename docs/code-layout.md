@@ -53,7 +53,7 @@ cost nothing at startup. Retiring the feature = delete `analyzer.py`, `pi.py`, `
 
 `app/planner.py` is **plan orchestration** — `_run_plan`, `/api/plan`, `/api/debug/plan`,
 `/api/pi-lifetime`, and the shared plan math (P1 requirement tracing, `_effective_fph`,
-`_factory_refill_hours`, `_char_footprint`, `_p0_available_by_char*`). It was ~3,900 lines
+`_factory_refill_hours`, `_char_footprint`, `_p0_available_by_char_multi`). It was ~3,900 lines
 carrying four unrelated jobs; the other three now live in siblings, imported **one way only** so
 the chain is acyclic:
 

@@ -242,7 +242,7 @@ def _char_footprint(con, context_id: int):
 
 
 def _p0_available_by_char_multi(con, p0_names, foot: dict, occ: dict, blend_on: bool) -> dict:
-    """Batch form of `_p0_available_by_char`: ONE pp_planets scan (+ one pp_planet_yield_avg query)
+    """Available same-P0 planets per character: ONE pp_planets scan (+ one pp_planet_yield_avg query)
     for a whole set of P0 names, returning `{p0_name: {cid: [avail...]}}`. The redeploy/placements
     paths involve several P0s at once, so the per-P0 version was an N+1 (a full Planet-DB scan each);
     this fetches every needed richness column in one query and partitions per P0/character in Python."""
@@ -292,15 +292,6 @@ def _p0_available_by_char_multi(con, p0_names, foot: dict, occ: dict, blend_on: 
                 by_char[cid] = avail
         out[p0] = by_char
     return out
-
-
-def _p0_available_by_char(con, p0_name: str | None, foot: dict, occ: dict, blend_on: bool) -> dict:
-    """Available same-P0 Planet-DB planets per character (cid) — carrying `p0_name`, in a system the
-    char operates in, not already colonised by them, richness-sorted (measured-yield blended when the
-    flag is on). The 'redeploy this colony to a fresh planet' candidate list. cid-keyed (int). Thin
-    single-P0 wrapper over `_p0_available_by_char_multi`."""
-    return _p0_available_by_char_multi(
-        con, [p0_name] if p0_name else [], foot, occ, blend_on).get(p0_name, {})
 
 
 _PI_DECAY_K = 0.012   # per hour — matches analysis.js _EXT_DECAY_K (extraction front-loads then decays)

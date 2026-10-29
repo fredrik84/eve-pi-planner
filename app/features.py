@@ -407,18 +407,6 @@ FEATURE_REGISTRY = [
                     "A number with a remedy attached, not a nag: the under-production warning is "
                     "still the only thing that shouts, and spare goo is still stock.",
      "default": False},
-    {"key": "reactions_pack_hosts", "label": "Reactions: an order stops at the character not worth a login",
-     "group": "Reactions",
-     "description": "A customer order is placed on the fewest characters that still finish it in a "
-                    "reasonable time, instead of every character with a free slot getting a slice. "
-                    "Each extra character has to cut the remaining wait by at least a fifth to be "
-                    "worth the login; past that the work goes to the characters already making the "
-                    "trip. On a 7-character account an order that was sprawling over all of them "
-                    "lands on three — for about a day on a twelve-day order, and four fewer "
-                    "characters to log in, tab through and collect from. Fewer characters also "
-                    "means fewer formulas the order needs at once, since each one runs the whole "
-                    "chain.",
-     "default": False, "state": "testers"},
     {"key": "reactions_stage_pipeline", "label": "Reactions: stages drawn as a pipeline, like builds",
      "group": "Reactions",
      "description": "The 'to install' list becomes the same pipeline the Industry tab draws for a "

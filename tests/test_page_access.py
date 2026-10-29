@@ -151,7 +151,6 @@ def main():
 
         # ── the public customer link is not behind the gate ────────────────────────────────
         from app.industry import _router as ind_router
-        from app.industry import shares as ind_shares
         gated = [d for d in (ind_router.router.dependencies or [])]
         check(len(gated) >= 1,
               "the account-scoped industry router carries the page dependency")

@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, ".")
 
-from app.layout import (CC_BUDGET, CMD_CTR_LEVEL, EXTRACTOR_HEADS, FIT_HEADROOM, HEAD_COST,
+from app.layout import (CC_BUDGET, EXTRACTOR_HEADS, FIT_HEADROOM, HEAD_COST,
                         _structure_ids, compute_resources, fitted_extractor_basics,
                         generate_extractor_layout, generate_layout, min_cc_for)
 from app.sde import load_pi_data

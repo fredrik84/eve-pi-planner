@@ -7,20 +7,6 @@
 // the moment you turned it on (still the same wide row, just wider). Extra dimensions instead
 // expand as a wrapped block BELOW a row when you click it — never adds table width.
 
-// One quiet line saying how the tiles above it were priced. Takes the parts, drops the empty ones
-// and renders nothing at all when none apply, so an account with no unpriced order and no extra
-// costs sees no footnote rather than an empty box.
-//
-// Why this exists: these used to be `.settings-note`, one amber ! box each, and a normal overview
-// stacked FOUR of them under the tiles — none of which the reader could act on, all of which
-// looked exactly like "no system set, so job fees are left out", which they must act on. Warnings
-// only stay legible if they are rare. Anything that is merely basis-of-a-number belongs here; if
-// the figure is WRONG until the reader does something, it is a `.settings-note` instead.
-function _rxFootnote(parts) {
-  const body = (parts || []).filter(p => p && String(p).trim()).join(' ');
-  return body ? `<div class="stat-footnote">${body}</div>` : '';
-}
-
 let _rxOpps = [];
 let _rxSortKey = 'net_profit_instant';
 let _rxSortDir = -1; // -1 = descending
@@ -694,18 +680,6 @@ function _rxSyncWizardCadence() {
   }
 }
 
-// Changing it in the wizard sets the account's cadence — the same write the card's number field
-// does, because it is the same setting. Without a cadence flag the pick stays local to this run.
-function _rxWizCadenceChanged(value) {
-  const hours = parseFloat(value);
-  if (!_rxCadenceAvail || !isFinite(hours) || hours <= 0) return;
-  const days = hours / 24;
-  if (Number(_rxCadenceDays) === days) return;
-  apiSend('POST', '/api/reactions/cadence', { max_reaction_job_days: days })
-    .then(() => { _rxCadenceDays = days; _rxLastDashboardData = null; })
-    .catch(e => toastError(e, 'Could not save the cadence'));
-}
-
 // A product the installed jobs will not make enough of, with the runs to add. One-directional on
 // purpose: under-producing means the stage above cannot start and you find out in a structure with
 // the materials already bought, while over-producing is just stock. *"We should warn the user when
@@ -891,7 +865,6 @@ function _rxPipelineHtml(todoRows, readyStages) {
         // you type it — the two things the player is actually reading this to find out.
         const isReady = ready(c.id, tier);
         const mark = markable ? _rxMarkOf(g.rows || []) : 'none';
-        const jobs = (g.count || 0) + (g.markedCount || 0);
         const runs = g.totalRuns || (g.rows || []).reduce((s, r) => s + (r.runs || 0), 0);
         const units = runs * (g.outputQty || 0);
         // A hand mark is the card's state when there is one — it is the more specific statement,
@@ -2160,9 +2133,8 @@ function wizRStart() {
 }
 
 // A ONE-OFF override for a single "Suggest reactions" run — reported live (2026-08-19): the
-// day-count rhythm (`wizRCadence`, persisted) routinely lands a batch finishing mid-workday, which
-// nobody can act on until they're home anyway. Deliberately NOT persisted like `wizRCadence` is
-// (_rxWizCadenceChanged writes the account's cadence; this never calls it) — the user asked for a
+// saved day-count rhythm routinely lands a batch finishing mid-workday, which nobody can act on
+// until they're home anyway. Unlike the account's cadence, this is not persisted — the user asked for a
 // picked-each-time window, not a saved availability pattern. `wizRSuggest` just reads
 // `_rxWizDeadlineMs` at submit time in place of the dropdown's value when one is set.
 let _rxWizDeadlineMs = 0;
@@ -3565,7 +3537,6 @@ function _rxCloseOrderDetail() {
 // _rxLastOrderMaterials for the "Copy for Janice" button. Returns just the stale note when the
 // product isn't priced/reachable.
 function _rxOrderReportBody(data) {
-  const o = data.order;
   _rxLastOrderMaterials = data.materials || [];
   if (data.stale)
     return '<div class="pp-card-hint" style="color:var(--clr-amber)">This product isn\'t priced/reachable right now — no live cost/materials breakdown.</div>';
@@ -3615,23 +3586,7 @@ function _rxOrderReportBody(data) {
     </details>`;
 }
 
-// ── Plan to a deadline ──────────────────────────────────────────────────────────────────────
-// Reported live (2026-08-19): the only way to align a reaction batch to a real date was to wait
-// until the day and see what's left, or hand-compute run counts against the cadence setting —
-// which routinely over-bought materials for runs that were never going to finish before the date
-// anyway. First built as a standalone product-picker calculator here; the user then pushed back
-// on picking a product by hand at all — the Suggest wizard already picks profitable products FOR
-// you, so once IT grew its own "finish by" (below, and see wizRSuggest), a second picker asking
-// the same question here was redundant. This button now just opens that wizard with the deadline
-// field in focus — see `_rxOpenSuggestForDeadline`. `_rxFindMaxQtyByDeadline`/`_rxDeadlinePreview`
-// survive because the customer-order "…sized to a deadline" flow (below) still needs them: an
-// order's product is already fixed, so THAT one genuinely has no product to pick.
-function _rxOpenSuggestForDeadline() {
-  wizRStart();
-  const input = document.getElementById('wizRDeadline');
-  if (input) input.focus();
-}
-
+// Customer-order deadline sizing searches quantities for the order's already-selected product.
 // One preview call for a candidate quantity — the same request the New Order modal's Review
 // button sends, just called repeatedly here to SEARCH for the largest quantity that fits rather
 // than reporting on one the user already chose.

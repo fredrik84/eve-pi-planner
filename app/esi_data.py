@@ -7,7 +7,7 @@ imports what it needs from there rather than duplicating it.
 import json as _json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 from app import esi_http
 from fastapi import APIRouter, Cookie, Depends, HTTPException
@@ -434,10 +434,8 @@ def list_characters(pp_session: str = Cookie(default=None)):
             "redeploy_at":   _events["redeploy_at"],
         })
 
-    now = datetime.now(timezone.utc).isoformat()
     chars = []
     for r in rows:
-        expiry = r["token_expiry"] or ""
         is_dummy = bool(r["is_dummy"])
         # A character's token is usable as long as a refresh token exists — access tokens
         # expire in 20 minutes but are transparently refreshed on use. Only a truly revoked

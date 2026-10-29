@@ -20,7 +20,6 @@ In-process where it can be; the HTTP half needs the container serving.
     docker compose cp tests/test_routing.py web:/srv/app/tests/ && \
       docker compose exec web python3 tests/test_routing.py
 """
-import json
 import re
 import sys
 import urllib.error

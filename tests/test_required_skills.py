@@ -53,7 +53,7 @@ def _cleanup(con):
     con.commit()
 
 
-# The two graph shapes plan_skill_gaps consumes, hand-built so the test doesn't need a real plan.
+# The two graph shapes analyze_plan_skills consumes, hand-built so the test doesn't need a real plan.
 MFG = {PROD_MFG: {"blueprint_type_id": BP_MFG}}
 RX = {PROD_RX: {"reaction_id": BP_RX}, PROD_RX2: {"reaction_id": BP_RX2}}
 REQUIREMENTS = [
@@ -113,12 +113,13 @@ def main():
         real_feature_on = sk._feature_on
         sk._feature_on = lambda *_a, **_k: True
         try:
-            g = sk.plan_skill_gaps(CTX, REQUIREMENTS, MFG, RX)
+            report = sk.analyze_plan_skills(CTX, REQUIREMENTS, MFG, RX)
+            g = report["gaps"] if report else None
         finally:
             sk._feature_on = real_feature_on
 
         print("the check runs and finds the seeded gaps:")
-        check(g is not None, "plan_skill_gaps returns a result while the feature is on")
+        check(g is not None, "analyze_plan_skills returns a result while the feature is on")
         if g is None:
             return 1
         by_type = {s["type_id"]: s for s in g["steps"]}
@@ -209,10 +210,10 @@ def main():
         print("the feature flag really gates it:")
         sk._feature_on = lambda *_a, **_k: False
         try:
-            off = sk.plan_skill_gaps(CTX, REQUIREMENTS, MFG, RX)
+            off = sk.analyze_plan_skills(CTX, REQUIREMENTS, MFG, RX)
         finally:
             sk._feature_on = real_feature_on
-        check(off is None, "plan_skill_gaps returns None with the feature off, so the key is omitted")
+        check(off is None, "analyze_plan_skills returns None with the feature off, so the key is omitted")
 
         print("the write path is gated too:")
         sk._feature_on = lambda *_a, **_k: False

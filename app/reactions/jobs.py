@@ -33,7 +33,7 @@ from app.reactions.graph import (
 )
 
 
-# ── Personal reaction-job tracking (opt-in scope, see app.esi.INDUSTRY_JOBS_SCOPES) ────────────
+# ── Personal reaction-job tracking (opt-in scope, see app.esi.REACTIONS_SCOPES) ────────────
 # Cache-at-fetch, not live-fetch-on-every-page-load (same shape as app.pi_sim's colony state):
 # ESI already reports start_date/end_date directly for a job, so there's no decay/rate math to
 # simulate forward — just cache the raw filtered job list with a fetched_at timestamp, refreshed
@@ -3187,23 +3187,6 @@ def _clear_assignment_group(con, character_id: int, type_id: int, tier_order: in
     return cur.rowcount or 0
 
 
-def _assigned_slot_capacity(con, character_id: int) -> int:
-    """This character's total reaction slots, or 0 when we cannot tell (never scanned).
-
-    0 means "unknown", and unknown never refuses: the same rule the print caps follow — a cap built
-    on absent evidence blocks work the player can really do.
-    """
-    row = con.execute(
-        "SELECT character_id, mass_reactions, advanced_mass_reactions, scopes FROM pp_characters "
-        "WHERE character_id=?", (character_id,)).fetchone()
-    if not row:
-        return 0
-    try:
-        return int(reaction_slots(row)) if reaction_capable(row)[0] else 0
-    except Exception:
-        return 0
-
-
 def _parallel_stages_on(context_id: int) -> bool:
     """Gate for ONE slot model (`reactions_parallel_stages`). Off ⇒ `_character_capacities` and the
     dashboard count every planned row against the pool exactly as they always did.
@@ -4982,7 +4965,7 @@ def formula_concurrency_caps(context_id: int) -> dict[int, int]:
 def _formula_concurrency_caps(context_id: int) -> dict[int, int]:
     """reaction product_type_id -> how many jobs of that product may run AT ONCE, for the products
     we have evidence about. **A MISSING KEY MEANS UNKNOWN, and unknown never refuses** — the same
-    rule `_assigned_slot_capacity` follows, and the reason this returns a sparse map rather than a
+    rule slot-capacity reporting follows, and the reason this returns a sparse map rather than a
     number per product: a cap built on absent evidence blocks work the player can really do.
 
     Three things make a key absent:
@@ -5049,13 +5032,6 @@ def _cap_jobs(cap: int | None, want: int) -> int:
 
 
 # ── Customer orders: committing a fixed order to real reaction slots ───────────────────────────
-
-def _pack_hosts_on(context_id: int) -> bool:
-    """Gate for filling one character before using two (`reactions_pack_hosts`). Off ⇒ an order is
-    shared across every character with room, exactly as it always was. Flagged because it changes
-    where live orders get placed, not because it is in doubt — CLAUDE.md rule 2."""
-    return flag_on("reactions_pack_hosts", context_id)
-
 
 def _hosts_for_parallel_jobs(hosts: list[dict], wanted_jobs: int) -> list[dict]:
     """Roomiest-first hosts needed to hold ``wanted_jobs`` concurrent jobs.

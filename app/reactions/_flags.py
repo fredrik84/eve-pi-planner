@@ -6,7 +6,7 @@ features registry reads the DB, and a flag check must never be what breaks a req
 unreachable/failing registry reads as OFF, which is the pre-feature behaviour by construction
 (CLAUDE.md rule 2).
 
-Each layer keeps its own named predicate (`_tidy_runs_on`, `_pack_hosts_on`, …) — the docstrings on
+Each layer keeps its own named predicate (`_tidy_runs_on`, `_parallel_stages_on`, …) — the docstrings on
 those are the rollout rationale for that specific flag and are load-bearing. This only removes the
 five identical lines underneath each one.
 """

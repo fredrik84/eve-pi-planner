@@ -26,7 +26,7 @@ sys.path.insert(0, ".")
 # a rollout control, and the registry is the Admin tab's list before it is anything else.
 EXPECTED_FEATURES = ["industry", "industry_manual_done", "industry_share", "factory_layout",
                      "redeploy_proximity", "local_market", "reactions_parallel_stages",
-                     "reactions_pack_hosts", "reactions_stage_pipeline", "reactions_manual_done"]
+                     "reactions_stage_pipeline", "reactions_manual_done"]
 VALID_STATES = {"hidden", "admin", "testers", "public"}
 
 

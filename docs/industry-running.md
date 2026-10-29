@@ -175,7 +175,7 @@ notes rather than merging — it's a snapshot, so a material since consumed has 
 and merging would make every past paste a floor the count could never fall below. Items the build
 doesn't need are ignored, not flagged (people select the whole hangar). The per-material control
 that remains is `clear`, for correcting one line.
-**Binding a source also ENABLES it** (`enable_bound_source`, called from both `create_order` and
+**Legacy single-key binding also enables the source** (`enable_bound_sources`, called from both `create_order` and
 `update_order`). "This build pulls from that box" and "the planner may count that box" used to be
 two switches with only one thrown, so the checklist said you had the materials while the shopping
 list beside it still told you to buy them — naming the box you're hauling into settles both.
@@ -239,7 +239,7 @@ Three rules keep that from being retroactive or surprising, and all three are lo
   (`sources_owned = 0`). Same rule in `graph._plan_on_hand` for the single-product preview, which
   takes `source_keys` so the preview is costed against the stock the resulting ORDER would count.
 `enable_bound_sources` (legacy, single-key callers) and `remember_source_default` (the per-plan path)
-are the two halves of what `enable_bound_source` used to do; only the first touches the account-wide
+are the two halves of what the legacy binding used to do; only the first touches the account-wide
 tick list. The remembered default is a SET now (`pp_industry_settings.last_source_keys`, first
 element still in `last_source_key`), so a builder who gathers from two cans on every order gets both
 pre-filled.
@@ -250,7 +250,7 @@ repeat multi-box answer back to a single pick. A saved set is a **shortcut for c
 a second thing a plan can be bound to: picking one expands to its keys on the order, so there stays
 exactly one shape of binding for every reader.
 **The picker arrives already answered.** Binding records the source as the account's default
-(`pp_industry_settings.last_source_key`, written by `enable_bound_source`) and the next build's
+(`pp_industry_settings.last_source_key`, written by `remember_source_default`) and the next build's
 picker pre-selects it — a builder running a can per build was otherwise answering the same question
 on every order. Stored per account rather than read back off the orders table so it survives that
 order being finished and cleared; the option is skipped when the remembered container no longer
@@ -260,7 +260,7 @@ exists in the scan.
 takes `source_key`, because which box a build belongs to is decided at the same moment as what to
 build. A paste made there lands on the new order's checklist and **nowhere else** — it is not
 registered as planner stock, since stock that can't actually be drawn from is the one error that
-makes the planner build too little. `source_quantities(ctx, key)` deliberately ignores the source's *enabled* flag: this
+makes the planner build too little. `source_quantities_multi(ctx, keys)` deliberately ignores the source's *enabled* flag: this
 asks what's in a specific box the user pointed at, not what the planner may spend.
 **The requirement is per ORDER, not the queue batch** — the queue aggregates demand across orders
 (right for cost and scheduling, useless here: you can't haul 40% of a shared batch into one

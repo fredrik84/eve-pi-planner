@@ -153,8 +153,9 @@ a J###### name absent from that table is skipped with a row-level error, so a ty
 duplicate/unknown shared Planet DB location or crash the rest of the paste.
 **Planet DB import is simplified by these:** Constellation and Type columns are now
 optional — `import_planets` fills constellation from `system_geo` by system name, and
-infers planet type from which P0 columns the row fills (matched against `PLANET_P0_MAP`,
-which has a unique P0 set per type). `_col` only uses positional fallback when there's no
+infers planet type from positive P0 readings (matched against `PLANET_P0_MAP`,
+which has a unique P0 set per type). Unavailable resources may be blank or zero; an entirely
+blank/zero row needs an explicit Type. `_col` only uses positional fallback when there's no
 header row (column-map mode requires explicit headers). `GET /api/constellations` returns
 `{constellations, regions}` (region map; empty if the table is missing). The wizard is
 **region-first** (`loadConstellations`/`renderConstellations`): a region dropdown lists the

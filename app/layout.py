@@ -137,9 +137,6 @@ P2_PER_P3_INPUT = 2
 # How many P3 facilities feed the P4 per P3-input (compact single-planet: 1, the
 # P4 then runs at partial rate). Set to 2 for a fully balanced — but much larger — line.
 P3_PER_P4_INPUT = 1
-# Max P2 facilities on a single planet for a flat P2 factory (reference archetype).
-P2_FACTORY_CAP = 12
-
 # Extractor (P0→P1) archetype: 1 ECU with N heads → basic factories → launchpad.
 EXTRACTOR_HEADS = 10
 EXTRACTOR_BASICS = 8

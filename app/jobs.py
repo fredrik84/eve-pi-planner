@@ -12,8 +12,9 @@ random and are miserable to reproduce. A job now has to win a database lease bef
 it took, what it did, or why it failed. `pp_job_runs` is that record, and it's what the admin Jobs
 page reads.
 
-The lease is the same shape as a Kubernetes lease: claim with a TTL, renew while working, release at
-the end. A crashed holder's lease simply expires, so a dead pod can never wedge a job permanently.
+Each run claims a fixed-TTL lease and releases it at the end. A crashed holder's lease expires, so
+a dead pod cannot wedge a job permanently. There is no heartbeat: callers must choose a TTL long
+enough for their work; contract scans additionally renew their own region lease.
 """
 
 from __future__ import annotations
@@ -200,18 +201,6 @@ def claim(job: str, owner: str, ttl: int = DEFAULT_TTL) -> bool:
         won = (cur.rowcount or 0) == 1
         con.commit()
         return won
-    finally:
-        con.close()
-
-
-def renew(job: str, owner: str, ttl: int = DEFAULT_TTL) -> bool:
-    """Extend our lease. False means someone else owns it now and we should stop."""
-    con = get_connection()
-    try:
-        cur = con.execute("UPDATE pp_job_leases SET lease_until=? WHERE job=? AND owner=?",
-                          (time.time() + ttl, job, owner))
-        con.commit()
-        return (cur.rowcount or 0) == 1
     finally:
         con.close()
 

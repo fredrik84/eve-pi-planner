@@ -121,7 +121,6 @@ def guard_the_wiring() -> None:
     by doing it. So the endpoints that must report are asserted individually.
     """
     import ast
-    import os
     print("\nthe endpoints that must report, do (source scan):")
     want = [
         ("app/planetary.py", "clear_planets", "the planet wipe — the one that started this"),

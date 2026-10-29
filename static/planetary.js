@@ -2104,7 +2104,6 @@ function renderRecommendations(data) {
           const warn = cnt < 5 ? ' plan-rec-fac-low' : '';
           return `<span class="plan-rec-fac-entry${warn}">${s}: ${cnt} Barren/Temperate</span>`;
         }).join(' · ')}</div>` : '';
-    const sysJson = JSON.stringify(rec.systems_needed).replace(/'/g, '\\\'');
     return `
       <div class="plan-rec-card${i === 0 ? ' plan-rec-best' : ''}">
         <div class="plan-rec-header">

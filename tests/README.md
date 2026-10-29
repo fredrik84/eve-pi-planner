@@ -12,6 +12,7 @@ node tests/test_routing_client.js
 node tests/test_character_health.js
 node tests/test_planet_submission_reviews.js
 node tests/test_refill_deadline.js
+node tests/test_frontend_cleanup.js
 
 # Tests that only need the repository
 python3 tests/test_setup_page.py
@@ -39,6 +40,13 @@ live dashboard API with isolated fixture data.
 `test_planet_submission_reviews.py` uses a temporary database to check review alerts, account
 isolation, authentication, dismissal, and migration of existing submissions. Its JavaScript
 companion checks the global banner, refresh behavior, and failed requests.
+`test_planet_submission_reviews_postgres.py` runs the same endpoint contracts against PostgreSQL
+when `PLANET_REVIEWS_TEST_DSN` points to a disposable test database. Each test creates and removes
+its own schema. CI runs both database variants to catch timestamp type errors that SQLite accepts.
+
+`test_planet_import.py` checks planet-type detection across all eight types with blank or
+zero-filled CSV/spreadsheet cells, small positive readings, explicit types, ambiguity warnings,
+and non-destructive merging. It uses an in-memory database and runs in the app container and CI.
 
 `test_expired_reminders.py` checks the expired-program reminder sequence with an in-memory log,
 including a simulated three-week break through the real notification scheduler, program restarts,
@@ -48,6 +56,11 @@ failed reads, existing send history and multiple notification channels. Run it i
 inventory versus delivered runtime/value, shared-material totals, character filters, retained pads,
 missing inputs/prices, and asynchronous price loading. `test_pi_product_prices.py` checks the
 optional public PI price batch without network or a database; run it in the app container.
+
+`test_frontend_cleanup.js` checks that the manual blueprint editor renders overrides only, that
+shared-library batch contents still open, and that group-permission mutations retain error recovery.
+The regression fails against the pre-cleanup discarded batch renderer. The file-by-file cleanup
+inventory and retained follow-ups are in [`docs/code-audit-2026-10-27.md`](../docs/code-audit-2026-10-27.md).
 
 `test_upgrade_policy.py` guards dependency PR checks, the push-only publish/deploy boundary,
 matching runtime/CI Python versions, and matching Playwright package/browser-image versions.

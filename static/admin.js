@@ -1161,9 +1161,9 @@ async function removeGroupManager(groupId, name) {
 async function toggleGroupPage(groupId, key, allowed, cb) {
   cb.disabled = true;
   try {
-    const resp = allowed
-      ? await apiSend('POST', `/api/admin/groups/${groupId}/pages`, { page_key: key })
-      : await apiSend('DELETE', `/api/admin/groups/${groupId}/pages/${encodeURIComponent(key)}`);
+    await (allowed
+      ? apiSend('POST', `/api/admin/groups/${groupId}/pages`, { page_key: key })
+      : apiSend('DELETE', `/api/admin/groups/${groupId}/pages/${encodeURIComponent(key)}`));
     // Reload rather than patch in place — checking/unchecking the FIRST/LAST box flips the
     // whole group between unrestricted and restricted, which changes the hint text above the
     // grid too, not just this one checkbox.
