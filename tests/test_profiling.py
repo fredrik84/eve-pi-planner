@@ -4,6 +4,7 @@ import os
 import sqlite3
 import sys
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, ".")
@@ -14,6 +15,39 @@ from app import admin, cache, db, latency, profiling, referrals
 
 
 class ProfilingTests(unittest.TestCase):
+    def test_registration_days_count_accounts_include_zeroes_and_roll_over_at_midnight(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        self.addCleanup(con.close)
+        con.execute("CREATE TABLE pp_user_contexts (id INTEGER PRIMARY KEY, created_at TEXT)")
+        con.executemany("INSERT INTO pp_user_contexts (created_at) VALUES (?)", [
+            ("2026-10-01T23:59:59+00:00",),  # outside the 30 calendar days
+            ("2026-10-02T00:00:00+00:00",),  # oldest included day
+            ("2026-10-30T23:59:59+00:00",),
+            ("2026-10-31T00:00:00+00:00",),
+            ("2026-10-31T08:12:00+00:00",),
+            ("2026-11-01T00:00:00+00:00",),  # tomorrow
+        ])
+        store = {}
+        with patch.object(admin, "get_connection", return_value=con) as connect, \
+                patch.object(admin, "datetime") as clock, \
+                patch.object(admin, "cache_get_json", side_effect=store.get), \
+                patch.object(admin, "cache_set_json", side_effect=lambda key, value, ttl: store.__setitem__(key, value)):
+            clock.now.return_value = datetime(2026, 10, 31, 12, tzinfo=timezone.utc)
+            days = admin._registrations_by_day()
+            self.assertEqual(len(days), 30)
+            self.assertEqual(sum(days.values()), 4)
+            self.assertEqual(days["2026-10-02"], 1)
+            self.assertEqual(days["2026-10-03"], 0)
+            self.assertEqual(days["2026-10-31"], 2)
+            self.assertEqual(admin._registrations_by_day(), days)
+            self.assertEqual(connect.call_count, 1)
+            clock.now.return_value = datetime(2026, 11, 1, tzinfo=timezone.utc)
+            next_day = admin._registrations_by_day()
+            self.assertEqual(next_day["2026-11-01"], 1)
+            self.assertNotIn("2026-10-02", next_day)
+            self.assertEqual(connect.call_count, 2)
+
     def test_real_request_records_operation_counts_but_never_queries_keys_or_headers(self):
         app = FastAPI()
         app.add_middleware(latency.LatencyMiddleware)
@@ -126,14 +160,20 @@ class ProfilingTests(unittest.TestCase):
         values = {key: 1 for key in admin._STATS_TO_METRIC}
         with patch.object(admin, "_PROMETHEUS_ENABLED", True), patch.object(admin, "_PROMETHEUS_TOKEN", "test-token"), \
                 patch.object(admin, "admin_stats", return_value=values), \
+                patch.object(admin, "_registrations_by_day", return_value={"2026-10-30": 0, "2026-10-31": 2}) as registrations, \
                 patch.object(profiling, "system_metrics", return_value={"evepi_database_connections": {
                     "help": "Connections", "type": "gauge", "value": 5}}) as collect:
             self.assertEqual(client.get("/metrics").status_code, 401)
             self.assertEqual(client.get("/metrics", headers={"Authorization": "Bearer wrong"}).status_code, 401)
             collect.assert_not_called()
+            registrations.assert_not_called()
             response = client.get("/metrics", headers={"Authorization": "Bearer test-token"})
             self.assertEqual(response.status_code, 200)
             self.assertIn("evepi_database_connections 5", response.text)
+            self.assertIn("# TYPE evepi_registrations_daily gauge", response.text)
+            self.assertIn('evepi_registrations_daily{date="2026-10-30"} 0', response.text)
+            self.assertIn('evepi_registrations_daily{date="2026-10-31"} 2', response.text)
+            self.assertIn("evepi_registrations_today 2", response.text)
         with patch.object(profiling, "profiling_enabled", return_value=True), \
                 patch.object(cache, "cache_get_json", return_value=None), patch.object(cache, "cache_set_json"), \
                 patch.object(db, "_IS_POSTGRES", True), patch.object(db, "get_connection", side_effect=RuntimeError("private-secret")), \

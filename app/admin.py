@@ -9,7 +9,7 @@ import gc
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -932,6 +932,31 @@ def debug_user(character_name: str, _: int = Depends(require_admin)):
     }
 
 
+def _registrations_by_day():
+    """Account creation counts for 30 UTC calendar days, including today; never login counts.
+
+    These are gauges of retained accounts: deleting an account removes it from its birth day.
+    A date-specific cache key prevents yesterday's count appearing as today's after midnight.
+    """
+    today = datetime.now(timezone.utc).date()
+    key = f"metrics:registrations:v1:{today.isoformat()}"
+    cached = cache_get_json(key)
+    if cached is not None:
+        return cached
+    days = {(today - timedelta(days=offset)).isoformat(): 0 for offset in range(29, -1, -1)}
+    with get_connection() as con:
+        rows = con.execute(
+            "SELECT SUBSTR(created_at, 1, 10) AS day, COUNT(*) AS registrations "
+            "FROM pp_user_contexts WHERE created_at >= ? AND created_at < ? "
+            "GROUP BY SUBSTR(created_at, 1, 10)",
+            (next(iter(days)), (today + timedelta(days=1)).isoformat()),
+        ).fetchall()
+    for row in rows:
+        days[row["day"]] = row["registrations"]
+    cache_set_json(key, days, ttl=300)
+    return days
+
+
 @router.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)
 def prometheus_metrics(request: Request):
     """Prometheus text-format metrics scrape endpoint.
@@ -953,6 +978,17 @@ def prometheus_metrics(request: Request):
         lines.append(f"# HELP {metric_name} {help_text}")
         lines.append(f"# TYPE {metric_name} {metric_type}")
         lines.append(f"{metric_name} {stats[stat_key]}")
+
+    registrations = _registrations_by_day()
+    lines.extend([
+        "# HELP evepi_registrations_today Accounts created today (UTC), excluding deleted accounts",
+        "# TYPE evepi_registrations_today gauge",
+        f"evepi_registrations_today {registrations[max(registrations)]}",
+        "# HELP evepi_registrations_daily Accounts created per UTC date over 30 days, excluding deleted accounts",
+        "# TYPE evepi_registrations_daily gauge",
+    ])
+    lines.extend(f'evepi_registrations_daily{{date="{day}"}} {count}'
+                 for day, count in sorted(registrations.items()))
 
     from app.profiling import system_metrics
     for name, metric in system_metrics().items():

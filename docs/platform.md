@@ -81,6 +81,11 @@ browsers, stale timings and subsequent SPA tab changes. The endpoint returns no 
 account data, rejects extra fields and foreign origins, and is disabled unless collection is
 public. Browser load means full navigation/reload; server response time means time to headers.
 
+The bearer-protected `/metrics` exports today's account registrations and date-labelled daily
+counts for the last 30 UTC calendar days, including zero days. Counts use `pp_user_contexts.created_at`,
+exclude deleted accounts and count accounts rather than logins or characters. Both registration
+metrics are gauges, cached for five minutes with a date-specific key for midnight rollover.
+
 The existing bearer-protected `/metrics` also exports cached, read-only PostgreSQL database and
 Redis aggregate counters when profiling is enabled. No extension, schema migration, SQL statement
 logging, or privileged database role is introduced. A failed statistics source reports availability
