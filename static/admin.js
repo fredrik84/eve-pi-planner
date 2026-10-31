@@ -655,6 +655,40 @@ async function loadAdminStats() {
     el.innerHTML = `<div class="pp-empty">Failed to load: ${_esc(e.message)}</div>`;
   }
   _checkPrometheusStatus();
+  loadReferralStats();
+}
+
+async function loadReferralStats() {
+  const section = document.getElementById('adminReferralSection');
+  const content = document.getElementById('adminReferralContent');
+  if (!section || !content) return;
+  section.style.display = _featureActive('referral_stats') ? '' : 'none';
+  if (!_featureActive('referral_stats')) return;
+  content.textContent = 'Loading…';
+  try {
+    renderReferralStats(await api('/api/admin/referrals'));
+  } catch (e) {
+    content.textContent = 'Could not load referral statistics.';
+  }
+}
+
+function renderReferralStats(data) {
+  const section = document.getElementById('adminReferralSection');
+  const content = document.getElementById('adminReferralContent');
+  if (!section || !content) return;
+  section.style.display = data.visible ? '' : 'none';
+  if (!data.visible) return;
+  const notice = data.enabled ? '' : '<p class="admin-hint">Collection is off. Enable Referral statistics for everyone in Admin → Features to start collecting arrivals.</p>';
+  const explanation = '<p class="admin-hint">Page arrivals, not unique people or new accounts. Reloads and repeat visits can count again. Known bots and internal links are excluded. Direct / unknown includes bookmarks, word of mouth, and links whose app or browser hides the referrer. Counts begin when collection is enabled.</p>';
+  if (!data.available) {
+    content.innerHTML = notice + `<p class="admin-hint">${_esc(data.message || 'Log storage is unavailable.')}</p>` + explanation;
+    return;
+  }
+  const rows = (data.rows || []).filter(row => row.last_7d || row.last_30d);
+  content.innerHTML = notice + (rows.length
+    ? '<div style="overflow-x:auto"><table class="ind-table"><thead><tr><th>Source</th><th class="ind-num">Last 7 days</th><th class="ind-num">Last 30 days</th></tr></thead><tbody>'
+      + rows.map(row => `<tr><td>${_esc(row.label)}</td><td class="ind-num">${Number(row.last_7d).toLocaleString()}</td><td class="ind-num">${Number(row.last_30d).toLocaleString()}</td></tr>`).join('') + '</tbody></table></div>'
+    : '<p class="admin-hint">No page arrivals recorded yet.</p>') + explanation;
 }
 
 async function _checkPrometheusStatus() {

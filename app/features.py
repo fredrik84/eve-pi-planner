@@ -36,6 +36,11 @@ router = APIRouter()
 # touched in two months is not insurance, it is a conditional you have to reason about every time
 # you read the code around it. Retire when the answer to "would we ever turn this off again?" is no.
 FEATURE_REGISTRY = [
+    {"key": "referral_stats", "label": "Referral statistics", "group": "Dashboard",
+     "description": "Collect cookie-free page-arrival sources in the local log store and show "
+                    "7/30-day counts in Admin → System stats. Public enables collection; "
+                    "the report always requires a site admin. No IPs, full URLs, or search terms.",
+     "default": False},
     # Restored 2026-08-15 after being retired in `d916c92` on the stated premise that it had been
     # "public since June". It had NOT — it was on the admin rung, and retiring it published the tab,
     # and with it the "Clear all" button that wipes the shared planet database. Production lost all

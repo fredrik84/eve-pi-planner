@@ -66,6 +66,29 @@ block (`builtinFb = _wiz.fuelblock && !_wiz.basketId`).
 
 ## Admin sub-navigation
 
+**Referral statistics** (`app/referrals.py`, `referral_stats` flag) appear in Admin → System stats.
+The admin-only `/api/admin/referrals` endpoint queries the internal Loki service for source counts
+over 7 and 30 days, scoped to `POD_NAMESPACE`. `LOKI_URL` configures the private query endpoint.
+Results are cached for five minutes; a log-store outage affects only this card.
+
+Public rollout enables source collection. HTTP access events are emitted as JSON with route
+templates, status, duration, source category, and a known-bot indicator. Full referrers, query
+strings, IPs, user agents, cookies, and account/character identifiers are absent from these events.
+No cookies, browser storage, tracking pixels, or third-party analytics are used. DNT/GPC and
+prefetches do not contribute to source counts. Only successful HTML page arrivals are counted;
+API/assets, internal links and obvious bots are excluded. A page reload or repeat external visit
+can count again: these figures are requests, not unique visitors or account signups.
+
+Search engines generally supply only their origin, not the search terms. Missing referrers are
+**Direct / unknown**, which can mean bookmarks, word of mouth, chat apps, or browser privacy
+settings. This cannot prove where an unlabelled visit came from or reconstruct historical traffic.
+
+The private `home-k3s-gitops/apps/logging` stack tails all EVE web containers in production/dev
+using Alloy, sanitizes legacy access logs, and retains them in Loki for 180 days on a persistent
+volume. Positions and outgoing WAL data are also persistent. Replicas and redeploys share the
+same store; there is no public Loki ingress. General access events remain available for debugging
+while source collection is disabled.
+
 The Admin tab (`#tab-admin`) is split into sub-pages via an inner nav (`adminSubPage(key)`,
 remembered in `localStorage` as `adminPage`): **Planet submissions · Features · Baskets · User
 management · Bug reports**. Each is a `.admin-subpage[data-page]` div toggled by the sub-nav; all

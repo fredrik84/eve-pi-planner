@@ -6,6 +6,11 @@ them from the repository root so relative `app/` and `static/` reads resolve con
 
 ## Common commands
 
+`test_referrals.py` exercises real page middleware, source-domain classification, privacy controls,
+admin authorization, environment scoping, and log-query failures without a database or network.
+Run it in the application container. `node tests/test_referrals.js` checks the real Admin card
+renderer, including empty/error states, escaping, and honest labels for request counts.
+
 ```bash
 # Browser-free JavaScript behavior
 node tests/test_routing_client.js

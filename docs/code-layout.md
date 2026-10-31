@@ -39,6 +39,9 @@ What a subsystem *does* lives in the service file ([pi.md](pi.md), [reactions.md
 
 ## `app/main.py` — composition only
 
+`app/referrals.py` owns safe structured access events and the admin-only Loki referral report.
+`main.py` only registers its router/logger and invokes the event helper from request middleware.
+
 `app/main.py` is **composition only** — routers, startup/shutdown, the page routes (`/`, `/s/{id}`,
 `/b/{id}`) and the `/api/*` catch-all. The original Find-Buildables analyzer (`/api/analyze`,
 `/api/optimize`, `/api/share`, `/api/share/{id}`) used to hang off the app object here; it now lives

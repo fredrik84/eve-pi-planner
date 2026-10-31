@@ -50,9 +50,12 @@ from app.groups import router as groups_router
 from app.markets import router as markets_router
 from app.config_io import router as config_io_router
 from app.latency import LatencyMiddleware
+from app.referrals import router as referrals_router, configure_access_logging, note_access
+from starlette.concurrency import run_in_threadpool
 
 app = FastAPI(title="EVE PI Planner")
 app.add_middleware(LatencyMiddleware)
+configure_access_logging()
 
 
 @app.middleware("http")
@@ -67,8 +70,10 @@ async def _reactions_request_memo(request, call_next):
     """
     from app.cache import begin_request_memo
     begin_request_memo()
+    started = _time.monotonic()
     response = await call_next(request)
     _note_probe(request, response)
+    await run_in_threadpool(note_access, request, response, (_time.monotonic() - started) * 1000)
     return response
 
 
@@ -119,6 +124,7 @@ app.include_router(planner_store_router)
 app.include_router(fuelblock_router)
 app.include_router(bugs_router)
 app.include_router(admin_router)
+app.include_router(referrals_router)
 app.include_router(features_router)
 app.include_router(notifications_router)
 app.include_router(alert_settings_router)

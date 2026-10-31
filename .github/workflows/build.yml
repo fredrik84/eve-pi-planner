@@ -57,6 +57,8 @@ jobs:
         run: node tests/test_refill_deadline.js
       - name: Check Planet DB review alerts
         run: node tests/test_planet_submission_reviews.js
+      - name: Check referral statistics rendering
+        run: node tests/test_referrals.js
       - name: no-undef
         run: node scripts/lint_js.mjs
 
@@ -96,6 +98,7 @@ jobs:
           python tests/test_planet_import.py
           python tests/test_expired_reminders.py
           python tests/test_pi_product_prices.py
+          python tests/test_referrals.py
           python tests/test_upgrade_policy.py
       - name: Run Planet DB review contracts against PostgreSQL
         env:
