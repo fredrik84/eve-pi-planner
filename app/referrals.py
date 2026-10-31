@@ -98,6 +98,9 @@ def note_access(request, response, duration_ms):
                       if measure else "unmeasured",
             "bot": bool(_BOT.search(request.headers.get("user-agent", ""))),
         }
+        measurements = request.scope.get("evepi.profiling")
+        if measurements is not None:
+            event.update(measurements.profile_fields())
         access_log.info(json.dumps(event, separators=(",", ":")))
     except Exception:
         log.warning("Access event could not be recorded", exc_info=False)

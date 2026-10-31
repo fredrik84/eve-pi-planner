@@ -66,6 +66,33 @@ block (`builtinFb = _wiz.fuelblock && !_wiz.basketId`).
 
 ## Admin sub-navigation
 
+**Private profiling** (`app/profiling.py`, `page_profiling` rollout) supplies the secured
+`grafana.failed.name/d/page-profiling` dashboard. Server access events carry numeric DB acquisition,
+execute/fetch/commit, Redis, ESI, market and cache/memo counts by route template. They never contain
+SQL text, cache keys, raw URLs, record IDs or visitor identifiers. Collection is independent of
+the token-protected Server-Timing response headers; anonymous responses do not gain diagnostic
+headers when the public collection flag is enabled. Static assets, health/metrics scrapes and
+browser telemetry ingestion are excluded from request operation profiling.
+
+The first-party browser script sends one bounded, cookie-free initial navigation measurement to
+`POST /api/telemetry/page-load` after feature state and the browser load event are ready. Only a
+fixed page category and load/DOM/TTFB milliseconds are accepted. It ignores DNT/GPC, automated
+browsers, stale timings and subsequent SPA tab changes. The endpoint returns no statistics or
+account data, rejects extra fields and foreign origins, and is disabled unless collection is
+public. Browser load means full navigation/reload; server response time means time to headers.
+
+The existing bearer-protected `/metrics` also exports cached, read-only PostgreSQL database and
+Redis aggregate counters when profiling is enabled. No extension, schema migration, SQL statement
+logging, or privileged database role is introduced. A failed statistics source reports availability
+zero without breaking the old metrics. Shared-buffer misses are not necessarily physical disk
+reads; Redis server counters include internal activity. Cumulative request work can overlap under
+parallel execution and must not be added together as wall-clock latency.
+
+`grafana.failed.name/d/container-usage` separately reads kubelet cAdvisor data for Kubernetes CPU,
+memory, pod network and disk I/O, with namespace/pod/container filters. Networking belongs to the
+shared pod rather than individual containers. Host Docker workloads and unreported PVC capacity
+are outside its scope. All dashboards use the private monitoring stack's existing authentication.
+
 **Referral statistics** (`app/referrals.py`, `referral_stats` flag) appear in Admin → System stats.
 The admin-only `/api/admin/referrals` endpoint queries the internal Loki service for source counts
 over 7 and 30 days, scoped to `POD_NAMESPACE`. `LOKI_URL` configures the private query endpoint.

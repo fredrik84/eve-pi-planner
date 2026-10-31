@@ -41,6 +41,8 @@ What a subsystem *does* lives in the service file ([pi.md](pi.md), [reactions.md
 
 `app/referrals.py` owns safe structured access events and the admin-only Loki referral report.
 `main.py` only registers its router/logger and invokes the event helper from request middleware.
+`app/profiling.py` owns the bounded browser beacon and aggregate PostgreSQL/Redis metrics;
+`app/latency.py` supplies request-scoped numeric measurements, including private access events.
 
 `app/main.py` is **composition only** — routers, startup/shutdown, the page routes (`/`, `/s/{id}`,
 `/b/{id}`) and the `/api/*` catch-all. The original Find-Buildables analyzer (`/api/analyze`,

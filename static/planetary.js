@@ -162,6 +162,7 @@ async function _loadFeatures() {
       _featuresIsAdmin = !!d.is_admin;
       _featuresIsTester = !!d.is_tester;
       _featuresGitCommit = d.git_commit || 'unknown';
+      if (typeof profileInitialPageLoad === 'function') profileInitialPageLoad();
     } catch (e) { /* leave whatever we had; _featureActive falls back to dflt */ }
   })();
   try {

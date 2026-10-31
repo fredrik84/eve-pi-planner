@@ -36,6 +36,11 @@ router = APIRouter()
 # touched in two months is not insurance, it is a conditional you have to reason about every time
 # you read the code around it. Retire when the answer to "would we ever turn this off again?" is no.
 FEATURE_REGISTRY = [
+    {"key": "page_profiling", "label": "Private page profiling", "group": "Dashboard",
+     "description": "Record numeric request/DB/cache timings and cookie-free initial browser loads "
+                    "in the private log store; export aggregate database/Redis metrics. "
+                    "Public enables collection. No SQL text, keys, URLs or visitor identifiers.",
+     "default": False},
     {"key": "referral_stats", "label": "Referral statistics", "group": "Dashboard",
      "description": "Collect cookie-free page-arrival sources in the local log store and show "
                     "7/30-day counts in Admin → System stats. Public enables collection; "

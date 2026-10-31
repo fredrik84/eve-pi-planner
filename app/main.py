@@ -51,6 +51,7 @@ from app.markets import router as markets_router
 from app.config_io import router as config_io_router
 from app.latency import LatencyMiddleware
 from app.referrals import router as referrals_router, configure_access_logging, note_access
+from app.profiling import router as profiling_router
 from starlette.concurrency import run_in_threadpool
 
 app = FastAPI(title="EVE PI Planner")
@@ -125,6 +126,7 @@ app.include_router(fuelblock_router)
 app.include_router(bugs_router)
 app.include_router(admin_router)
 app.include_router(referrals_router)
+app.include_router(profiling_router)
 app.include_router(features_router)
 app.include_router(notifications_router)
 app.include_router(alert_settings_router)

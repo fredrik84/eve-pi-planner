@@ -6,6 +6,11 @@ them from the repository root so relative `app/` and `static/` reads resolve con
 
 ## Common commands
 
+`test_profiling.py` checks real request middleware, privacy-safe operation counts, bounded browser
+beacons, aggregate database/cache metrics, caching, dependency failures, and bearer authentication.
+Run in the app container without a network or application database. `node tests/test_profiling.js`
+checks one-time initial navigation measurement, privacy/rollout gates, stale data and failures.
+
 `test_referrals.py` exercises real page middleware, source-domain classification, privacy controls,
 admin authorization, environment scoping, and log-query failures without a database or network.
 Run it in the application container. `node tests/test_referrals.js` checks the real Admin card

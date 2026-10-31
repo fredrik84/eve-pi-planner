@@ -954,6 +954,10 @@ def prometheus_metrics(request: Request):
         lines.append(f"# TYPE {metric_name} {metric_type}")
         lines.append(f"{metric_name} {stats[stat_key]}")
 
+    from app.profiling import system_metrics
+    for name, metric in system_metrics().items():
+        lines.extend([f"# HELP {name} {metric['help']}",
+                      f"# TYPE {name} {metric['type']}", f"{name} {metric['value']}"])
     return "\n".join(lines) + "\n"
 
 
