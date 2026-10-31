@@ -382,7 +382,7 @@ def add_tester(req: AdminAdd, _: int = Depends(require_admin),
 # the exact figures don't need to be second-fresh, so a plain TTL cache fits better here than the
 # write-invalidated caches elsewhere (app/cache.py): there's no single "the stats changed" event to
 # hook into (nearly every table write affects some counter), so TTL is the natural fit.
-_ADMIN_STATS_CACHE_KEY = "admin:stats:v3"  # v3 fixes PI valuation + recorded tracking date
+_ADMIN_STATS_CACHE_KEY = "admin:stats:v4"  # v4 includes the PI valuation's contributor count
 _ADMIN_STATS_TTL = 300
 
 
@@ -508,6 +508,12 @@ def admin_stats(_: int = Depends(require_admin)):
     except Exception:
         s["manufacturing_turnover_total"] = s["manufacturing_net_profit_total"] = 0
         s["manufacturing_completions_total"] = s["manufacturing_users_total"] = 0
+    try:
+        s["pi_accounts_total"] = con.execute(
+            "SELECT COUNT(DISTINCT context_id) FROM pp_pi_program_ledger"
+        ).fetchone()[0]
+    except Exception:
+        s["pi_accounts_total"] = 0
     con.close()
     # Service-wide estimated PI produced value from every account's durable program ledger.
     # Opens its OWN connection, so run it only AFTER con.close() (never hold two at once — pool rule).
@@ -543,6 +549,9 @@ _METRIC_META = {
     "evepi_colony_scans_total":       ("Character colony scan records", "gauge"),
     "evepi_sessions_total":           ("Total stored sessions", "gauge"),
     "evepi_sessions_stale_90d":       ("Sessions older than 90 days", "gauge"),
+    "evepi_pi_produced_value_isk":    ("Estimated P1 market value from recorded PI programs, matching Admin Stats; not net profit", "gauge"),
+    "evepi_pi_programs_recorded":     ("Extractor programs in the durable PI production ledger", "gauge"),
+    "evepi_pi_producing_accounts":    ("Accounts contributing to the durable PI production ledger", "gauge"),
 }
 
 # Maps admin_stats dict keys → Prometheus metric names (same order as above).
@@ -563,6 +572,9 @@ _STATS_TO_METRIC = {
     "char_planet_scans":    "evepi_colony_scans_total",
     "sessions":             "evepi_sessions_total",
     "sessions_stale_90d":   "evepi_sessions_stale_90d",
+    "pi_produced_value_total": "evepi_pi_produced_value_isk",
+    "pi_programs_total":    "evepi_pi_programs_recorded",
+    "pi_accounts_total":    "evepi_pi_producing_accounts",
 }
 
 
@@ -974,6 +986,10 @@ def prometheus_metrics(request: Request):
 
     lines = []
     for stat_key, metric_name in _STATS_TO_METRIC.items():
+        # Apply the dashboard's financial cohort policy at the source, so Explore cannot
+        # retrieve a hidden amount. Counts remain available; an absent value is not zero.
+        if stat_key == "pi_produced_value_total" and stats["pi_accounts_total"] < 5:
+            continue
         help_text, metric_type = _METRIC_META[metric_name]
         lines.append(f"# HELP {metric_name} {help_text}")
         lines.append(f"# TYPE {metric_name} {metric_type}")

@@ -158,6 +158,7 @@ class ProfilingTests(unittest.TestCase):
         client = TestClient(app)
         self.addCleanup(client.close)
         values = {key: 1 for key in admin._STATS_TO_METRIC}
+        values.update(pi_produced_value_total=987654321.12, pi_programs_total=42, pi_accounts_total=5)
         with patch.object(admin, "_PROMETHEUS_ENABLED", True), patch.object(admin, "_PROMETHEUS_TOKEN", "test-token"), \
                 patch.object(admin, "admin_stats", return_value=values), \
                 patch.object(admin, "_registrations_by_day", return_value={"2026-10-30": 0, "2026-10-31": 2}) as registrations, \
@@ -174,6 +175,18 @@ class ProfilingTests(unittest.TestCase):
             self.assertIn('evepi_registrations_daily{date="2026-10-30"} 0', response.text)
             self.assertIn('evepi_registrations_daily{date="2026-10-31"} 2', response.text)
             self.assertIn("evepi_registrations_today 2", response.text)
+            self.assertIn("# TYPE evepi_pi_produced_value_isk gauge", response.text)
+            self.assertIn("evepi_pi_produced_value_isk 987654321.12\n", response.text)
+            self.assertIn("evepi_pi_programs_recorded 42\n", response.text)
+            self.assertIn("evepi_pi_producing_accounts 5\n", response.text)
+            values["pi_accounts_total"] = 4
+            hidden = client.get("/metrics", headers={"Authorization": "Bearer test-token"})
+            self.assertNotIn("evepi_pi_produced_value_isk", hidden.text)
+            self.assertIn("evepi_pi_producing_accounts 4\n", hidden.text)
+            self.assertIn("evepi_pi_programs_recorded 42\n", hidden.text)
+            values.update(pi_accounts_total=5, pi_produced_value_total=0)
+            zero = client.get("/metrics", headers={"Authorization": "Bearer test-token"})
+            self.assertIn("evepi_pi_produced_value_isk 0\n", zero.text)
         with patch.object(profiling, "profiling_enabled", return_value=True), \
                 patch.object(cache, "cache_get_json", return_value=None), patch.object(cache, "cache_set_json"), \
                 patch.object(db, "_IS_POSTGRES", True), patch.object(db, "get_connection", side_effect=RuntimeError("private-secret")), \

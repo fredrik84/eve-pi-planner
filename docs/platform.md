@@ -86,6 +86,12 @@ counts for the last 30 UTC calendar days, including zero days. Counts use `pp_us
 exclude deleted accounts and count accounts rather than logins or characters. Both registration
 metrics are gauges, cached for five minutes with a date-specific key for midnight rollover.
 
+The same cached Admin Stats calculation supplies `evepi_pi_produced_value_isk` (estimated P1
+market value), `evepi_pi_programs_recorded` and `evepi_pi_producing_accounts`. The value is omitted
+below five contributing accounts; counts remain visible. This is a gauge, since current market
+prices revalue the recorded programs. It is not net profit, confirmed sales or incremental daily
+income; the exporter does not duplicate the production model or its pricing logic.
+
 The existing bearer-protected `/metrics` also exports cached, read-only PostgreSQL database and
 Redis aggregate counters when profiling is enabled. No extension, schema migration, SQL statement
 logging, or privileged database role is introduced. A failed statistics source reports availability
