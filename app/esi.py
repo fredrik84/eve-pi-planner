@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from app import esi_http
+from app.operations import note as note_operation, failure_reason
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -991,8 +992,12 @@ def _fetch_planets(character_id: int, access_token: str, only_planet_id: int | N
         if _skip_cached:
             log.info("planet scan char=%s fetched=%d skipped(cached)=%d failed=%d",
                      character_id, _fetched, _skipped, _failed)
+        outcome = ("partial" if _fetched else "failed") if _failed else ("cached" if _skipped and not _fetched else "success")
+        note_operation("planet_scan", outcome, fetched=_fetched, skipped=_skipped, failed=_failed)
         return {"fetched": _fetched, "skipped": _skipped, "failed": _failed}
-    except Exception:
+    except Exception as exc:
+        note_operation("planet_scan", "failed", reason=failure_reason(exc),
+                       fetched=_fetched, skipped=_skipped, failed=_failed)
         return {"fetched": _fetched, "skipped": _skipped, "failed": _failed}
     finally:
         if con is not None:
@@ -1576,8 +1581,10 @@ def _fetch_skills(character_id: int, access_token: str) -> dict[str, int]:
                 con.commit()
             finally:
                 con.close()
+        note_operation("skills_refresh", "success")
         return result
-    except Exception:
+    except Exception as exc:
+        note_operation("skills_refresh", "failed", reason=failure_reason(exc))
         return {}
 
 
@@ -1589,8 +1596,11 @@ def _fetch_alliance_id(character_id: int) -> int | None:
     try:
         resp = esi_http.get(f"characters/{character_id}/", timeout=10)
         resp.raise_for_status()
-        return resp.json().get("alliance_id")
-    except Exception:
+        alliance_id = resp.json().get("alliance_id")
+        note_operation("alliance_refresh", "success")
+        return alliance_id
+    except Exception as exc:
+        note_operation("alliance_refresh", "failed", reason=failure_reason(exc))
         return None
 
 
@@ -1654,6 +1664,7 @@ def _refresh_token(character_id: int, refresh_token: str) -> str | None:
             con.close()
             if row:
                 cache_invalidate(charlist_key(row["context_id"]))
+            note_operation("token_refresh", "reauthorization_required", reason="auth_rejected")
             return None
         resp.raise_for_status()
         data = resp.json()
@@ -1668,6 +1679,8 @@ def _refresh_token(character_id: int, refresh_token: str) -> str | None:
         )
         con.commit()
         con.close()
+        note_operation("token_refresh", "success")
         return new_access
-    except Exception:
+    except Exception as exc:
+        note_operation("token_refresh", "failed", reason=failure_reason(exc))
         return None

@@ -31,6 +31,7 @@ import httpx
 
 from app.cache import cache_get_json, cache_set_json
 from app.latency import timed
+from app.operations import note as note_operation, failure_reason, status_reason
 
 log = logging.getLogger(__name__)
 
@@ -121,12 +122,18 @@ def request(method: str, url: str, *, token: str | None = None, client: httpx.Cl
         headers["Authorization"] = f"Bearer {token}"
 
     _pre_request_wait()
-    if client is not None:
-        resp = client.request(method, url, headers=headers, **kw)
-    else:
-        with httpx.Client(timeout=timeout) as c:
-            resp = c.request(method, url, headers=headers, **kw)
-    _record(resp)
+    try:
+        if client is not None:
+            resp = client.request(method, url, headers=headers, **kw)
+        else:
+            with httpx.Client(timeout=timeout) as c:
+                resp = c.request(method, url, headers=headers, **kw)
+        _record(resp)
+    except Exception as exc:
+        note_operation("esi_request", "failed", reason=failure_reason(exc))
+        raise
+    note_operation("esi_request", "failed" if resp.status_code >= 400 else "success",
+                   reason=status_reason(resp.status_code))
     return resp
 
 

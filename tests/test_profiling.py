@@ -11,7 +11,7 @@ sys.path.insert(0, ".")
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from app import admin, cache, db, latency, profiling, referrals
+from app import admin, cache, db, latency, operations, profiling, referrals
 
 
 class ProfilingTests(unittest.TestCase):
@@ -161,12 +161,14 @@ class ProfilingTests(unittest.TestCase):
         values.update(pi_produced_value_total=987654321.12, pi_programs_total=42, pi_accounts_total=5)
         with patch.object(admin, "_PROMETHEUS_ENABLED", True), patch.object(admin, "_PROMETHEUS_TOKEN", "test-token"), \
                 patch.object(admin, "admin_stats", return_value=values), \
+                patch.object(operations, "prometheus_lines", return_value=[]) as health, \
                 patch.object(admin, "_registrations_by_day", return_value={"2026-10-30": 0, "2026-10-31": 2}) as registrations, \
                 patch.object(profiling, "system_metrics", return_value={"evepi_database_connections": {
                     "help": "Connections", "type": "gauge", "value": 5}}) as collect:
             self.assertEqual(client.get("/metrics").status_code, 401)
             self.assertEqual(client.get("/metrics", headers={"Authorization": "Bearer wrong"}).status_code, 401)
             collect.assert_not_called()
+            health.assert_not_called()
             registrations.assert_not_called()
             response = client.get("/metrics", headers={"Authorization": "Bearer test-token"})
             self.assertEqual(response.status_code, 200)

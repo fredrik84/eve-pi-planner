@@ -39,6 +39,7 @@ FEATURE_REGISTRY = [
     {"key": "page_profiling", "label": "Private page profiling", "group": "Dashboard",
      "description": "Record numeric request/DB/cache timings and cookie-free initial browser loads "
                     "in the private log store; export aggregate database/Redis metrics. "
+                    "Also collect anonymous background/ESI outcomes and aggregate job/character health. "
                     "Public enables collection. No SQL text, keys, URLs or visitor identifiers.",
      "default": False},
     {"key": "referral_stats", "label": "Referral statistics", "group": "Dashboard",

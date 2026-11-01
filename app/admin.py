@@ -1010,6 +1010,8 @@ def prometheus_metrics(request: Request):
     for name, metric in system_metrics().items():
         lines.extend([f"# HELP {name} {metric['help']}",
                       f"# TYPE {name} {metric['type']}", f"{name} {metric['value']}"])
+    from app.operations import prometheus_lines
+    lines.extend(prometheus_lines())
     return "\n".join(lines) + "\n"
 
 

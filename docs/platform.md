@@ -92,6 +92,24 @@ below five contributing accounts; counts remain visible. This is a gauge, since 
 prices revalue the recorded programs. It is not net profit, confirmed sales or incremental daily
 income; the exporter does not duplicate the production model or its pricing logic.
 
+`app/operations.py` extends the same profiling flag with anonymous service health. It records
+fixed operation/outcome/reason categories for ESI requests, skill/alliance refreshes, planet scans
+(including cache hits and partial reads) and SSO refreshes. Events never include character,
+account or planet IDs/names, URLs, tokens, response bodies or exception messages. A legitimate
+empty result or an unaffiliated character is not a failed read. Temporary SSO failures preserve
+credentials; the existing SSO-400 rejection path records a reauthorization-required outcome.
+
+Private `/metrics` exports counts of real characters requiring reauthorization (empty refresh
+token, never just expired access), outstanding alert-rescan failure markers, and cached numeric
+scheduler statistics. Job series use a fixed `task` label from `KNOWN_JOBS`, excluding any dynamic
+job names, owners, detail and error text. Completed runs/failures are DB-backed counters; exact
+24h failure counts, active leases, enabled state, unfinished historical records and latest timing
+are gauges. Unfinished run records are not treated as currently running workers. Statistics cache
+for 60s and publish an availability gauge on failure; collection makes no ESI/SSO probes.
+Scheduler success only means its outer function returned; individual-operation failures are a
+separate signal because batch functions can handle errors internally. Event history begins at
+rollout; job counters include existing recorded history and current auth flags use stored state.
+
 The existing bearer-protected `/metrics` also exports cached, read-only PostgreSQL database and
 Redis aggregate counters when profiling is enabled. No extension, schema migration, SQL statement
 logging, or privileged database role is introduced. A failed statistics source reports availability

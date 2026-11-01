@@ -102,6 +102,7 @@ jobs:
           python tests/test_pi_product_prices.py
           python tests/test_referrals.py
           python tests/test_profiling.py
+          python tests/test_operations.py
           python tests/test_pi_lifetime.py
           python tests/test_upgrade_policy.py
       - name: Run Planet DB review contracts against PostgreSQL
