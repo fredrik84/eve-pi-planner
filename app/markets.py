@@ -17,6 +17,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextvars import copy_context
 
+import httpx
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
@@ -471,8 +472,12 @@ def _fetch_structure_orders(context_id: int, structure_id: int) -> list[dict] | 
     try:
         with esi_http.client(timeout=20) as client:
             return _fetch_order_pages(base, client, token=token)
-    except Exception:
-        log.warning("structure market fetch failed for %s", structure_id, exc_info=True)
+    except Exception as exc:
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 403:
+            log.warning("structure market access denied for %s (HTTP 403); trying next market",
+                        structure_id)
+        else:
+            log.warning("structure market fetch failed for %s", structure_id, exc_info=True)
         return None
 
 
