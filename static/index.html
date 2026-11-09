@@ -908,30 +908,30 @@ PVF-N9    3         95                 60             80                  100   
                 Each planet type yields exactly five of these.
               </p>
 
-              <h3 class="contrib-h">3. Submit it for review</h3>
+              <h3 class="contrib-h">3. Add your planet data</h3>
               <ol class="contrib-steps">
                 <li>You must be <strong>logged in</strong> (add a character via ESI on the Characters tab)
                     to submit data.</li>
                 <li>Go to the <strong>Planet DB</strong> tab and click <strong>Import</strong>.</li>
                 <li>Copy your whole spreadsheet — including the header row — and paste it into the box,
                     then click <strong>Import</strong>.</li>
-                <li>Your data goes into a <strong>review queue</strong> — it doesn't change the live
-                    database yet. An admin checks it and approves it before it appears for everyone.
-                    You'll see how many planets you submitted, plus warnings for any rows that couldn't
+                <li><strong>New planets appear immediately.</strong> Changes to an existing planet's
+                    values go into a review queue, with the current and proposed values for an admin
+                    to compare. Identical entries are left alone. You'll see how many planets were
+                    added or sent for review, plus warnings for any rows that couldn't
                     be parsed (fix those and re-submit).</li>
               </ol>
 
               <p class="contrib-note-block">
                 Why review? The Planet DB is shared by everyone, so we don't let just anyone change
                 existing planets — bad or accidental data would break other people's plans. New planets
-                and corrections both go through an admin first. <strong>Admins</strong> can import
-                directly, and approving a submission adds new planets or updates existing ones. Updates
-                <em>merge</em>: a blank cell keeps the current value, so you only need to fill in the
+                are added directly; only corrections need approval. <strong>Admins</strong> can import
+                corrections directly. Updates <em>merge</em>: a blank or zero cell keeps the current value, so you only need to fill in the
                 resources you actually re-measured.
               </p>
 
               <p class="contrib-thanks">
-                That's it — once an admin approves, your data is available to everyone. Thank you for
+                New planets are available to everyone as soon as you import them. Thank you for
                 contributing, and fly safe o7
               </p>
 
@@ -1062,7 +1062,7 @@ PVF-N9    3         95                 60             80                  100   
         <div class="admin-subpage" data-page="submissions" style="display:none">
           <section class="pp-card admin-section">
             <div class="pp-card-title">Planet submissions <span id="psubCount" class="bug-admin-counts"></span></div>
-            <div class="admin-hint">Planet data contributed by non-admins waits here for review. <strong>Approve</strong> writes it to the shared Planet DB — new planets are added and existing ones are updated (blank cells keep the current value, so a sparse paste never wipes good data). <strong>Reject</strong> discards it. Nothing reaches the live database until you approve.</div>
+            <div class="admin-hint">New planets are added immediately. Contributions that change existing values wait here for review, with current → proposed values below. <strong>Approve</strong> applies those changes (blank or zero cells keep current values). <strong>Reject</strong> discards the proposed changes. Older pending submissions may also contain new planets.</div>
             <div id="planetSubList" class="bug-admin-list"></div>
           </section>
         </div>

@@ -87,7 +87,7 @@ def ensure_tables():
             UNIQUE(system, planet_num)
         )
     """)
-    # Pending planet-data contributions from non-admins, held for admin review.
+    # Only contributions that change an existing planet need admin review.
     con.execute("""
         CREATE TABLE IF NOT EXISTS pp_planet_submissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,8 +123,9 @@ def ensure_tables():
     con.close()
 
 
-# Planet DB is a single global, shared table (no context_id) written only by admin
-# import/approve/clear — a good fit for a single global cache entry serving every visitor,
+# Planet DB is a single global, shared table (no context_id). Logged-in contributors
+# can insert new planets; updating existing planets and clearing still require an admin.
+# A single global cache entry serves every visitor,
 # invalidated on those writes rather than a bare TTL. No-ops (falls through to the DB) wherever
 # REDIS_URL isn't set, same as the /api/characters cache.
 _PLANETS_CACHE_KEY = "planetdb:planets"
@@ -542,12 +543,61 @@ def _submitter_name(con, context_id: int) -> str:
     return (r["character_name"] if r else "") or ""
 
 
+def _planet_changes(stored, incoming: dict) -> list[dict]:
+    """Describe precisely the changes the merge writer would apply."""
+    changes = []
+    for col in ["planet_type", "constellation", *P0_COLUMNS]:
+        value = incoming.get(col)
+        if col == "constellation" and not value:
+            continue
+        if col in P0_COLUMNS and not value:
+            continue
+        if value != stored[col]:
+            changes.append({"field": col, "label": _COL_TO_NAME.get(col, col.replace("_", " ").title()),
+                            "old": stored[col], "new": value})
+    return changes
+
+
+def _planet_rows_text(rows: list[dict]) -> str:
+    # Persist ONLY the rows awaiting review. Replaying the full mixed paste would
+    # later overwrite planets that were auto-added and subsequently corrected.
+    columns = ["system", "planet_num", "planet_type", "constellation", *P0_COLUMNS]
+    headers = ["System", "Planet", "Type", "Constellation", *[_COL_TO_NAME[c] for c in P0_COLUMNS]]
+    return "\t".join(headers) + "\n" + "\n".join(
+        "\t".join(str(row.get(c, "")) for c in columns) for row in rows)
+
+
+def _contribute_planet_rows(con, rows: list[dict]) -> tuple[int, int, list[dict], list[str]]:
+    """Insert new planets atomically; never update an existing row without review."""
+    columns = ["system", "planet_num", "planet_type", "constellation", *P0_COLUMNS]
+    sql = (f"INSERT INTO pp_planets ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)}) "
+           "ON CONFLICT(system, planet_num) DO NOTHING RETURNING system")
+    imported = unchanged = 0
+    pending, differences = [], []
+    for row in rows:
+        inserted = con.execute(sql, [row[c] for c in columns]).fetchone()
+        if inserted:
+            imported += 1
+            continue
+        stored = con.execute("SELECT * FROM pp_planets WHERE system=? AND planet_num=?",
+                             (row["system"], row["planet_num"])).fetchone()
+        changes = _planet_changes(stored, row)
+        if not changes:
+            unchanged += 1
+            continue
+        pending.append(row)
+        for change in changes:
+            if len(differences) < 20:
+                differences.append(f"{row['system']} P{row['planet_num']} · {change['label']}: "
+                                   f"{change['old']} → {change['new']}")
+    return imported, unchanged, pending, differences
+
+
 @router.post("/api/planets/import")
 def import_planets(req: ImportRequest,
                    pp_session: str = Cookie(default=None),
                    context_id: int = Depends(require_context)):
-    """Admins write straight to the shared Planet DB. Everyone else's paste is held in
-    pp_planet_submissions for an admin to review — nothing touches the live DB until then."""
+    """Add new planets immediately; queue only changes to existing planets for review."""
     ensure_tables()
     con = get_connection()
     rows, skipped, errors = _parse_planet_rows(req.text, con)
@@ -563,18 +613,25 @@ def import_planets(req: ImportRequest,
         return {"queued": False, "imported": imported,
                 "skipped": skipped + wskip, "errors": errors[:10]}
 
-    # Non-admin → queue for review. Store the original paste; it's re-parsed on approval.
-    submitter = _submitter_name(con, context_id)
-    if rows:
+    imported, unchanged, pending, differences = _contribute_planet_rows(con, rows)
+    submitter = _submitter_name(con, context_id) if pending else ""
+    if pending:
         con.execute(
             "INSERT INTO pp_planet_submissions (context_id, submitter_name, raw_text, "
             "planet_count, status) VALUES (?,?,?,?, 'pending')",
-            (context_id, submitter, req.text, len(rows)),
+            (context_id, submitter, _planet_rows_text(pending), len(pending)),
         )
-        con.commit()
-        notify_admin_discord("New planet submission", f"{len(rows)} planet(s) submitted by {submitter} — pending review in Admin → Planet submissions")
+    con.commit()
     con.close()
-    return {"queued": True, "submitted": len(rows), "skipped": skipped, "errors": errors[:10]}
+    if imported:
+        _invalidate_planetdb_cache()
+    if pending:
+        notify_admin_discord("Planet value changes need review",
+                             f"{len(pending)} existing planet(s) submitted by {submitter}. "
+                             f"{imported} new planet(s) added immediately. "
+                             "Review in Admin → Planet submissions.\n" + "\n".join(differences))
+    return {"queued": bool(pending), "submitted": len(pending), "imported": imported,
+            "unchanged": unchanged, "skipped": skipped, "errors": errors[:10]}
 
 
 @router.get("/api/planet-submissions/reviews")
@@ -624,8 +681,8 @@ def list_planet_submissions(status: str = "pending", _: int = Depends(require_ad
         "FROM pp_planet_submissions WHERE status=? ORDER BY created_at DESC, id DESC",
         (status,),
     ).fetchall()
-    existing = {(r["system"], r["planet_num"]) for r in
-                con.execute("SELECT system, planet_num FROM pp_planets")}
+    existing = {(r["system"], r["planet_num"]): dict(r) for r in
+                con.execute("SELECT * FROM pp_planets")}
     out = []
     for s in subs:
         rows, _skip, _err = _parse_planet_rows(s["raw_text"], con)
@@ -633,6 +690,8 @@ def list_planet_submissions(status: str = "pending", _: int = Depends(require_ad
             "system": r["system"], "planet_num": r["planet_num"],
             "planet_type": r["planet_type"],
             "exists": (r["system"], r["planet_num"]) in existing,
+            "changes": _planet_changes(existing[(r["system"], r["planet_num"])], r)
+                       if (r["system"], r["planet_num"]) in existing else [],
         } for r in rows]
         out.append({
             "id": s["id"], "submitter_name": s["submitter_name"],

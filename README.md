@@ -101,7 +101,7 @@ verification.
 
 ## Contributing
 
-Planet resource density data is the most valuable community contribution. If you have richness data from in-game scanning (Agency → Resource Harvesting → Planets → Planetary Industry, hover a P0 → Resource Density %), submit it via the **Planet DB → Submit data** tab on the site. Submissions are reviewed by admins before going live.
+Planet resource density data is the most valuable community contribution. If you have richness data from in-game scanning (Agency → Resource Harvesting → Planets → Planetary Industry, hover a P0 → Resource Density %), submit it via **Planet DB → Import**. New planets go live immediately; changed existing values are sent for admin review with a comparison of old and new values. Identical entries are left alone.
 
 Want to contribute code? See [CONTRIBUTING.md](CONTRIBUTING.md) for the design philosophy, code style, and PR expectations.
 

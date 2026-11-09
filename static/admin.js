@@ -379,6 +379,8 @@ function renderPlanetSubmissions(subs) {
       `<span class="psub-chip ${p.exists ? 'psub-chip-ov' : 'psub-chip-new'}" `
       + `title="${p.exists ? 'updates existing planet (blank cells keep current values)' : 'new planet'}">`
       + `${_esc(p.system)} P${p.planet_num} · ${_esc(p.planet_type)}</span>`).join('');
+    const differences = s.planets.flatMap(p => (p.changes || []).map(change =>
+      `<div>${_esc(p.system)} P${p.planet_num} · ${_esc(change.label)}: <b>${_esc(String(change.old ?? ''))}</b> → <b>${_esc(String(change.new ?? ''))}</b></div>`)).join('');
     return `<div class="bug-item">
       <div class="bug-item-head">
         <span class="bug-item-title">${s.planet_count} planet${s.planet_count === 1 ? '' : 's'}</span>
@@ -386,6 +388,7 @@ function renderPlanetSubmissions(subs) {
       </div>
       <div class="psub-summary">${newN} new · ${ovN} update</div>
       <div class="psub-chips">${chips}</div>
+      <div class="admin-hint">${differences}</div>
       <div class="bug-item-actions">
         <button class="bug-act bug-act-done" onclick="reviewPlanetSubmission(${s.id},'approve')">Approve all</button>
         <button class="bug-act bug-act-ignore" onclick="reviewPlanetSubmission(${s.id},'reject')">Reject all</button>

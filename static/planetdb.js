@@ -324,7 +324,8 @@ function showPlanetImport() {
     'Accepts tab-separated or comma-separated export.\n\n' +
     'Columns: System, Planet, then one column per P0 resource (header drives mapping).\n' +
     'Type and Constellation are optional — Constellation is derived from the system name, ' +
-    'and Type is inferred from positive P0 values. Leave unavailable resources blank or enter 0.';
+    'and Type is inferred from positive P0 values. Leave unavailable resources blank or enter 0.\n\n' +
+    'New planets are added immediately. Changes to existing values are sent for admin review; identical values are left alone.';
   document.getElementById('ppImportText').focus();
 }
 
@@ -343,13 +344,14 @@ async function submitPlanetImport() {
     const warn = (data.errors && data.errors.length) ? ' Warnings: ' + data.errors.join('; ') : '';
     const importBtn = document.getElementById('ppImportBtn');
     if (data.queued) {
-      // Non-admin: held for admin review, nothing written to the live DB yet.
-      toast(`Thanks! ${data.submitted} planet${data.submitted === 1 ? '' : 's'} submitted for review. `
-            + `An admin will approve them before they appear in the Planet DB.` + warn, 'success', 9000);
+      toast(`Added ${data.imported || 0} new planet${data.imported === 1 ? '' : 's'}. `
+            + `${data.submitted} existing planet${data.submitted === 1 ? '' : 's'} with changed values sent for review. `
+            + `${data.unchanged || 0} unchanged, ${data.skipped || 0} skipped.` + warn, 'success', 9000);
       importBtn.textContent = `✓ submitted`;
       closePlanetImport();
+      if (data.imported) { await loadPlanets(true); loadConstellations(); }
     } else {
-      if (warn) toast(`Imported ${data.imported}, skipped ${data.skipped}.${warn}`, 'info', 9000);
+      toast(`Imported ${data.imported}, ${data.unchanged || 0} unchanged, skipped ${data.skipped}.${warn}`, warn ? 'info' : 'success', 9000);
       closePlanetImport();
       await loadPlanets(true);
       loadConstellations();

@@ -428,12 +428,20 @@ All found on dev, invisible on prod because prod's DB grew with the schema:
 
 ## Contribution review queue (`pp_planet_submissions`)
 
-Only **admins** write to `pp_planets` directly. `POST /api/planets/import` branches on
+Logged-in contributors can add **new planets** directly. `POST /api/planets/import` branches on
 `esi.is_admin(pp_session)`: admins → `_write_planet_rows` (live, **merging upsert** —
 `INSERT … ON CONFLICT(system, planet_num) DO UPDATE` with `CASE WHEN excluded.col != 0` per P0 so a
 blank/0 cell keeps the current value and a sparse paste never wipes good data; returns
-`{queued:false,...}`); everyone else → the paste is stored verbatim in `pp_planet_submissions`
-(status `pending`) and nothing touches the live DB (`{queued:true, submitted:N}`).
+`{queued:false,...}`); everyone else → `_contribute_planet_rows` inserts with
+`ON CONFLICT DO NOTHING RETURNING system`. New planets go live immediately and invalidate the
+shared cache. Existing planets are compared using the merge writer's blank/zero semantics:
+identical/sparse no-ops count as `unchanged`, actual differences are serialized as a header-mapped
+paste in `pp_planet_submissions` (status `pending`). Only those rows are replayed on approval,
+so approving a mixed paste cannot later overwrite an auto-added planet. The response includes
+`imported`, `submitted`, `unchanged`, `skipped` and `queued=bool(submitted)`.
+Discord admin notifications fire only for changed existing planets and include old → new values;
+new and identical planets are silent. The insert guard also handles simultaneous contributions
+and duplicate rows within one paste without updating shared values outside review.
 
 Parsing was split out of `import_planets` into `_parse_planet_rows(text, con) -> (rows, skipped,
 errors)` (no writes) + `_write_planet_rows(con, rows)` so both the direct path and approval reuse
@@ -442,14 +450,14 @@ blank and zero-filled cells both mean no resource. An entirely blank/zero row re
 explicit Type. `tests/test_planet_import.py` covers inference and preservation of stored densities.
 Admin review endpoints (admin-gated via `require_admin`):
 `GET /api/planet-submissions?status=pending` (re-parses each `raw_text` for a preview, flags each
-planet `exists` new-vs-overwrite against live `pp_planets`),
+planet `exists` new-vs-overwrite plus the exact `changes` against live `pp_planets`),
 `POST /api/planet-submissions/{id}/approve` (re-parses + `_write_planet_rows`, marks `approved`),
 `POST /api/planet-submissions/{id}/reject` (marks `rejected`, no write).
 
 UI: a **Planet submissions** section at the top of the Admin tab
-(`loadPlanetSubmissions`/`renderPlanetSubmissions`/`reviewPlanetSubmission` in `planetary.js`,
-new/overwrite chips); `submitPlanetImport` handles the `queued` response ("submitted for review" vs
-"imported"). A **Contribute** tab (`#tab-contribute`, static, no JS hook — `switchTab` is generic)
+(`loadPlanetSubmissions`/`renderPlanetSubmissions`/`reviewPlanetSubmission` in `admin.js`,
+new/overwrite chips and field differences); `submitPlanetImport` in `planetdb.js` handles partial
+imports alongside queued corrections. A **Contribute** tab (`#tab-contribute`, static, no JS hook — `switchTab` is generic)
 documents remote sensing (Agency → Resource Harvesting → Planets → Planetary Industry, hover a P0 →
 `Resource Density: %`), the spreadsheet format, and the review flow.
 

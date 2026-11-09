@@ -234,8 +234,8 @@ login** (`Depends(require_context)`, 401s without a valid `pp_session`) because 
 deletes. **`DELETE /api/planets` requires a SITE ADMIN** — it wipes the table for every user, and
 being gated on a mere session is what emptied it on 2026-08-15 (TODO §20). `tests/test_planetdb_guard.py`
 fails on any unscoped global delete that is not admin-gated. Everything else (`pp_characters`, `pp_profiles`, `pp_shares`,
-`pp_plan_config`) is per-`context_id` and session-gated. Only admins write to `pp_planets`
-directly; everyone else goes through the
+`pp_plan_config`) is per-`context_id` and session-gated. Logged-in contributors can insert new
+`pp_planets` rows; changes to existing values go through the admin-only
 [contribution review queue](docs/workflow.md#contribution-review-queue-pp_planet_submissions).
 
 **Profiles & shares** both persist plan inputs. A new `PlanRequest` field that a user sets must be

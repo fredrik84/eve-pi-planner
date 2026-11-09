@@ -23,6 +23,9 @@ class SubmissionReviewsTests(unittest.TestCase):
         self.set_up_database()
         self.ensure_tables = planetary.ensure_tables.__wrapped__
         self.ensure_tables()
+        with db.get_connection() as con:
+            con.execute("CREATE TABLE system_geo (system TEXT, constellation TEXT)")
+            con.commit()
         self.stack.enter_context(patch.object(planetary, "ensure_tables"))
         self.gate = self.stack.enter_context(
             patch.object(planetary, "feature_enabled_for", return_value=True))
@@ -116,16 +119,19 @@ class SubmissionReviewsTests(unittest.TestCase):
         values = ["42" if name in planetary.PLANET_P0_MAP["Storm"] else "0" for name in names]
         text = "\t".join(["System", "Planet", *names]) + "\n" + "\t".join(["Test", "1", *values])
         with db.get_connection() as con:
-            con.execute("CREATE TABLE system_geo (system TEXT, constellation TEXT)")
             con.execute("INSERT INTO system_geo VALUES ('Test', 'Fixture')")
+            con.execute("INSERT INTO pp_planets (system, planet_num, planet_type, constellation) "
+                        "VALUES ('Test', 1, 'Storm', 'Fixture')")
+            con.commit()
         with patch.object(planetary, "is_admin", return_value=False), \
                 patch.object(planetary, "_submitter_name", return_value="Fixture"), \
                 patch.object(planetary, "notify_admin_discord"):
             response = self.client.post("/api/planets/import", json={"text": text})
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json(), {"queued": True, "submitted": 1, "skipped": 0, "errors": []})
+        self.assertEqual(response.json(), {"queued": True, "submitted": 1, "imported": 0,
+                                           "unchanged": 0, "skipped": 0, "errors": []})
         with db.get_connection() as con:
-            self.assertEqual(con.execute("SELECT COUNT(*) FROM pp_planets").fetchone()[0], 0)
+            self.assertEqual(con.execute("SELECT suspended_plasma FROM pp_planets").fetchone()[0], 0)
         self.app.dependency_overrides[planetary.require_admin] = lambda: 999
         response = self.client.get("/api/planet-submissions")
         self.assertEqual(response.status_code, 200, response.text)
@@ -140,6 +146,75 @@ class SubmissionReviewsTests(unittest.TestCase):
             self.assertEqual(row["planet_type"], "Storm")
             self.assertEqual(row["suspended_plasma"], 42)
             self.assertEqual(row["reactive_gas"], 0)
+
+    def contribute(self, text):
+        with patch.object(planetary, "is_admin", return_value=False), \
+                patch.object(planetary, "_submitter_name", return_value="Fixture"), \
+                patch.object(planetary, "notify_admin_discord") as notify, \
+                patch.object(planetary, "_invalidate_planetdb_cache") as invalidate:
+            response = self.client.post("/api/planets/import", json={"text": text})
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json(), notify, invalidate
+
+    def test_new_planets_are_added_immediately_and_duplicates_are_silent(self):
+        text = "Test,1,Barren,,10,20,30,40,50"
+        data, notify, invalidate = self.contribute(text)
+        self.assertEqual(data, {"queued": False, "submitted": 0, "imported": 1,
+                                "unchanged": 0, "skipped": 0, "errors": []})
+        notify.assert_not_called()
+        invalidate.assert_called_once()
+        data, notify, invalidate = self.contribute(text)
+        self.assertEqual((data["imported"], data["unchanged"], data["submitted"]), (0, 1, 0))
+        notify.assert_not_called()
+        invalidate.assert_not_called()
+        with db.get_connection() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM pp_planets").fetchone()[0], 1)
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM pp_planet_submissions").fetchone()[0], 0)
+
+    def test_mixed_paste_adds_new_queues_only_differences_and_approval_never_replays_new_rows(self):
+        self.contribute("Test,1,Barren,,10,20,30,40,50")
+        data, notify, invalidate = self.contribute(
+            "Test,1,Barren,,55,20,30,40,50\nTest,2,Barren,,10,20,30,40,50\nTest,1,Barren,,10,20,30,40,50")
+        self.assertEqual((data["imported"], data["submitted"], data["unchanged"]), (1, 1, 1))
+        self.assertTrue(data["queued"])
+        invalidate.assert_called_once()
+        notify.assert_called_once()
+        self.assertIn("Aqueous Liquid: 10 → 55", notify.call_args.args[1])
+        with db.get_connection() as con:
+            self.assertEqual(con.execute("SELECT aqueous_liquids FROM pp_planets WHERE planet_num=1").fetchone()[0], 10)
+            pending = con.execute("SELECT * FROM pp_planet_submissions").fetchone()
+            self.assertEqual(pending["planet_count"], 1)
+            parsed, skipped, errors = planetary._parse_planet_rows(pending["raw_text"], con)
+            self.assertEqual((skipped, errors), (0, []))
+            self.assertEqual([r["planet_num"] for r in parsed], [1])
+            con.execute("UPDATE pp_planets SET aqueous_liquids=99 WHERE planet_num=2")
+            con.commit()
+        self.app.dependency_overrides[planetary.require_admin] = lambda: 999
+        preview = self.client.get("/api/planet-submissions").json()["submissions"][0]["planets"][0]
+        self.assertEqual(preview["changes"], [{"field": "aqueous_liquids", "label": "Aqueous Liquid", "old": 10, "new": 55}])
+        with patch.object(planetary, "_invalidate_planetdb_cache"):
+            response = self.client.post(f"/api/planet-submissions/{pending['id']}/approve")
+        self.assertEqual(response.status_code, 200, response.text)
+        with db.get_connection() as con:
+            values = [r[0] for r in con.execute("SELECT aqueous_liquids FROM pp_planets ORDER BY planet_num")]
+        self.assertEqual(values, [55, 99])
+
+    def test_sparse_paste_keeps_known_values_without_triggering_review(self):
+        self.contribute("Test,1,Barren,Fixture,10,20,30,40,50")
+        data, notify, _ = self.contribute("Test,1,Barren,,0,20,0,40,0")
+        self.assertFalse(data["queued"])
+        self.assertEqual(data["unchanged"], 1)
+        notify.assert_not_called()
+        with db.get_connection() as con:
+            row = con.execute("SELECT * FROM pp_planets").fetchone()
+        self.assertEqual((row["aqueous_liquids"], row["constellation"]), (10, "Fixture"))
+
+    def test_duplicate_rows_in_one_paste_cannot_overwrite_auto_added_values(self):
+        data, notify, _ = self.contribute("Test,1,Barren,,10,20,30,40,50\nTest,1,Barren,,80,20,30,40,50")
+        self.assertEqual((data["imported"], data["submitted"]), (1, 1))
+        notify.assert_called_once()
+        with db.get_connection() as con:
+            self.assertEqual(con.execute("SELECT aqueous_liquids FROM pp_planets").fetchone()[0], 10)
 
     def test_disabled_feature_preserves_unread_results(self):
         sub_id = self.seed("approved")
