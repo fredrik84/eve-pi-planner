@@ -43,6 +43,8 @@ What a subsystem *does* lives in the service file ([pi.md](pi.md), [reactions.md
 `main.py` only registers its router/logger and invokes the event helper from request middleware.
 `app/profiling.py` owns the bounded browser beacon and aggregate PostgreSQL/Redis metrics;
 `app/latency.py` supplies request-scoped numeric measurements, including private access events.
+`app/usage.py` owns fixed PI workflow measurements, daily account counters and the admin-only
+7/30-day usage report; its flag controls collection independently of profiling and referrals.
 
 `app/main.py` is **composition only** — routers, startup/shutdown, the page routes (`/`, `/s/{id}`,
 `/b/{id}`) and the `/api/*` catch-all. The original Find-Buildables analyzer (`/api/analyze`,

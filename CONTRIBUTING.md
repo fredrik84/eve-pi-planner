@@ -14,7 +14,7 @@ PR" — for deep implementation detail (how the planner algorithm works, table s
 2. **Static data first, live data when it matters.** Prefer SDE/Fuzzwork (static, doesn't change
    per-player) over ESI calls. Use ESI for live per-character state. If a value can be reliably
    derived from a known formula, compute it — don't scrape/store what you can calculate.
-3. **No ads, no tracking, no third-party data sharing.** No analytics scripts, ad networks, or
+3. **No ads, no third-party tracking or data sharing.** No external analytics scripts, ad networks, or
    third-party JS. No user data (characters, systems, plans, usage patterns) goes anywhere except
    this app's own database, ESI (CCP's official API), and Fuzzwork (static game data). This is a
    hard line, not a style preference — PRs that add any of the above will be rejected outright.

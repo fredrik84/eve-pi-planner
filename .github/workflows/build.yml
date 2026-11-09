@@ -59,6 +59,8 @@ jobs:
         run: node tests/test_planet_submission_reviews.js
       - name: Check referral statistics rendering
         run: node tests/test_referrals.js
+      - name: Check PI usage measurements
+        run: node tests/test_usage.js
       - name: Check private browser profiling
         run: node tests/test_profiling.js
       - name: no-undef
@@ -99,16 +101,19 @@ jobs:
           python tests/test_planet_submission_reviews.py
           python tests/test_planet_import.py
           python tests/test_expired_reminders.py
+          python tests/test_usage.py
           python tests/test_pi_product_prices.py
           python tests/test_referrals.py
           python tests/test_profiling.py
           python tests/test_operations.py
           python tests/test_pi_lifetime.py
           python tests/test_upgrade_policy.py
-      - name: Run Planet DB review contracts against PostgreSQL
+      - name: Run Planet DB and PI usage contracts against PostgreSQL
         env:
           PLANET_REVIEWS_TEST_DSN: postgresql://postgres:test-password@postgres/postgres
-        run: python tests/test_planet_submission_reviews_postgres.py
+        run: |
+          python tests/test_planet_submission_reviews_postgres.py
+          python tests/test_usage_postgres.py
 
   build:
     if: github.event_name == 'push'

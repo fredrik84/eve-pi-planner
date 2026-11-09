@@ -86,6 +86,20 @@ counts for the last 30 UTC calendar days, including zero days. Counts use `pp_us
 exclude deleted accounts and count accounts rather than logins or characters. Both registration
 metrics are gauges, cached for five minutes with a date-specific key for midnight rollover.
 
+**PI flow usage** (`app/usage.py`, `pi_usage_stats` flag) appears in Admin → System stats.
+Public enables first-party collection for logged-in accounts. `/api/telemetry/usage` accepts
+only fixed wizard/import/rescan milestones, honors DNT/GPC and rejects foreign origins and
+extra fields. No character names, systems, planets, URLs or arbitrary event properties are
+stored. `pp_usage_daily` holds bounded action counters per UTC day/account/event, so the
+admin-only `/api/admin/usage` can report action totals and distinct accounts across the entire
+7/30-calendar-day period. Wizard-only/import-only/both groups use Find Systems requests and
+successful existing-setup snapshot imports. These are usage counts, not session conversion or
+proof that a plan was deployed in game. Anonymous visitors and automatic ESI refreshes are not
+counted. An import action counts once even if it saves several plans; partial success counts.
+Ingestion prunes past 90 UTC dates, and the `usage_prune` daily job enforces retention even if
+collection is off. Account deletion removes its counters. Collection begins when enabled;
+no historical inference.
+
 The same cached Admin Stats calculation supplies `evepi_pi_produced_value_isk` (estimated P1
 market value), `evepi_pi_programs_recorded` and `evepi_pi_producing_accounts`. The value is omitted
 below five contributing accounts; counts remain visible. This is a gauge, since current market

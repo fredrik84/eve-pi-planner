@@ -35,6 +35,7 @@ DEFAULT_TTL = 900          # 15 min; long enough for a slow run, short enough to
 # Every job that can run, whether or not it has ever run — so the admin page can list and toggle a
 # job before its first execution, and so a job that silently stopped firing is still visible.
 KNOWN_JOBS = [
+    ("usage_prune", "PI usage retention", "daily 03:30"),
     ("notify_check", "Colony alert notifications", "every 15 min"),
     ("reaction_completions", "Reaction completion ledger", "every 15 min"),
     ("manufacturing_completions", "Manufacturing completion ledger", "every 15 min"),

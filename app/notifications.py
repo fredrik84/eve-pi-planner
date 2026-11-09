@@ -943,6 +943,7 @@ def make_scheduler():
     from app.reactions.jobs import log_all_reaction_completions
     from app.industry.jobs import log_all_manufacturing_completions
     from app.jobs import run_job
+    from app.usage import prune_usage
     sched = AsyncIOScheduler()
 
     # The scheduler starts in EVERY replica, so each job would otherwise fire once per pod. The
@@ -956,6 +957,8 @@ def make_scheduler():
                   "interval", minutes=15, id="notify_check")
     sched.add_job(_leased("yield_aggregate", aggregate_colony_yields),
                   "cron", hour=3, id="yield_aggregate")
+    sched.add_job(_leased("usage_prune", prune_usage),
+                  "cron", hour=3, minute=30, id="usage_prune")
     # Forward-only reaction turnover/net-profit ledger — logs jobs that finished since the last tick.
     sched.add_job(_leased("reaction_completions", log_all_reaction_completions),
                   "interval", minutes=15, id="reaction_completions")

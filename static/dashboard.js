@@ -46,7 +46,8 @@ async function rescanAll() {
     const b = document.getElementById('rescanBtn');
     if (b) b.textContent = `Rescanning ${i + 1}/${targets.length}…`;
     try {
-      await apiSend('POST', `/api/characters/${targets[i].character_id}/refresh-planets`);
+      const d = await apiSend('POST', `/api/characters/${targets[i].character_id}/refresh-planets`);
+      if (d?.planets_fetched || d?.planets_skipped_cached) recordPiUsage('colonies_rescanned');
     } catch (e) { failed.push(targets[i]); }
   }
   // Reaction jobs live behind a separate ESI endpoint from colonies — pull them on a full rescan

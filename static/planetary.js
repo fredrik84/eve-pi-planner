@@ -119,9 +119,20 @@ function wizardGo(n) {
   if (n === 2 && _wiz.lastRecsData) renderRecommendations(_wiz.lastRecsData);
 }
 
+function recordPiUsage(event) {
+  if (!_loggedIn || _features.pi_usage_stats?.state !== 'public'
+      || navigator.doNotTrack === '1' || navigator.globalPrivacyControl || navigator.webdriver) return;
+  try {
+    fetch('/api/telemetry/usage', { method: 'POST', credentials: 'same-origin', keepalive: true,
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event }) }).catch(() => {});
+  } catch (e) { /* Optional measurements must never interrupt planning. */ }
+}
+
 async function onPlanetaryTabOpen() {
   await loadPiProducts();
-  loadCharacters();
+  loadCharacters().then(() => {
+    if (currentTab() === 'planetary') recordPiUsage('wizard_opened');
+  }).catch(() => {});
   loadConstellations();
   ppToggleMaxJumps();
   renderSavedPlansBar();
@@ -508,6 +519,7 @@ async function rescanCharacter(cid, btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Rescanning…'; }
   try {
     const d = (await apiSend('POST', `/api/characters/${cid}/refresh-planets`)) || {};
+    if (d.planets_fetched || d.planets_skipped_cached) recordPiUsage('colonies_rescanned');
     // Briefly show real fetched-vs-cache-skipped counts before the repaint recreates this
     // button — the only way to see esi_cache_skip actually doing something, short of
     // reading server logs (which this deployment doesn't even emit at INFO level).
@@ -1899,7 +1911,7 @@ async function _restoreFromPayload(payload, fromShare = false, autoNav = true) {
   await _loadProductConfig(payload.tid, prod.name);
   if (payload.cs && payload.cs.length) {
     _wiz.chosenSystems = payload.cs;
-    await wizardChooseSystems(payload.cs);
+    await wizardChooseSystems(payload.cs, false);
   }
 }
 
@@ -1943,6 +1955,7 @@ function _planRequest(systemNames) {
 
 async function wizardFindSystems() {
   if (!_wiz.typeId) { toast('Select a product first.', 'error'); return; }
+  recordPiUsage('wizard_started');
   // Clear any stale plan from a previous run before fetching fresh data
   _wiz.lastRecsData = null;
   _wiz.lastPlanData = null;
@@ -1956,6 +1969,7 @@ async function wizardFindSystems() {
     if (data.error) throw new Error(data.error);   // 200 + {error} = a domain failure, not a transport one
     _wiz.lastRecsData = data;
     renderRecommendations(data);
+    recordPiUsage('wizard_recommendations');
     wizardGo(2);
   } catch (e) {
     toastError(e, 'Failed');
@@ -1967,7 +1981,7 @@ async function wizardFindSystems() {
 
 // ── Wizard: Choose Systems (Step 2 → 3) ──────────────────────────────────────
 
-async function wizardChooseSystems(systemNames) {
+async function wizardChooseSystems(systemNames, measure = true) {
   // Disable all choose buttons while running
   document.querySelectorAll('.wiz-choose-btn').forEach(b => { b.disabled = true; });
 
@@ -1980,6 +1994,7 @@ async function wizardChooseSystems(systemNames) {
     document.getElementById('wizTitle3').textContent = title + ' · no system filter';
     renderFinalPlan(_wiz.lastPlanData);
     wizardGo(3);
+    if (measure && _wiz.lastPlanData) recordPiUsage('wizard_completed');
     return;
   }
 
@@ -1993,6 +2008,7 @@ async function wizardChooseSystems(systemNames) {
     document.getElementById('wizTitle3').textContent = data.product.name + ' · ' + sysLabel;
     renderFinalPlan(data);
     wizardGo(3);
+    if (measure) recordPiUsage('wizard_completed');
   } catch (e) {
     toastError(e, 'Plan failed');
     document.querySelectorAll('.wiz-choose-btn').forEach(b => { b.disabled = false; });
@@ -3174,6 +3190,7 @@ async function importCurrentSetupAsPlan(btn) {
         saved++;
       } catch (e) { failed++; }
     }
+    if (saved) recordPiUsage('setup_imported');
     setStatus(failed
       ? `Imported ${saved} plan${saved === 1 ? '' : 's'}, ${failed} failed.`
       : `Imported ${saved} plan${saved === 1 ? '' : 's'} as saved snapshot${saved === 1 ? '' : 's'}.`);

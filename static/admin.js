@@ -656,6 +656,33 @@ async function loadAdminStats() {
   }
   _checkPrometheusStatus();
   loadReferralStats();
+  loadPiUsageStats();
+}
+
+async function loadPiUsageStats() {
+  const section = document.getElementById('adminPiUsageSection');
+  const content = document.getElementById('adminPiUsageContent');
+  if (!section || !content) return;
+  section.style.display = _featureActive('pi_usage_stats') ? '' : 'none';
+  if (!_featureActive('pi_usage_stats')) return;
+  content.textContent = 'Loading…';
+  try {
+    const data = await api('/api/admin/usage');
+    section.style.display = data.visible ? '' : 'none';
+    if (!data.visible) return;
+    const week = data.periods['7'], month = data.periods['30'];
+    const adoptionLabels = { wizard_only: 'Wizard only', import_only: 'Existing-setup import only', both: 'Both', neither: 'Other measured PI activity' };
+    const table = (head, rows) => '<div style="overflow-x:auto"><table class="ind-table"><thead><tr>'
+      + head.map(h => `<th>${_esc(h)}</th>`).join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    const num = n => Number(n || 0).toLocaleString();
+    content.innerHTML = (data.enabled ? '' : '<p class="admin-hint">Collection is off. Set PI flow usage statistics to Public in Admin → Features to start collecting.</p>')
+      + table(['Activity', '7d accounts', '7d actions', '30d accounts', '30d actions'], month.rows.map((row, i) => `<tr><td>${_esc(row.label)}</td><td>${num(week.rows[i].accounts)}</td><td>${num(week.rows[i].actions)}</td><td>${num(row.accounts)}</td><td>${num(row.actions)}</td></tr>`).join(''))
+      + '<p class="admin-hint">Accounts that requested Find Systems versus accounts that successfully imported existing colonies as saved plans:</p>'
+      + table(['Approach', '7d accounts', '30d accounts'], Object.entries(adoptionLabels).map(([key, label]) => `<tr><td>${_esc(label)}</td><td>${num(week.adoption[key])}</td><td>${num(month.adoption[key])}</td></tr>`).join(''))
+      + '<p class="admin-hint">Last 7 / 30 UTC calendar days including today. Logged-in accounts only; DNT/GPC and automated browsers are excluded. Each row deduplicates accounts across the whole period. Imports count successful import actions, even if several plans are saved. Rescans include cached colonies. Steps can happen on different visits or outside the period, so this is usage rather than a conversion funnel or proof of in-game deployment. Collection starts when enabled; daily account counters are kept for 90 days and deleted with the account.</p>';
+  } catch (e) {
+    content.textContent = 'Could not load PI usage statistics.';
+  }
 }
 
 async function loadReferralStats() {

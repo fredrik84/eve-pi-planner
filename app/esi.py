@@ -1298,6 +1298,7 @@ _CHAR_OWNED_TABLES = [
 # deliberate decision about whether an account deletion should take it — a reflective sweep would
 # silently start deleting a future table nobody considered.
 _CONTEXT_OWNED_TABLES = [
+    "pp_usage_daily",
     "pp_plan_snapshots", "pp_plan_baseline", "pp_profiles", "pp_pi_program_ledger",
     "pp_alert_settings", "pp_notification_prefs", "pp_notification_settings", "pp_notification_log",
     "pp_market_config", "pp_asset_sources", "pp_asset_stock", "pp_source_sets",

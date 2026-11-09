@@ -36,6 +36,12 @@ router = APIRouter()
 # touched in two months is not insurance, it is a conditional you have to reason about every time
 # you read the code around it. Retire when the answer to "would we ever turn this off again?" is no.
 FEATURE_REGISTRY = [
+    {"key": "pi_usage_stats", "label": "PI flow usage statistics", "group": "Dashboard",
+     "description": "Count wizard progress, saved plans, existing-setup imports and manual colony "
+                    "rescans in the app database. Public enables collection for logged-in accounts; "
+                    "only admins see 7/30-day action and distinct-account totals. Daily data is kept "
+                    "for 90 days and removed on account deletion. Respects DNT/GPC.",
+     "default": False},
     {"key": "page_profiling", "label": "Private page profiling", "group": "Dashboard",
      "description": "Record numeric request/DB/cache timings and cookie-free initial browser loads "
                     "in the private log store; export aggregate database/Redis metrics. "

@@ -1606,6 +1606,7 @@ async function savePlanForRefills() {
   const btn = document.getElementById('savePlanBtn');
   try {
     await apiSend('POST', '/api/plan-snapshots', { name: snap.name, snapshot: snap });
+    recordPiUsage('wizard_saved');
     if (btn) { const t = btn.textContent; btn.textContent = '✓ Saved'; setTimeout(() => { btn.textContent = t; }, 2000); }
     renderSavedPlansBar();  // keep the page-1 list current
   } catch (e) { toastError(e, 'Save failed'); }

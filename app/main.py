@@ -52,6 +52,7 @@ from app.config_io import router as config_io_router
 from app.latency import LatencyMiddleware
 from app.referrals import router as referrals_router, configure_access_logging, note_access
 from app.profiling import router as profiling_router
+from app.usage import router as usage_router
 from starlette.concurrency import run_in_threadpool
 
 app = FastAPI(title="EVE PI Planner")
@@ -127,6 +128,7 @@ app.include_router(bugs_router)
 app.include_router(admin_router)
 app.include_router(referrals_router)
 app.include_router(profiling_router)
+app.include_router(usage_router)
 app.include_router(features_router)
 app.include_router(notifications_router)
 app.include_router(alert_settings_router)
@@ -185,7 +187,7 @@ def _ensure_all_tables():
     from booting, which would take the whole site down instead of one admin panel.
     """
     from app import (alert_settings, admin, bugs, features, groups, jobs, markets, moon_goo,
-                     notifications, planetary, planner_store, shares, yield_stats)
+                     notifications, planetary, planner_store, shares, usage, yield_stats)
     from app.esi import ensure_char_tables, ensure_admin_table
     from app.industry import blueprints as ind_bp, bpc, jobs as ind_jobs, orders as ind_orders, \
         settings as ind_settings, shares as ind_shares, assets as ind_assets
@@ -196,6 +198,7 @@ def _ensure_all_tables():
     for fn in (
         ensure_char_tables, ensure_admin_table,
         ensure_audit_table,
+        usage.ensure_usage_table,
         planner_store.ensure_plan_tables, planner_store.ensure_share_table,
         planner_store.ensure_profile_tables, planner_store.ensure_plan_snapshot_table,
         planner_store.ensure_colony_flags_table,
