@@ -235,8 +235,11 @@ anyone not on the rung.
   them, not something that resolves itself, so a short cooldown would just nag every 15 minutes
   about the same unfixed issue. Cooldown is checked **before** collecting each alert into its
   batch, so one recently-notified planet doesn't block others in the same run.
-- **Expired extraction reminders:** the first alert for a program is immediate. Further successful
-  notifications wait 24h, 48h, 4 days, then 7 days between reminders. This policy always applies,
+- **Expired extraction reminders:** the first alert for a program is immediate if its expiry is
+  less than seven days old. Further successful notifications wait 24h, 48h, then 4 days between
+  reminders, but **all extraction-expiry notifications stop seven days after the actual expiry**.
+  The dashboard continues showing the idle colony. The age check happens before an ESI rescan,
+  so idle colonies consume no further verification calls for this kind. This policy always applies,
   including when `alert_rescan_backoff` is off. History is scoped to the account, character and
   planet, and only sends after the program's actual expiry count. A restarted program's next
   expiry starts fresh; a long silence or failed read does not. Existing log rows are reused, so
@@ -278,8 +281,8 @@ speed up the hand rescan. **Worst case is therefore 20 targets x 2 = 40 requests
 for the entire app**, whatever the number of accounts.
 
 Because a scan happens per *send*, reminders backing off also reduces reads. Expired extraction
-programs now need at most one read per weekly reminder once their sequence reaches that interval;
-other kinds still cap at twice a day — against ~96 reads per character per day for the blanket
+programs stop generating notification checks seven days after expiry; other kinds still cap at
+twice a day — against ~96 reads per character per day for the blanket
 timer alternative that was rejected.
 
 **Backoff on other repeats.** `_consecutive_cooldown_h` doubles the kind's base interval per consecutive

@@ -12,7 +12,7 @@ drift apart.
 
 The scheduler runs check_and_send_notifications() every 15 minutes. A due colony alert first
 triggers a re-read of the colony it is about, bounded by a whole-tick budget.
-Expired extractions always back off from daily to weekly reminders for the same program.
+Expired extractions back off daily and stop notifying seven days after expiry.
 The independent `alert_rescan_backoff` flag backs off other repeated alerts — see
 docs/platform.md, "Check before nagging".
 """
@@ -261,7 +261,7 @@ _NOTIFY_ADVISORY_LOCK_KEY = 918_273_647
 # stays drifted until the player manually reseats its program) are structural problems, not
 # time-decaying like an expiring extraction, so they get a much longer cooldown to avoid nagging
 # about the same unfixed issue every 15-minute scheduler tick.
-# Expired programs use their own daily-to-weekly policy in _expired_reminder_due.
+# Expired programs use their own bounded reminder policy in _expired_reminder_due.
 _COOLDOWN_HOURS = {
     "expiring": 2.0, "storage_full": 2.0, "factory_refill": 4.0,
     "ext_unrouted": 24.0, "fac_unfed": 24.0, "fac_output": 24.0, "p0_mismatch": 24.0,
@@ -312,6 +312,7 @@ _BACKOFF_MAX_ROWS = 72        # far past the cap even at several channels; bound
 _SAME_SEND_WINDOW_S = 60
 _EXPIRED_REMINDER_BASE_H = 24.0
 _EXPIRED_REMINDER_CAP_H = 168.0
+_EXPIRED_NOTIFY_MAX_AGE_H = 168.0
 
 
 def _send_timestamps(rows) -> list[float]:
@@ -329,13 +330,17 @@ def _send_timestamps(rows) -> list[float]:
 
 
 def _expired_reminder_due(con, context_id: int, alert: dict) -> bool:
-    """Notify a new expired program once, then remind after 1d, 2d, 4d and weekly.
+    """Notify a new expired program, with daily backoff for at most seven days.
 
     The program's expiry identifies this occurrence. Silence during an outage, a failed
     ESI read or a PI break cannot reset it. A restarted program has a later expiry, so
     its first alert still fires immediately. Character + planet keeps two characters
     extracting on the same planet independent. Existing send history works as-is.
     """
+    # A long-idle colony stays visible on the dashboard, but no longer warrants a
+    # notification or another ESI verification. Only a new program expiry re-arms it.
+    if time.time() - alert["expiry"] >= _EXPIRED_NOTIFY_MAX_AGE_H * 3600:
+        return False
     since = datetime.fromtimestamp(alert["expiry"], tz=timezone.utc).isoformat()
     rows = con.execute(
         "SELECT sent_at FROM pp_notification_log "
@@ -381,7 +386,7 @@ def check_and_send_notifications():
     NOT pure DB math: a due colony alert triggers a bounded re-read of the colony it is about (see
     `_rescan_for_due_alerts`) and that read completes before a notifier is called. The
     `alert_rescan_backoff` flag controls repeat cooldowns for kinds other than expired
-    extraction programs, whose daily-to-weekly reminders are always enforced.
+    extraction programs, whose seven-day notification window is always enforced.
 
     Guarded by a Postgres advisory lock (same pattern as scripts/build_sde.py /
     populate_geo.py). Every uvicorn worker in every pod replica runs its own APScheduler on its

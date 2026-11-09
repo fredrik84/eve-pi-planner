@@ -1,4 +1,4 @@
-"""Expired programs notify once and back off to weekly reminders, independent of rollout.
+"""Expired programs back off, then stop notifying after seven days, independent of rollout.
 
 No network or application database: real due/send logic runs against an in-memory log.
 Run in the application container: python3 tests/test_expired_reminders.py
@@ -52,10 +52,10 @@ class ExpiredReminderTests(unittest.TestCase):
         for smart in (False, True):
             self.assertTrue(self.due(smart), "a newly detected expiry is never delayed")
 
-    def test_reminder_intervals_increase_from_daily_to_weekly(self):
+    def test_reminders_back_off_then_stop_after_one_week(self):
         last = NOW
         self.send_at(last)
-        for wait_days in (1, 2, 4, 7, 7, 7):
+        for wait_days in (1, 2):
             self.clock.return_value = last + wait_days * DAY - 1
             self.assertFalse(self.due(False), f"not due before {wait_days} days, even with flag off")
             self.assertFalse(self.due(True))
@@ -64,6 +64,17 @@ class ExpiredReminderTests(unittest.TestCase):
             self.assertTrue(self.due(True))
             last = self.clock.return_value
             self.send_at(last)
+        self.clock.return_value = NOW + 7 * DAY
+        self.assertFalse(self.due(False))
+        self.assertFalse(self.due(True))
+
+    def test_old_programs_are_silent_even_without_notification_history(self):
+        for age in (7 * DAY, 28 * DAY, 90 * DAY):
+            self.alert["expiry"] = NOW - age
+            for smart in (False, True):
+                self.assertFalse(self.due(smart))
+        self.alert["expiry"] = NOW - 7 * DAY + 1
+        self.assertTrue(self.due(), "still eligible just before the exact expiry-age boundary")
 
     def test_long_gaps_do_not_restart_the_same_programs_sequence(self):
         self.alert["expiry"] = NOW - 40 * DAY
@@ -71,7 +82,7 @@ class ExpiredReminderTests(unittest.TestCase):
             self.send_at(NOW - days_ago * DAY)
         self.assertFalse(self.due(), "an outage or failed scan is not a restarted extraction")
         self.clock.return_value = NOW + 2 * DAY
-        self.assertTrue(self.due(), "weekly reminder is still sent when due")
+        self.assertFalse(self.due(), "an old program remains silent when its cooldown ends")
 
     def test_restart_resets_history_without_waiting_for_weekly_reminder(self):
         self.alert["expiry"] = NOW - 40 * DAY
@@ -118,7 +129,7 @@ class ExpiredReminderTests(unittest.TestCase):
             self.send_at(NOW - hours_ago * HOUR)
         self.assertFalse(self.due(), "rollout must not send another round of initial alerts")
         self.clock.return_value = NOW + 7 * DAY - 2 * HOUR
-        self.assertTrue(self.due())
+        self.assertFalse(self.due(), "old two-hour history cannot re-arm a long-idle colony")
 
     def test_scheduler_sends_only_expected_batches_through_three_week_break(self):
         self.con.execute("CREATE TABLE pp_notification_settings "
@@ -148,7 +159,7 @@ class ExpiredReminderTests(unittest.TestCase):
             for tick in range(22 * 24 * 4):
                 clock.return_value = NOW + tick * 15 * 60
                 N._process_context(self.con, 1)
-        self.assertEqual(sent, [NOW + d * DAY for d in (0, 1, 3, 7, 14, 21)])
+        self.assertEqual(sent, [NOW + d * DAY for d in (0, 1, 3)])
 
     def test_alert_carries_exact_program_expiry(self):
         expiry = NOW - 12345
