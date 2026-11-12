@@ -709,7 +709,8 @@ function renderReferralStats(data) {
   section.style.display = data.visible ? '' : 'none';
   if (!data.visible) return;
   const notice = data.enabled ? '' : '<p class="admin-hint">Collection is off. Enable Referral statistics for everyone in Admin → Features to start collecting arrivals.</p>';
-  const explanation = '<p class="admin-hint">Page arrivals, not unique people or new accounts. Reloads and repeat visits can count again. Known bots and internal links are excluded. Direct / unknown includes bookmarks, word of mouth, and links whose app or browser hides the referrer. Counts begin when collection is enabled.</p>';
+  const explanation = '<p class="admin-hint">Page arrivals, not unique people or new accounts. Reloads and repeat visits can count again. Known bots and internal links are excluded. Direct / unknown includes bookmarks, word of mouth, and links whose app or browser hides the referrer. Counts begin when collection is enabled.</p>'
+    + '<p class="admin-hint">For links shared on Discord, use https://eveindustry.net/?utm_source=discord to label arrivals even when the app hides the referrer. Recognized source tags take priority over external referrers. Tags are labels, not proof of where a link was clicked; forwarded links keep their label. Discord servers, channels, messages and visitors are not identified.</p>';
   if (!data.available) {
     content.innerHTML = notice + `<p class="admin-hint">${_esc(data.message || 'Log storage is unavailable.')}</p>` + explanation;
     return;

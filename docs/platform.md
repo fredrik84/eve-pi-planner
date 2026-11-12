@@ -153,6 +153,16 @@ Search engines generally supply only their origin, not the search terms. Missing
 **Direct / unknown**, which can mean bookmarks, word of mouth, chat apps, or browser privacy
 settings. This cannot prove where an unlabelled visit came from or reconstruct historical traffic.
 
+Discord referrers are classified automatically when supplied. For shared links that may open
+without a referrer, use `https://eveindustry.net/?utm_source=discord` (or append
+`&utm_source=discord` to an existing query). Recognized `utm_source` values from the fixed source
+list take priority over external referrers; unknown labels are ignored and internal navigation
+remains excluded. Only the coarse source category persists; campaign tags and arbitrary query
+values are discarded. Tagged arrivals obey the same collection flag, DNT/GPC, prefetch and bot
+rules. They cannot identify the Discord server, channel, message or visitor, and a forwarded
+tagged link keeps its label even if opened elsewhere. These are source labels, not proof of
+where a link was clicked.
+
 The private `home-k3s-gitops/apps/logging` stack tails all EVE web containers in production/dev
 using Alloy, sanitizes legacy access logs, and retains them in Loki for 180 days on a persistent
 volume. Positions and outgoing WAL data are also persistent. Replicas and redeploys share the

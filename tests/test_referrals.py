@@ -70,6 +70,48 @@ class ReferralEventTests(unittest.TestCase):
         with patch.object(referrals, "collection_enabled", side_effect=RuntimeError("unavailable")):
             self.assertEqual(client.get("/").status_code, 200)
 
+    def test_tagged_arrivals_work_without_referrers_and_keep_only_known_sources(self):
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        with patch.object(referrals, "collection_enabled", return_value=True), \
+                patch.object(referrals.access_log, "info") as emit:
+            for tag in ("discord", "Discord", " reddit "):
+                with self.subTest(tag=tag):
+                    response = client.get("/", params={"utm_source": tag,
+                                                      "utm_campaign": "private-server", "token": "private-token"})
+                    self.assertEqual(response.status_code, 200)
+                    event = json.loads(emit.call_args.args[0])
+                    self.assertEqual((event["source"], event["kind"]), (tag.strip().lower(), "page"))
+                    self.assertNotIn("private", emit.call_args.args[0])
+                    self.assertNotIn("utm_", emit.call_args.args[0])
+            for tag in ("private-server", "other", "direct_unknown", "internal"):
+                with self.subTest(tag=tag):
+                    client.get("/", params={"utm_source": tag})
+                    self.assertEqual(json.loads(emit.call_args.args[0])["source"], "direct_unknown")
+                    client.get("/", params={"utm_source": tag}, headers={"referer": "https://discord.com/"})
+                    self.assertEqual(json.loads(emit.call_args.args[0])["source"], "discord")
+
+    def test_tagged_links_preserve_privacy_controls_internal_filter_and_bot_detection(self):
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        with patch.object(referrals, "collection_enabled", return_value=True), \
+                patch.object(referrals.access_log, "info") as emit:
+            url = "/?utm_source=discord&utm_campaign=private-server"
+            client.get(url, headers={"referer": "https://testserver/planner"})
+            self.assertEqual(json.loads(emit.call_args.args[0])["source"], "internal")
+            client.get(url, headers={"referer": "https://www.google.com/"})
+            self.assertEqual(json.loads(emit.call_args.args[0])["source"], "discord")
+            for headers in ({"DNT": "1"}, {"Sec-GPC": "1"}, {"Purpose": "prefetch"}):
+                client.get(url, headers=headers)
+                event = json.loads(emit.call_args.args[0])
+                self.assertEqual((event["source"], event["kind"]), ("unmeasured", "request"))
+            client.get(url, headers={"user-agent": "Discordbot/2.0"})
+            self.assertTrue(json.loads(emit.call_args.args[0])["bot"])
+        with patch.object(referrals, "collection_enabled", return_value=False), \
+                patch.object(referrals.access_log, "info") as emit:
+            client.get(url)
+            self.assertEqual(json.loads(emit.call_args.args[0])["source"], "unmeasured")
+
 
 class ReferralQueryTests(unittest.TestCase):
     def test_real_query_scopes_namespace_and_filters_bots_and_internal_requests(self):

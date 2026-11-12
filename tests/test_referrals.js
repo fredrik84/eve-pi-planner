@@ -19,6 +19,7 @@ sandbox.renderReferralStats({ visible: false });
 assert.equal(section.style.display, 'none');
 sandbox.renderReferralStats({ visible: true, enabled: true, available: true, rows: [
   { label: 'Google', last_7d: 7, last_30d: 30 },
+  { label: 'Discord', last_7d: 2, last_30d: 8 },
   { label: 'Direct / unknown', last_7d: 3, last_30d: 12 },
   { label: 'Bing', last_7d: 0, last_30d: 0 },
 ] });
@@ -29,6 +30,10 @@ assert.match(content.innerHTML, /Last 30 days/);
 assert(!content.innerHTML.includes('Bing'));
 assert.match(content.innerHTML, /not unique people or new accounts/);
 assert.match(content.innerHTML, /word of mouth/);
+assert.match(content.innerHTML, /<td>Discord<\/td>/);
+assert.match(content.innerHTML, /https:\/\/eveindustry.net\/\?utm_source=discord/);
+assert.match(content.innerHTML, /forwarded links keep their label/);
+assert.match(content.innerHTML, /Discord servers, channels, messages and visitors are not identified/);
 sandbox.renderReferralStats({ visible: true, enabled: false, available: true, rows: [] });
 assert.match(content.innerHTML, /Collection is off/);
 assert.match(content.innerHTML, /No page arrivals recorded yet/);

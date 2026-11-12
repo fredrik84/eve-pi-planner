@@ -74,6 +74,17 @@ def classify_referrer(value: str, own_host: str) -> str:
     return "other"
 
 
+def classify_arrival(referrer: str, own_host: str, tagged_source: str) -> str:
+    """Recognize shared-link source labels without retaining arbitrary query values."""
+    source = classify_referrer(referrer, own_host)
+    if source == "internal":
+        return source
+    tag = tagged_source.strip().lower()
+    if tag in SOURCES and tag not in {"other", "direct_unknown"}:
+        return tag
+    return source
+
+
 def note_access(request, response, duration_ms):
     """Log route templates and coarse sources only; logging must never break a request."""
     try:
@@ -94,7 +105,8 @@ def note_access(request, response, duration_ms):
             "event": "http_access", "method": request.method, "route": path,
             "status": response.status_code, "duration_ms": round(duration_ms, 1),
             "kind": "page" if measure else "request",
-            "source": classify_referrer(request.headers.get("referer", ""), request.url.hostname or "")
+            "source": classify_arrival(request.headers.get("referer", ""), request.url.hostname or "",
+                                       request.query_params.get("utm_source", ""))
                       if measure else "unmeasured",
             "bot": bool(_BOT.search(request.headers.get("user-agent", ""))),
         }
