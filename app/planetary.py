@@ -614,7 +614,7 @@ def import_planets(req: ImportRequest,
                 "skipped": skipped + wskip, "errors": errors[:10]}
 
     imported, unchanged, pending, differences = _contribute_planet_rows(con, rows)
-    submitter = _submitter_name(con, context_id) if pending else ""
+    submitter = _submitter_name(con, context_id) if imported or pending else ""
     if pending:
         con.execute(
             "INSERT INTO pp_planet_submissions (context_id, submitter_name, raw_text, "
@@ -630,6 +630,9 @@ def import_planets(req: ImportRequest,
                              f"{len(pending)} existing planet(s) submitted by {submitter}. "
                              f"{imported} new planet(s) added immediately. "
                              "Review in Admin → Planet submissions.\n" + "\n".join(differences))
+    elif imported:
+        notify_admin_discord("New planets added",
+                             f"{imported} new planet(s) added by {submitter}. No approval needed.")
     return {"queued": bool(pending), "submitted": len(pending), "imported": imported,
             "unchanged": unchanged, "skipped": skipped, "errors": errors[:10]}
 

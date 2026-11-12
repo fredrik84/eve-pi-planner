@@ -439,8 +439,10 @@ identical/sparse no-ops count as `unchanged`, actual differences are serialized 
 paste in `pp_planet_submissions` (status `pending`). Only those rows are replayed on approval,
 so approving a mixed paste cannot later overwrite an auto-added planet. The response includes
 `imported`, `submitted`, `unchanged`, `skipped` and `queued=bool(submitted)`.
-Discord admin notifications fire only for changed existing planets and include old → new values;
-new and identical planets are silent. The insert guard also handles simultaneous contributions
+Discord admin notifications report newly added planets with their count and submitter, without
+creating a review entry. Mixed pastes send one review notification with the new-planet count and
+old → new values for changed existing planets; identical planets are silent. Notifications are
+sent after the database commit. The insert guard also handles simultaneous contributions
 and duplicate rows within one paste without updating shared values outside review.
 
 Parsing was split out of `import_planets` into `_parse_planet_rows(text, con) -> (rows, skipped,

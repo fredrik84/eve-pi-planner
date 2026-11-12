@@ -161,7 +161,8 @@ class SubmissionReviewsTests(unittest.TestCase):
         data, notify, invalidate = self.contribute(text)
         self.assertEqual(data, {"queued": False, "submitted": 0, "imported": 1,
                                 "unchanged": 0, "skipped": 0, "errors": []})
-        notify.assert_not_called()
+        notify.assert_called_once_with("New planets added",
+                                       "1 new planet(s) added by Fixture. No approval needed.")
         invalidate.assert_called_once()
         data, notify, invalidate = self.contribute(text)
         self.assertEqual((data["imported"], data["unchanged"], data["submitted"]), (0, 1, 0))
@@ -171,6 +172,16 @@ class SubmissionReviewsTests(unittest.TestCase):
             self.assertEqual(con.execute("SELECT COUNT(*) FROM pp_planets").fetchone()[0], 1)
             self.assertEqual(con.execute("SELECT COUNT(*) FROM pp_planet_submissions").fetchone()[0], 0)
 
+    def test_new_planet_notification_counts_only_inserted_rows(self):
+        self.contribute("Test,1,Barren,,10,20,30,40,50")
+        data, notify, _ = self.contribute(
+            "Test,1,Barren,,10,20,30,40,50\nTest,2,Barren,,10,20,30,40,50\n"
+            "Test,2,Barren,,10,20,30,40,50\nTest,3,Barren,,10,20,30,40,50")
+        self.assertEqual((data["imported"], data["unchanged"], data["submitted"]), (2, 2, 0))
+        self.assertFalse(data["queued"])
+        notify.assert_called_once_with("New planets added",
+                                       "2 new planet(s) added by Fixture. No approval needed.")
+
     def test_mixed_paste_adds_new_queues_only_differences_and_approval_never_replays_new_rows(self):
         self.contribute("Test,1,Barren,,10,20,30,40,50")
         data, notify, invalidate = self.contribute(
@@ -179,6 +190,9 @@ class SubmissionReviewsTests(unittest.TestCase):
         self.assertTrue(data["queued"])
         invalidate.assert_called_once()
         notify.assert_called_once()
+        self.assertEqual(notify.call_args.args[0], "Planet value changes need review")
+        self.assertIn("1 existing planet(s) submitted by Fixture", notify.call_args.args[1])
+        self.assertIn("1 new planet(s) added immediately", notify.call_args.args[1])
         self.assertIn("Aqueous Liquid: 10 → 55", notify.call_args.args[1])
         with db.get_connection() as con:
             self.assertEqual(con.execute("SELECT aqueous_liquids FROM pp_planets WHERE planet_num=1").fetchone()[0], 10)
