@@ -182,6 +182,24 @@ class SubmissionReviewsTests(unittest.TestCase):
         notify.assert_called_once_with("New planets added",
                                        "2 new planet(s) added by Fixture. No approval needed.")
 
+    def test_contributed_planets_remain_available_as_factory_systems(self):
+        from app.planner_algo import _factory_candidates
+        from app.planner_models import PlanRequest
+
+        self.contribute("Test,1,Barren,Fixture,10,20,30,40,50\n"
+                        "Test,2,Temperate,Fixture,10,20,30,40,50\n"
+                        "Other,1,Barren,Fixture,10,20,30,40,50\n"
+                        "Other,2,Gas,Fixture,10,20,30,40,50")
+        for chosen in ([], ["Test"]):
+            with self.subTest(chosen=chosen), db.get_connection() as con:
+                req = PlanRequest(type_id=2872, constellations=["Fixture"], chosen_systems=chosen)
+                pool, options, capacities = _factory_candidates(con, req, only_bt=True)
+                self.assertEqual(capacities, {"Test": 2, "Other": 1})
+                self.assertEqual(options, [{"system": "Test", "constellation": "Fixture", "count": 2},
+                                           {"system": "Other", "constellation": "Fixture", "count": 1}])
+                self.assertEqual(len(pool), 2 if chosen else 3)
+                self.assertTrue(all(p["planet_type"] in {"Barren", "Temperate"} for p in pool))
+
     def test_mixed_paste_adds_new_queues_only_differences_and_approval_never_replays_new_rows(self):
         self.contribute("Test,1,Barren,,10,20,30,40,50")
         data, notify, invalidate = self.contribute(

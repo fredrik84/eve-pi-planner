@@ -1407,7 +1407,7 @@ def _factory_candidates(con, req, only_bt: bool = False, allowed_types: list[str
             fac_opts_rows = con.execute(
                 f"SELECT system, constellation, COUNT(*) as cnt FROM pp_planets "
                 f"WHERE {opt_type}constellation IN ({cc_ph}) "
-                f"GROUP BY system ORDER BY cnt DESC",
+                f"GROUP BY system, constellation ORDER BY cnt DESC",
                 type_params + chosen_consts,
             ).fetchall()
             factory_system_options = [

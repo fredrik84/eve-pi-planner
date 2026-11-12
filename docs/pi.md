@@ -104,6 +104,10 @@ When no characters have extractor_limit configured (all None), the planner enter
 
 ### Factory planet consolidation
 
+Factory-system counts group by both system and constellation so PostgreSQL can return the
+available Barren/Temperate planets. The contribution contracts check these counts on both
+database backends; a populated planet pool must not appear as zero factory capacity in suggestions.
+
 Factory planets (Barren/Temperate) are consolidated onto few characters via `_compute_factory_shares`:
 - **Explicit mode** (extractor_limit configured): factories distributed evenly across designated factory chars
 - **Auto mode** (no config): factories spread across the **minimum number of chars** but **evenly among those chars** (e.g. 8 factories → 4+4 across 2 chars, 15 → 5+5+5 across 3). Greedy max-packing a single char is deliberately avoided — see "factory_avoid" below.
