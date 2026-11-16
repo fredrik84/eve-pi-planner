@@ -5,16 +5,21 @@ All app code that writes to pp_* tables imports get_connection from here (via ap
 SDE reads (types, schematics) use a separate private SQLite connection in sde.py.
 """
 import functools
+import logging
+import math
 import os
 import re
 import sqlite3
 import time
+import threading
+import weakref
 from pathlib import Path
 from app.latency import timed
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 _SQLITE_PATH = Path("data/sde.db")
 _IS_POSTGRES = DATABASE_URL.startswith(("postgresql://", "postgres://"))
+log = logging.getLogger(__name__)
 
 
 def ensure_once(fn):
@@ -275,9 +280,10 @@ def _pg_translate(sql: str) -> str:
 class _PgCursor:
     """Wraps a psycopg2 cursor to match the sqlite3.Cursor interface used in app code."""
 
-    def __init__(self, pg_cursor, pg_conn=None):
+    def __init__(self, pg_cursor, pg_conn=None, owner=None):
         self._cur = pg_cursor
         self._conn = pg_conn
+        self._owner = owner  # a live cursor still owns its checkout, even if con goes out of scope
 
     @timed("db_execute")
     def execute(self, sql: str, params=()):
@@ -328,8 +334,15 @@ class _PgCursor:
 class _PgConn:
     """Wraps a psycopg2 connection to match the sqlite3.Connection interface used in app code."""
 
-    def __init__(self, pg_conn):
+    def __init__(self, pg_conn, pool=None):
         self._conn = pg_conn
+        self._pool = pool if pool is not None else _pg_pool()
+        with _PG_CHECKOUT_LOCK:
+            _PG_CHECKOUTS[id(self)] = (self._pool, time.monotonic())
+        # The callback must not reference self: that would keep an abandoned wrapper alive.
+        # Closing the raw socket rolls back unfinished work; only an EMPTY slot is returned.
+        self._cleanup = weakref.finalize(self, _pg_abandon, pg_conn, self._pool, id(self))
+        self._cleanup.atexit = False
 
     @timed("db_execute")
     def execute(self, sql: str, params=()) -> _PgCursor:
@@ -340,7 +353,7 @@ class _PgConn:
         except Exception:
             self._conn.rollback()
             raise
-        return _PgCursor(cur)
+        return _PgCursor(cur, owner=self)
 
     @timed("db_execute")
     def executemany(self, sql: str, seq) -> _PgCursor:
@@ -351,10 +364,10 @@ class _PgConn:
         except Exception:
             self._conn.rollback()
             raise
-        return _PgCursor(cur)
+        return _PgCursor(cur, owner=self)
 
     def cursor(self) -> _PgCursor:
-        return _PgCursor(self._conn.cursor(), self._conn)
+        return _PgCursor(self._conn.cursor(), self._conn, self)
 
     @timed("db_commit")
     def commit(self):
@@ -367,38 +380,47 @@ class _PgConn:
     # itself raises, and returning the slot has to happen anyway — otherwise the exception that
     # tells us the DB went away is also the thing that permanently loses a slot.
 
-    def close(self):
+    def _finish(self, commit=False):
+        if self._cleanup.detach() is None:
+            return
         try:
-            self._conn.rollback()  # leave no dangling transaction for the next borrower
+            if commit:
+                self._conn.commit()
+            else:
+                self._conn.rollback()
         except Exception:
             _pg_discard(self._conn)
             raise
         finally:
-            _pg_release(self._conn)
+            _pg_release(self._conn, self._pool)
+            self._conn = None
+            with _PG_CHECKOUT_LOCK:
+                _PG_CHECKOUTS.pop(id(self), None)
+
+    def close(self):
+        self._finish()  # leave no dangling transaction for the next borrower
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, *_):
-        try:
-            if exc_type:
-                self._conn.rollback()
-            else:
-                self._conn.commit()
-        except Exception:
-            _pg_discard(self._conn)
-            raise
-        finally:
-            _pg_release(self._conn)
+        self._finish(commit=exc_type is None)
 
 
 def _sqlite_row_factory(cursor, row):
     return _Row(zip((d[0] for d in cursor.description), row))
 
 
-_PG_POOL_SIZE = 8
+_PG_POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "16"))
+_PG_POOL_WAIT_SECONDS = float(os.environ.get("DB_POOL_WAIT_SECONDS", "15"))
+if _PG_POOL_SIZE < 1:
+    raise ValueError("DB_POOL_SIZE must be positive")
+if not math.isfinite(_PG_POOL_WAIT_SECONDS) or _PG_POOL_WAIT_SECONDS <= 0:
+    raise ValueError("DB_POOL_WAIT_SECONDS must be a finite positive number")
 _PG_POOL = None
-_PG_POOL_INIT_LOCK = None   # threading.Lock, created lazily to avoid importing threading for SQLite-only runs
+_PG_POOL_INIT_LOCK = threading.Lock()
+_PG_CHECKOUT_LOCK = threading.Lock()
+_PG_CHECKOUTS = {}
 
 # How long a connection may sit idle in the pool before it gets a liveness ping on the way out.
 # The ping is a real round-trip, so it must not run on every borrow — under load connections are
@@ -439,17 +461,36 @@ def _pg_usable(conn, idle_since: float) -> bool:
         return False
 
 
-def _pg_release(conn) -> None:
+def _pg_release(conn, pool=None) -> None:
     """Return a connection to its pool slot. A connection that died mid-request goes back as an
     EMPTY slot rather than not at all: the slot count is what bounds concurrency, so silently
     dropping one shrinks the pool for the life of the process — eight bad requests during a
     Postgres restart used to be enough to strand every slot."""
-    q = _pg_pool()
+    q = pool if pool is not None else _pg_pool()
     if conn is None or conn.closed:
         _pg_discard(conn)
         q.put((None, 0.0))
     else:
         q.put((conn, time.monotonic()))
+
+
+def _pg_abandon(conn, pool, checkout_id):
+    """Last-resort recovery for callers that raised before close(); never commit their work."""
+    _pg_discard(conn)
+    with _PG_CHECKOUT_LOCK:
+        _PG_CHECKOUTS.pop(checkout_id, None)
+    _pg_release(None, pool)
+    log.warning("Recovered abandoned database connection; worker=%s capacity=%s available=%s",
+                os.getpid(), _PG_POOL_SIZE, pool.qsize())
+
+
+def _pg_connect():
+    import psycopg2
+    # Bound connection attempts and detect broken TCP paths. These are transport
+    # timeouts, not query deadlines; legitimate long-running SQL is unaffected.
+    return psycopg2.connect(DATABASE_URL, connect_timeout=5, keepalives=1,
+                            keepalives_idle=30, keepalives_interval=10,
+                            keepalives_count=3, tcp_user_timeout=30000)
 
 
 def _pg_pool():
@@ -482,22 +523,21 @@ def _pg_pool():
     next. That is what makes the pool survive a Postgres restart/move on its own; before this it
     handed out its original eight connections forever and a DB move meant a manual
     `rollout restart` of the app (cost real downtime on 2026-07-28)."""
-    global _PG_POOL, _PG_POOL_INIT_LOCK
+    global _PG_POOL
     if _PG_POOL is None:
-        import threading
-        if _PG_POOL_INIT_LOCK is None:
-            _PG_POOL_INIT_LOCK = threading.Lock()
         with _PG_POOL_INIT_LOCK:
             if _PG_POOL is None:
                 import queue
-                import psycopg2
                 q = queue.Queue()
+                warming_failed = False
                 for _ in range(_PG_POOL_SIZE):
                     # Warm the pool, but never let a DB that happens to be down at import time
                     # abort pool creation — an empty slot connects on first use instead.
                     try:
-                        q.put((psycopg2.connect(DATABASE_URL), time.monotonic()))
+                        conn = None if warming_failed else _pg_connect()
+                        q.put((conn, time.monotonic()))
                     except Exception:
+                        warming_failed = True  # don't multiply a connect timeout by pool size
                         q.put((None, 0.0))
                 _PG_POOL = q
     return _PG_POOL
@@ -540,14 +580,20 @@ def get_connection():
             # a request forever if a connection ever genuinely leaks (some path skipping close()),
             # instead of failing clearly. 15s comfortably rides out a real concurrent burst
             # queueing for a free connection, without turning a real leak into a silent full hang.
-            conn, idle_since = q.get(timeout=15)
+            conn, idle_since = q.get(timeout=_PG_POOL_WAIT_SECONDS)
         except queue.Empty:
-            raise RuntimeError("Database connection pool exhausted (all connections busy for 15s)")
+            now = time.monotonic()
+            with _PG_CHECKOUT_LOCK:
+                ages = [now-started for pool, started in _PG_CHECKOUTS.values() if pool is q]
+            log.error("Database pool exhausted; worker=%s capacity=%s available=%s "
+                      "checked_out=%s oldest_checkout_seconds=%.1f wait_seconds=%s",
+                      os.getpid(), _PG_POOL_SIZE, q.qsize(), len(ages), max(ages, default=0),
+                      _PG_POOL_WAIT_SECONDS)
+            raise RuntimeError(f"Database connection pool exhausted (waited {_PG_POOL_WAIT_SECONDS:g}s)")
         if not _pg_usable(conn, idle_since):
-            import psycopg2
             _pg_discard(conn)
             try:
-                conn = psycopg2.connect(DATABASE_URL)
+                conn = _pg_connect()
             except Exception:
                 # Hand the (empty) slot back before propagating, or a DB that is briefly
                 # unreachable would eat one slot per failed request and never give them back.
@@ -561,7 +607,7 @@ def get_connection():
             _pg_discard(conn)
             q.put((None, 0.0))
             raise
-        return _PgConn(conn)
+        return _PgConn(conn, q)
     con = sqlite3.connect(str(_SQLITE_PATH), factory=_TimedSQLiteConnection)
     con.row_factory = _sqlite_row_factory
     con.execute("PRAGMA journal_mode=WAL")

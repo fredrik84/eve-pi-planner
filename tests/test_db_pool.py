@@ -12,8 +12,12 @@ Runs entirely in-process against a fake psycopg2 — no Postgres, no container n
     python3 tests/test_db_pool.py
 """
 
+import gc
+import os
+import subprocess
 import sys
 import types
+from unittest.mock import patch
 
 sys.path.insert(0, ".")
 
@@ -73,11 +77,13 @@ class OperationalError(Exception):
 
 
 CONNECT_CALLS = []
+CONNECT_OPTIONS = []
 CONNECT_FAILS = [0]   # how many upcoming connect() attempts should fail
 
 
-def fake_connect(dsn):
+def fake_connect(dsn, **options):
     CONNECT_CALLS.append(dsn)
+    CONNECT_OPTIONS.append(options)
     if CONNECT_FAILS[0] > 0:
         CONNECT_FAILS[0] -= 1
         raise OperationalError("could not connect to server")
@@ -98,6 +104,7 @@ db._IS_POSTGRES = True
 def reset_pool():
     db._PG_POOL = None
     CONNECT_CALLS.clear()
+    CONNECT_OPTIONS.clear()
     CONNECT_FAILS[0] = 0
 
 
@@ -224,13 +231,97 @@ def test_pool_creation_survives_a_down_database():
     """First request lands while Postgres is unreachable — the pool must still come up with a
     full set of (empty) slots rather than raising and leaving _PG_POOL unset."""
     reset_pool()
-    CONNECT_FAILS[0] = db._PG_POOL_SIZE
+    CONNECT_FAILS[0] = 1
     slots = pool_slots()
     check(len(slots) == db._PG_POOL_SIZE, "pool is created at full size even with the DB down")
     check(all(c is None for c, _ in slots), "slots are empty, to be filled on first borrow")
+    check(len(CONNECT_CALLS) == 1, "warming stops after a failed connection instead of amplifying an outage")
     con = db.get_connection()
     check(con._conn is not None, "an empty slot connects lazily on borrow")
     con.close()
+
+
+def test_abandoned_connection_rolls_back_without_losing_capacity():
+    reset_pool()
+    q = db._pg_pool()
+    con = db.get_connection()
+    raw = con._conn
+    del con  # An exception or forgotten close in any caller must not permanently lose a slot.
+    gc.collect()
+    check(raw.closed, "an abandoned connection is closed, never committed or reused dirty")
+    check(q.qsize() == db._PG_POOL_SIZE, "garbage collection restores the abandoned pool slot")
+    con = db.get_connection()
+    con.close()
+
+
+def test_returning_twice_cannot_duplicate_a_connection():
+    reset_pool()
+    q = db._pg_pool()
+    con = db.get_connection()
+    con.close()
+    con.close()
+    con.__exit__(None, None, None)
+    del con
+    gc.collect()
+    check(q.qsize() == db._PG_POOL_SIZE, "close/context-exit/finalization can return each slot only once")
+    borrowed = [db.get_connection() for _ in range(db._PG_POOL_SIZE)]
+    check(len({id(c._conn) for c in borrowed}) == db._PG_POOL_SIZE,
+          "concurrent borrowers never receive the same underlying connection")
+    for con in borrowed:
+        con.close()
+
+
+def test_live_cursor_keeps_its_checkout_until_released():
+    reset_pool()
+    q = db._pg_pool()
+    con = db.get_connection()
+    raw = con._conn
+    cursor = con.cursor()
+    del con
+    gc.collect()
+    check(not raw.closed and q.qsize() == db._PG_POOL_SIZE-1,
+          "a live cursor keeps its connection checked out after its wrapper leaves scope")
+    del cursor
+    gc.collect()
+    check(raw.closed and q.qsize() == db._PG_POOL_SIZE,
+          "the abandoned slot is restored after the last cursor leaves scope")
+
+
+def test_connection_and_acquisition_waits_are_bounded():
+    reset_pool()
+    q = db._pg_pool()
+    check(all(0 < opts.get("connect_timeout", 0) <= 10 for opts in CONNECT_OPTIONS),
+          "pool warming uses a bounded connection timeout")
+    check(all(opts.get("keepalives_idle", 0) > 0 and opts.get("tcp_user_timeout", 0) > 0
+              for opts in CONNECT_OPTIONS), "dead network sockets have explicit failure detection")
+    # Replacements must get the same protection as the initial sockets.
+    slots = [q.get_nowait() for _ in range(q.qsize())]
+    for conn, _ in slots:
+        conn.dead = True
+        q.put((conn, 0.0))
+    db.get_connection().close()
+    check(CONNECT_OPTIONS[-1] == CONNECT_OPTIONS[0], "reconnections retain the network timeouts")
+    import queue
+    with patch.object(q, "get", side_effect=queue.Empty) as take:
+        try:
+            db.get_connection()
+        except RuntimeError:
+            pass
+        else:
+            check(False, "exhaustion must raise rather than silently overbook")
+        check(take.call_args.kwargs.get("timeout", 0) > 0, "pool acquisition has a finite wait")
+
+
+def test_capacity_and_wait_are_configurable_and_validated():
+    for size, wait, valid in [("3", "0.2", True), ("0", "15", False),
+                              ("16", "0", False), ("16", "nan", False), ("16", "inf", False)]:
+        result = subprocess.run([sys.executable, "-c",
+                                 "from app import db; print(db._PG_POOL_SIZE, db._PG_POOL_WAIT_SECONDS)"],
+                                env={**os.environ, "DB_POOL_SIZE": size, "DB_POOL_WAIT_SECONDS": wait},
+                                capture_output=True, text=True, timeout=5)
+        check((result.returncode == 0) == valid, f"pool configuration size={size} wait={wait} is validated")
+        if valid:
+            check(result.stdout.strip() == "3 0.2", "capacity and acquisition wait use the configured values")
 
 
 if __name__ == "__main__":
@@ -241,6 +332,11 @@ if __name__ == "__main__":
     test_connection_that_dies_mid_request_still_returns_its_slot()
     test_slot_survives_a_failed_reconnect()
     test_pool_creation_survives_a_down_database()
+    test_abandoned_connection_rolls_back_without_losing_capacity()
+    test_returning_twice_cannot_duplicate_a_connection()
+    test_live_cursor_keeps_its_checkout_until_released()
+    test_connection_and_acquisition_waits_are_bounded()
+    test_capacity_and_wait_are_configurable_and_validated()
     print()
     if FAILS:
         print(f"{len(FAILS)} FAILED:")

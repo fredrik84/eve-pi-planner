@@ -12,6 +12,7 @@ How to test, deploy, release and debug. The rules themselves are stated in
 | [Choosing a test environment](#choosing-a-test-environment) | deciding between the local Docker stack and local k3s |
 | [Debug endpoint](#debug-endpoint) | exercising the planner end to end |
 | [Inspecting the database](#inspecting-the-database) | reading profiles/config out of a container |
+| [Database pool capacity and recovery](#database-pool-capacity-and-recovery) | pool exhaustion, connection leaks or sizing workers |
 | [Reading bug reports](#reading-bug-reports) | a user filed one, or you are triaging the backlog |
 | [Running the planner directly](#running-the-planner-directly) | reproducing a plan in-process |
 | [Debugging prod in-process](#debugging-prod-in-process) | a user reports the planner doing something odd |
@@ -412,6 +413,42 @@ in `_EPOCH_COLUMNS` still sitting at float4. Three things to know:
   `now - 1` rounds back into the future inside its bucket.
 - **Widening is non-lossy but recovers nothing.** Rows written before the migration keep their
   rounded values; only new writes are exact.
+
+## Database pool capacity and recovery
+
+`app/db.py` owns one bounded-concurrency PostgreSQL pool per Python worker. Configure it with
+`DB_POOL_SIZE` (positive integer, default **16**) and `DB_POOL_WAIT_SECONDS` (finite positive
+seconds, default **15**). Changing either requires replacing the app processes. Waiting longer
+does not create capacity or repair a leak.
+
+The home production deployment has one pod with two workers: **32 connections normally**, up
+from 16, and up to **64 during its one-pod rolling surge**. PostgreSQL currently allows 100
+connections. Budget `pool size × workers × peak pod count`, plus backups, monitoring, contract
+scans and administrative/reserved connections, before increasing any of these values. Development
+has its own database. More app replicas/workers also multiply the connection budget.
+
+Always use `with get_connection()` for application work. Explicit close/context exit returns a
+slot only once. If an exception path abandons the wrapper and all its cursors, a weak finalizer
+closes its socket, rolling back unfinished work, and returns an empty slot for lazy reconnection.
+This is a fallback: cleanup waits until the last reference is released or collected. Connections
+still in use are never forcibly reclaimed. Live cursors retain ownership of their checkout.
+
+Initial and replacement sockets use a five-second connect timeout, TCP keepalive idle/interval/
+count of 30s/10s/3, and a 30,000ms TCP user timeout. These detect failed network paths; they do
+not impose a SQL execution deadline. Pool warming stops after its first connection failure so
+an unavailable database does not incur one full timeout per slot.
+
+Look for `Recovered abandoned database connection` in the app logs to identify cleanup paths
+that still need explicit ownership. An exhaustion log includes the worker PID, capacity,
+available slots, tracked checkouts and the oldest checkout's age. These are numeric diagnostics;
+SQL, credentials and user data are never logged. Existing private database metrics report server
+connections and active/idle-in-transaction counts; they are distinct from app pool slots.
+
+`tests/test_db_pool.py` covers ownership, double returns, stale sockets and failed warming.
+`tests/test_healthz.py` replays readiness failures after database replacement.
+`tests/test_db_pool_postgres.py` verifies rollback, backend termination, concurrent borrowers and
+real exhaustion against an explicitly supplied disposable `DB_POOL_TEST_DSN`; CI supplies its
+isolated PostgreSQL service. Never point that fixture-writing test at production.
 
 ## Fresh/stale-DB migration traps
 
