@@ -108,6 +108,8 @@ jobs:
           python tests/test_referrals.py
           python tests/test_profiling.py
           python tests/test_operations.py
+          python tests/test_db_pool.py
+          python tests/test_healthz.py
           python tests/test_pi_lifetime.py
           python tests/test_upgrade_policy.py
       - name: Run Planet DB and PI usage contracts against PostgreSQL

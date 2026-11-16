@@ -553,7 +553,14 @@ def get_connection():
                 # unreachable would eat one slot per failed request and never give them back.
                 q.put((None, 0.0))
                 raise
-        conn.autocommit = False
+        try:
+            conn.autocommit = False
+        except Exception:
+            # A socket can die between validation and setup, before the wrapper
+            # owns cleanup. Preserve the permit so the next borrower can reconnect.
+            _pg_discard(conn)
+            q.put((None, 0.0))
+            raise
         return _PgConn(conn)
     con = sqlite3.connect(str(_SQLITE_PATH), factory=_TimedSQLiteConnection)
     con.row_factory = _sqlite_row_factory

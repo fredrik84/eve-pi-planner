@@ -148,9 +148,10 @@ _scheduler = None
 def healthz():
     from app.db import get_connection
     try:
-        con = get_connection()
-        con.execute("SELECT 1")
-        con.close()
+        # A database replacement can kill a recently used socket after acquisition.
+        # Always return its pool slot, including when SELECT 1 fails.
+        with get_connection() as con:
+            con.execute("SELECT 1")
     except Exception as e:
         return JSONResponse(status_code=503, content={"status": "error", "detail": str(e)})
     return {"status": "ok"}
@@ -162,9 +163,8 @@ async def _startup():
     # readiness probe — and therefore real traffic — can reach this process), instead of lazily
     # under the first real burst of concurrent requests. See app.db._pg_pool()'s docstring.
     from app.db import get_connection
-    con = get_connection()
-    con.execute("SELECT 1")
-    con.close()
+    with get_connection() as con:
+        con.execute("SELECT 1")
 
     _ensure_all_tables()
 
